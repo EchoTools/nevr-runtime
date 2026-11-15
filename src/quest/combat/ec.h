@@ -6,8 +6,15 @@
  *     network's and is not handed to the game (tokens 'V' 'P' 'T' 'O' into the page, 'K' a drone killed on the server, 'A' and 'M'
  *     counted); the busiest sendto destination of the last second is the server;
  *   - a thread that, every 5 ms, turns the page's use counters into 'V' / 'P' / 'T' / 'O' packets sent twice to the server, sends the hello
- *     'H' every 2 s (the server's relay subscription), writes the page's "the server states EchoCombat" word (+0x40) and, with the `hide`
+ *     'H' every 2 s (the server's relay subscription; only while the game still sends to the server, and at most a few to one that never
+ *     states EchoCombat, #2242), writes the page's "the server states EchoCombat" word (+0x40) and, with the `hide`
  *     word, hides EC's three tac mods (smoke, buff, point: the tac-mod list's last three) from the list on a server that does not state it;
+ *   - the server's match control (#2242; PC: veilnet.cpp Handle): a 'G', 'R' or 'L' from the current server (the picked one, while the game
+ *     still sends to it, at its address and port) is decoded by runtime/combat/match_control_rules.h, the same functions PC calls: 'G' writes
+ *     the shown bytes of the RULES mailbox (page +0xec0, runtime/combat/rules_state.h; ec_core.h kRulesMailbox), 'R' its T (+0x08), 'L' is
+ *     recorded only; on a server that does not state EchoCombat the thread puts the 'G' bytes back to zero, as PC's UpdateGearLists. A
+ *     Quest headset is a client: no server half. Not on the Quest (KNOWN-WRONG #2242): the script hooks that read the mailbox, the RULES
+ *     page's text pointer at +0x24, and PAUSE allowed at +0x35 (on PC derived from the match-live byte +0x2F the orb script hook writes);
  *   - CR15NetGame::LobbySettingsCB(SMsg) (GLOB_DAT thunk, #2333): the server's features from the lobby settings it gives its clients
  *     (runtime/compat/server_features.h), the gate the hide follows; a session in another lobby clears them (compat/session_router.cpp);
  *   - the WriteLogV slots of libr15, libpnsovr.so and libpnsrad.so (thunks, ec_targets.h says why WriteLogV): the profile-update line
@@ -50,7 +57,8 @@
  * page with its exported alias, the WriteLogV hooks and the scope are ours.
  *
  * Lines (sentinel log, events `combat_ec_*`; the per-kind caps are in ec.cpp): install, hook, page, words, legacy_switch, scope, server,
- * answer, used, token, kill, sel, tacmods, skip, prelude, loc, wall, sum, platform.
+ * answer, used, token, kill, sel, tacmods, skip, prelude, loc, wall, sum, platform, rules, round_time, map (the last three one record per
+ * change, under one shared cap).
  *
  * Built with -fno-exceptions, like every translation unit that includes callback_thunk.h.
  */
@@ -74,6 +82,10 @@ using DroneKilledFn = void (*)(std::uint32_t index) noexcept;
 bool OnNetTick(NetTickFn tick) noexcept;
 // Replaces the handler (null clears it).
 void OnDroneKilled(DroneKilledFn handler) noexcept;
+// The local player's tac mod slot was set to `sym`: the selection is taken from it too (#2242, EchoCombat 2.0.8; PC: veilnet.cpp PickTacMod).
+// Stores into the EC page's selection (+0xe80) when `sym` is a known tac mod that is not the selection already standing, and only with the
+// `equip` word. equip_refire.h OnLocalTacMod calls it for every call on the local player's record of that slot. Safe from any thread.
+void TacModPicked(std::uint64_t sym) noexcept;
 
 // The words of `combat.ec_words` when the key is absent.
 inline constexpr char kDefaultWords[] = "types=VPTO equip hide";

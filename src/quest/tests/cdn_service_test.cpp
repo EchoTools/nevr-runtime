@@ -285,6 +285,7 @@ void TheSettingsAreTheCodesDefaultsChangedByTheFile() {
   QCHECK(c.platform.name == std::string("android-arm64") && c.source == "default" && !c.policy.required_only && c.policy.overrides.empty());
   QCHECK(nc::StateOf("lobby_posters", c.policy) == nc::LabelState::kOn && nc::StateOf("anything_else", c.policy) == nc::LabelState::kOff);
   QCHECK(nc::StateOf("game", c.policy) == nc::LabelState::kRequired);
+  QCHECK(nc::StateOf("combat_content", c.policy) == nc::LabelState::kOn);  // the EchoCombat data is on by code default
   nevr_quest::AssetsChoice file;
   file.cdnUrl = "https://test.example/";
   file.manifest = "v1/test/manifest.json.zst";

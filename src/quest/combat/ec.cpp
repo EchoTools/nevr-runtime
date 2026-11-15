@@ -21,6 +21,8 @@
 #include "quest/sentinel/ec_page.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
+#include "runtime/combat/match_control_rules.h"  // the server's 'G' word, a client's 'G' / 'R' mailbox writes, the maps (#2242)
+#include "runtime/combat/veilnet_gate.h"  // the decisions PC and Quest share: Recent, SendAllowed, HelloTries, ServerKey, PickFromSlot (#2242)
 #include "runtime/compat/server_features.h"
 
 namespace nevr_quest::combat::ec {
@@ -61,8 +63,13 @@ constexpr unsigned kStepUs = 5000;            // the thread's period in scope
 
 pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 State g_st;  // under g_mu
+
+// #2242 (EchoCombat 2.0.6): when the game last sent to each destination, the table PC's veilnet.cpp keeps too (veilnet_gate.h). The picked
+// server is the server only while the game still sends to it.
+::nevr_combat::gate::SentTo<int> g_sentTo;  // under g_mu
 std::atomic<std::uint64_t> g_sends{0}, g_passed{0}, g_consumed{0}, g_capped{0};
-std::atomic<int> g_killLines{0}, g_tokenLines{0}, g_selLines{0};
+std::atomic<int> g_killLines{0}, g_tokenLines{0}, g_selLines{0}, g_rulesLines{0};
+std::atomic<std::uint32_t> g_mapTarget{0};  // #2242: the map index + 1 the server last said it switches to ('L'; 0 none)
 std::atomic<DroneKilledFn> g_droneKilled{nullptr};
 constexpr int kNetTicks = 4;
 std::atomic<NetTickFn> g_netTick[kNetTicks] = {};
@@ -85,6 +92,7 @@ std::atomic<bool> g_inScope{false};
 std::atomic<int> g_forceScope{-1};
 std::uint64_t g_nextScopeMs = 0;  // the ec thread only (and tests)
 scope::LookClass g_lastClass = scope::LookClass::kNoLook;
+std::uint64_t g_lastLevel = 0;  // #2242: the level of the last look; another one ends a map switch (g_mapTarget)
 bool g_scopeLogged = false;
 
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
@@ -120,6 +128,8 @@ sentinel::ImageLookup Lookup() noexcept {
 
 const char* LogLibName(int i) noexcept { return i == 0 ? "libr15" : i == 1 ? "libpnsovr" : "libpnsrad"; }
 
+constexpr std::uint64_t kMsIn100ns = 10000;  // Now100() counts 100 ns
+
 // ---- the handlers ----
 
 // The in-scope halves are out of line, so the out-of-scope path of a handler is the scope load and a tail call (ADR 0038: it runs per datagram
@@ -130,6 +140,7 @@ __attribute__((noinline)) ssize_t SendInScope(SendThunk::Fn real, int fd, const 
     const sockaddr_in* a = reinterpret_cast<const sockaddr_in*>(to);
     LockG l;
     g_st.SawSend(fd, a->sin_addr.s_addr, a->sin_port);
+    g_sentTo.Note(fd, a->sin_addr.s_addr, a->sin_port, Now100() / kMsIn100ns);
   }
   g_sends.fetch_add(1, std::memory_order_relaxed);
   return real(fd, buf, len, flags, to, tolen);
@@ -151,6 +162,57 @@ void LogToken(std::uint8_t type, std::uint32_t id, std::uint64_t tokens) noexcep
   const char t[2] = {static_cast<char>(type), 0};
   char idText[19];
   sentinel::LogFields(LogLevel::kInfo, "combat_ec_token", {{"type", t}, {"id", sentinel::HexString(idText, id)}, {"tokens", tokens}});
+}
+
+// ---- the server's match control (#2242, PC: veilnet.cpp Handle's 'L', 'R' and 'G' client branches) ----
+namespace mc = ::nevr_combat::match_control;
+
+bool IsMatchControl(std::uint8_t type) noexcept { return type == 'G' || type == 'R' || type == 'L'; }
+
+// Under g_mu: the datagram is from the current server, as PC's ServerDest + Same reads it (the picked server, while the game still
+// sends to it, at the same address and port).
+bool FromServerLocked(const sockaddr_in& from, std::uint64_t now100) noexcept {
+  Dest d{};
+  return g_st.Server(&d) && g_sentTo.SentRecently(d, now100 / kMsIn100ns) && d.addr == from.sin_addr.s_addr && d.port == from.sin_port;
+}
+
+constexpr std::size_t kChangedText = 48;  // room for "rate payload pause loadout chassis " (35 bytes) and its NUL
+
+bool RulesLine() noexcept { return g_rulesLines.fetch_add(1, std::memory_order_relaxed) < kLineCap; }
+
+// The RULES mailbox on the EC page (ec_core.h kRulesMailbox).
+std::uint8_t* Mailbox() noexcept { return sentinel::EcPage() + kRulesMailbox; }
+
+// A 'G', 'R' or 'L' from the current server: the mailbox writes are the shared header's, one record per change.
+void ServerRules(const Packet& p) noexcept {
+  if (p.type == 'G') {
+    const mc::Applied a = mc::Apply(Mailbox(), p.id);
+    if (!a.Any() || !RulesLine()) return;
+    const mc::RulesWord w = mc::Decode(p.id);
+    char changed[kChangedText];
+    std::snprintf(changed, sizeof changed, "%s%s%s%s%s", a.rate ? "rate " : "", a.payload ? "payload " : "", a.pause ? "pause " : "",
+                  a.loadout ? "loadout " : "", a.chassis ? "chassis " : "");
+    const std::size_t n = std::strlen(changed);
+    if (n > 0) changed[n - 1] = 0;
+    sentinel::LogFields(LogLevel::kInfo, "combat_ec_rules",
+                        {{"changed", changed}, {"loadouts", mc::LoadoutName(w.loadout)}, {"series10_only", w.chassis ? "true" : "false"},
+                         {"pause", mc::PauseName(w.paused)}, {"point_rate_quarters", w.pointRate}, {"payload_map", w.payloadMap ? "true" : "false"},
+                         {"payload_speed_quarters", w.payloadSpeed}, {"checkpoint_used", w.checkpoint},
+                         {"msg", "ec: the server's RULES are in the mailbox (page +0xec0) for the EC scripts to read"}});
+  } else if (p.type == 'R') {
+    if (!mc::ApplyRoundTotal(Mailbox(), p.id) || !RulesLine()) return;
+    const mc::RoundParts t = mc::Parts(p.id);
+    sentinel::LogFields(LogLevel::kInfo, "combat_ec_round_time",
+                        {{"point_unlock_min", t.unlockMinutes}, {"capture_time_s", t.captureSeconds},
+                         {"msg", "ec: the server's POINT UNLOCK and CAPTURE TIME are in the mailbox (+0x08) for the capture point script"}});
+  } else if (p.type == 'L') {
+    if (!mc::MapIndexValid(p.id)) return;
+    const std::uint32_t target = p.id + 1;
+    if (g_mapTarget.exchange(target, std::memory_order_relaxed) == target || !RulesLine()) return;
+    sentinel::LogFields(LogLevel::kInfo, "combat_ec_map",
+                        {{"map", mc::kMapNames[p.id]},
+                         {"msg", "ec: the server switches the map: recorded only, this client follows the server's own level change"}});
+  }
 }
 
 // The real recvfrom; a datagram the shared rules take out (ec_rules.h TakeOut: exactly 16 bytes with both magics and a known type, not
@@ -194,13 +256,16 @@ __attribute__((noinline)) ssize_t RecvInScope(RecvThunk::Fn real, int fd, void* 
     if (*fl >= sizeof(sockaddr_in) && f->sa_family == AF_INET) {
       std::uint32_t killed;
       std::uint64_t tokensBefore, tokensAfter;
+      bool fromServer = false;
       {
         LockG l;
         tokensBefore = g_st.tokens;
         const std::uint64_t now = Now100();
         killed = g_st.Handle(sentinel::EcPage(), p, now);
         tokensAfter = g_st.tokens;
+        if (IsMatchControl(p.type)) fromServer = FromServerLocked(*reinterpret_cast<const sockaddr_in*>(f), now);
       }
+      if (fromServer) ServerRules(p);  // #2242: the server's match control, outside the lock
       if (killed != 0) {  // outside the lock: the handler is another module's
         const DroneKilledFn handler = g_droneKilled.load(std::memory_order_acquire);
         if (handler != nullptr) handler(killed - 1);
@@ -218,6 +283,7 @@ ssize_t RecvHandler(RecvThunk::Fn real, int fd, void* buf, size_t len, int flags
 }
 
 // Runs on whichever thread logs the profile update: two atomic page stores and capped lines.
+// The profile line is one of two sources of the selection; the other is the local tac mod slot (TacModPicked below).
 void SawProfile(const char* json, int lib) noexcept {
   char name[24];
   const std::uint64_t sym = SelectedFromJson(json, name, sizeof name);
@@ -439,6 +505,7 @@ struct Loop {
   bool keepWas = false;
   SelectionSettle settle;  // a cut waits till the selection is still (ec_rules.h)
   Dest logged = {};
+  ::nevr_combat::gate::HelloTries hello;  // #2242: the hellos a server that never answers gets
   bool answered = false, pageAns = false;
   int lines = 0, summaries = 0, locLines = 0;
   std::uint32_t pid = 0;
@@ -534,6 +601,12 @@ bool RefreshScope(std::uint64_t nowMs) noexcept {
   const bool in = forced >= 0 ? forced != 0 : scope::InCombatOrLobby(look);
   const scope::LookClass cls = forced >= 0 ? (in ? scope::LookClass::kCombatOrLobby : scope::LookClass::kOther) : scope::ClassOf(look);
   const bool was = g_inScope.exchange(in, std::memory_order_acq_rel);
+  // #2242 (PC: veilnet.cpp ApplyMapSwitch clears g_map_target when the switch ends): the client on another level, or out of scope, ends
+  // the switch the server announced, so a later 'L' to the same map is recorded again
+  if (look.level != g_lastLevel || !in) {
+    g_lastLevel = look.level;
+    g_mapTarget.store(0, std::memory_order_relaxed);
+  }
   if (in != was || cls != g_lastClass || !g_scopeLogged) {
     g_scopeLogged = true;
     g_lastClass = cls;
@@ -545,6 +618,8 @@ bool RefreshScope(std::uint64_t nowMs) noexcept {
         LockG l;
         for (Dest& d : g_st.dests) d = Dest{};
         g_st.best = -1;
+        g_sentTo.Clear();
+        g_loop.hello = ::nevr_combat::gate::HelloTries{};  // the count starts again for whichever server the game connects to next
       }
       g_gameFd.store(-1, std::memory_order_relaxed);
       Store32(sentinel::EcPage() + kQuestEcServer, 0);
@@ -572,6 +647,23 @@ bool OnNetTick(NetTickFn tick) noexcept {
 }
 
 void OnDroneKilled(DroneKilledFn handler) noexcept { g_droneKilled.store(handler, std::memory_order_release); }
+
+// The local player's tac mod slot was set to `sym` (equip_refire.h OnLocalTacMod; #2242, EchoCombat 2.0.8): the selection is also taken from
+// the slot setter, which the profile line alone cannot give (a profile line that is never logged leaves the selection stale and the tac mod
+// guard then skips the one equipped). Same store as SawProfile, gated the same (equip word); a pick that is the selection already standing
+// is not stored again (the setter is re-fired, and a store restarts the selection's re-run count).
+void TacModPicked(std::uint64_t sym) noexcept {
+  // The equip_refire setter can run before ec::Install (its ctor step comes first): g_equipStore is written by Install and published by the
+  // release store of g_installed, so it is read only after the acquire load.
+  if (!Installed() || !g_equipStore) return;
+  std::uint8_t* const page = sentinel::EcPage();
+  if (!::nevr_combat::gate::PickFromSlot(sym, Load64(page + kEquipSel))) return;
+  StoreSelected(page, sym);
+  if (g_selLines.fetch_add(1, std::memory_order_relaxed) >= kLineCap) return;
+  char symText[sentinel::kHexStringSize];
+  sentinel::LogFields(LogLevel::kInfo, "combat_ec_sel",
+                      {{"sym", sentinel::HexString(symText, sym)}, {"source", "tac_mod_slot"}, {"result", "stored at +e80"}});
+}
 
 bool Installed() noexcept { return g_installed.load(std::memory_order_acquire); }
 
@@ -709,7 +801,7 @@ void Step(std::uint64_t now100) noexcept {
   }
   Use uses[4];
   Dest d{};
-  bool haveDest, ans;
+  bool picked, haveDest, ans;
   int n;
   {
     LockG l;
@@ -718,26 +810,41 @@ void Step(std::uint64_t now100) noexcept {
       L.nextPick = nowMs + 1000;
       g_st.PickServer();
     }
-    haveDest = g_st.Server(&d);
+    picked = g_st.Server(&d);
+    haveDest = picked && g_sentTo.SentRecently(d, nowMs);  // #2242: the server only while the game still sends to it
   }
   ans = nevr_server_features::Client().Current().echoCombat;  // #2333: the server's statement, not an answer to the hello
-  g_gameSrc.store(haveDest ? (static_cast<std::uint64_t>(d.addr) << 16) | d.port : 0, std::memory_order_relaxed);
-  g_gameFd.store(haveDest ? d.sock : -1, std::memory_order_relaxed);  // cleared when no server is picked
+  // The receive side follows the pick (the game's own socket); the sends below follow the pick only while the game still sends there.
+  g_gameSrc.store(picked ? ::nevr_combat::gate::ServerKey(d.addr, d.port) : 0, std::memory_order_relaxed);
+  g_gameFd.store(picked ? d.sock : -1, std::memory_order_relaxed);  // cleared when no server is picked
   for (int i = 0; i < n; ++i) {
-    if (haveDest) {
+    // only the hello goes to a server that has not stated EchoCombat (EchoCombat 2.0.6, gate::SendAllowed)
+    const bool sends = haveDest && ::nevr_combat::gate::SendAllowed(uses[i].type, ans);
+    if (sends) {
       for (int rep = 0; rep < 2; ++rep) SendPacket(d, uses[i].type, uses[i].id);  // twice, as upstream
     }
     if (StepLine()) {
       const char t[2] = {static_cast<char>(uses[i].type), 0};
       char idText[19];
       sentinel::LogFields(LogLevel::kInfo, "combat_ec_used",
-                          {{"type", t}, {"id", sentinel::HexString(idText, uses[i].id)}, {"sent", haveDest ? "twice to the server" : "no (no server seen yet)"}});
+                          {{"type", t}, {"id", sentinel::HexString(idText, uses[i].id)}, {"sent", sends ? "twice to the server"
+                                         : haveDest ? "no (the server has not stated EchoCombat)"
+                                                    : "no (no server the game is sending to)"}});
     }
   }
   if (nowMs >= L.nextHello) {
     L.nextHello = nowMs + 2000;
-    if (haveDest) {
+    // #2242 (EchoCombat 2.0.6): no hello to a destination the game has left, and at most gate::kHelloTries to a server that never states
+    // EchoCombat, until the game connects to another one or it states it.
+    const ::nevr_combat::gate::Hello hello =
+        L.hello.Next(haveDest ? ::nevr_combat::gate::ServerKey(d.addr, d.port) : 0, ans);
+    if (hello != ::nevr_combat::gate::Hello::kNone) {
       SendPacket(d, 'H', 0);
+      if (hello == ::nevr_combat::gate::Hello::kSendAndGiveUp && StepLine()) {
+        sentinel::LogFields(LogLevel::kInfo, "combat_ec_hello_end",
+                            {{"hellos", ::nevr_combat::gate::kHelloTries}, {"fd", d.sock},
+                             {"msg", "ec: the server never stated EchoCombat: no more hellos until the game connects to another server"}});
+      }
       if ((d.addr != L.logged.addr || d.port != L.logged.port) && StepLine()) {
         L.logged = d;
         char ip[24];
@@ -786,6 +893,12 @@ void Step(std::uint64_t now100) noexcept {
   if (ans != L.pageAns) {  // not under the line cap
     L.pageAns = ans;
     Store32(page + kQuestEcServer, ans ? 1 : 0);
+  }
+  // #2242 (PC: veilnet.cpp UpdateGearLists): a server that does not state EchoCombat has no RULES: the 'G' bytes back to ALL, off, not set
+  if (!ans && mc::ClearServerRules(page + kRulesMailbox) && RulesLine()) {
+    sentinel::LogFields(LogLevel::kInfo, "combat_ec_rules",
+                        {{"changed", "cleared"},
+                         {"msg", "ec: the server does not state EchoCombat: the mailbox's RULES are back to ALL, off and not set"}});
   }
   if (ans != L.answered && StepLine()) {
     L.answered = ans;
@@ -911,6 +1024,7 @@ void ResetForTest() noexcept {
   {
     LockG l;
     g_st = State();
+    g_sentTo.Clear();
   }
   std::memset(sentinel::EcPage(), 0, sentinel::kEcPageSize);
   g_sends = 0;
@@ -920,6 +1034,8 @@ void ResetForTest() noexcept {
   g_killLines = 0;
   g_tokenLines = 0;
   g_selLines = 0;
+  g_rulesLines = 0;
+  g_mapTarget = 0;
   g_droneKilled = nullptr;
   for (auto& t : g_netTick) t = nullptr;
   g_gameFd = -1;
@@ -936,6 +1052,7 @@ void ResetForTest() noexcept {
   g_forceScope = -1;
   g_nextScopeMs = 0;
   g_lastClass = scope::LookClass::kNoLook;
+  g_lastLevel = 0;
   g_scopeLogged = false;
   g_lookup = nullptr;
   g_pinsOverride = nullptr;

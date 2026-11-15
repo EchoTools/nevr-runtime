@@ -10,6 +10,7 @@
 
 #include "core/update/edges.h"
 #include "core/update/fs.h"
+#include "core/update/names.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -39,6 +40,9 @@ struct StartResult {
   const char* reason = nullptr;
   /// For kLoad: the release in the root is pending (just swapped in, or on its trial).
   bool pending = false;
+  /// For kLoad: the boot_attempts this start wrote into update\pending.json as its own try (1 when it swapped the release in,
+  /// the count plus one when it counted a try); 0 when this start counted none. UncountTryIn gives it back.
+  std::uint64_t counted_attempts = 0;
 };
 
 /// The outcome of a load, in the engine's three classes (ADR 0024, section 6). kNotLoaded is a stop that is not the
@@ -52,10 +56,10 @@ enum class PendingFailure : std::uint8_t {
   kMapped,    ///< the runtime was mapped and then failed: it stays mapped, so the next start puts the previous one back
 };
 
-/// R1's classification. `code_before_entry` is RuntimeLoaderEdge::CodeBeforeEntry(). PC answers true, and so an entry-only
-/// failure is kMapped, as it has always been. The false branch (a runtime with no constructors, which Quest would roll back
-/// in the same start) is the Quest edges' decision, not written in this tree (ADR 0023, section 7): until it is, both values answer kMapped, the
-/// stop that PC takes, never a load of a runtime nothing verified.
+/// R1's classification. `code_before_entry` is RuntimeLoaderEdge::CodeBeforeEntry(). PC answers true, so an entry-only failure is
+/// kMapped, as it has always been. Quest answers false (a runtime with no constructors): its entry-only failure ran no runtime
+/// code and is kNeverRan, put back in the same start. A load that failed at its entry or in initialize is never a load of a
+/// runtime nothing verified: the start stops (kMapped) or puts the previous release back.
 PendingFailure ClassifyPendingFailure(LoadClass load, bool code_before_entry) noexcept;
 
 /// The two hooks a start consults, as function pointers so the engine holds no state of its own. Production passes nulls: no
@@ -94,7 +98,25 @@ struct StartContext {
   /// update\lock is taken into this slot and stays there when a start leaves it held (the load releases it). The slot is
   /// the host's; a start that finds it held does not take it again.
   std::unique_ptr<FsLock>* lock = nullptr;
+  /// The runtime's file name in the root: nevr-runtime.dll (PC, the default) or libnevr-runtime.so (Quest). The member
+  /// vocabulary accepts only this one name as the runtime; the other platform's name is refused.
+  std::string runtime_file = nevr_update_names::kRuntimeFile;
+  /// The release the APK carries as the baseline (Quest; the edge reads its version and sha256). When the root holds no runtime, a
+  /// swap names the baseline as the release it replaces and moves nothing out, so a fresh install's first swap runs. A rollback of
+  /// that release removes the failed runtime from the root (quarantined) and leaves the root without one: the start then loads the
+  /// baseline. Absent on PC, where every behaviour above is unchanged.
+  struct BaselineRelease {
+    bool present = false;
+    std::string version;
+    std::string sha256;
+  };
+  BaselineRelease baseline = {};
 };
+
+/// How long a start waits for update\lock, and how often it tries (ADR 0024, section 4.1). The one definition: the PC host and the
+/// Quest shim take the lock with these values.
+inline constexpr std::uint32_t kUpdateLockTimeoutMs = 30000;
+inline constexpr std::uint32_t kUpdateLockStepMs = 100;
 
 /// The step ADR 0024 section 4 runs at every start. Never throws: an exception inside it is recorded and answered as
 /// the start's own (`internal_error`).
@@ -103,6 +125,13 @@ StartResult RunStart(const StartContext& context) noexcept;
 /// R1, never ran (ADR 0024, section 6): the previous release is put back now, in this start. Takes the lock if it is not
 /// held. Never throws.
 StartResult RollBackNowIn(const StartContext& context, const char* reason) noexcept;
+
+/// A load the host refused before it mapped anything (a host input is missing: the Quest's kHostContextRefused) judges the
+/// host, not the release, so the try this start counted is given back: under the lock, update\pending.json's boot_attempts
+/// goes from `counted_attempts` (StartResult::counted_attempts) to one less, and one update_trial record says so with
+/// `reason`. Nothing is written when `counted_attempts` is 0 or the record no longer holds that count. True when the try
+/// was given back. Never throws.
+bool UncountTryIn(const StartContext& context, std::uint64_t counted_attempts, const char* reason) noexcept;
 
 /// R1, mapped (ADR 0024, section 6): writes `failed_reason` into update\pending.json under the lock. True when it is
 /// there afterwards. Never throws.

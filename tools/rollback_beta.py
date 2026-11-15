@@ -14,7 +14,7 @@ the Quest release timer, run by hand with --tag.
                    (the roll-forward path), and --forward for a tag that is not higher; `override=true` goes into the
                    dispatch only when the tag is lower than beta
   claims           `release-signer listed-claims --tag vX.Y.Z --live`: the publish's `extra_artifacts`. They must be exactly
-                   the target's artifacts that GitHub does not hold (every kind but windows-zip and quest-library), by name,
+                   the target's artifacts that GitHub does not hold (every kind but windows-zip, quest-library and quest-runtime), by name,
                    and each must be what the manifest lists for the tag
   plan             printed: beta now, the target, the direction, manifest_version and the target's artifacts with sizes
   --dry-run        reads (and only reads) the Quest release timer's lock and the signer's runs, and says whether a live run
@@ -80,7 +80,7 @@ DEFAULT_TIMEOUT = 600  # seconds, for every command that names no other
 BUILD_TIMEOUT = 1800  # the signer snapshot's go build
 WATCH_TIMEOUT = 1800  # a run takes about six minutes
 WATCH_TIMEOUT_PC_DATA = 7200  # the check job downloads the PC game data (about 5 GB) when the target lists it
-GITHUB_KINDS = frozenset({"windows-zip", "quest-library"})  # the artifacts GitHub holds; every other kind is claimed
+GITHUB_KINDS = frozenset({"windows-zip", "quest-library", "quest-runtime"})  # the artifacts GitHub holds; every other kind is claimed
 IGNORED_ENTRY_FIELDS = ("notes", "published")  # a re-published listed release may differ in these (the signer's sameBytes)
 SECRET_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "GH_TOKEN", "GITHUB_TOKEN")
 R2_ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")

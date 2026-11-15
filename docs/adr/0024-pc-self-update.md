@@ -124,7 +124,9 @@ flowchart TD
   in either direction: a withdrawn release is replaced by the older one the
   channel points at, because that is the only way a bad release is taken back from players. The log says `direction`.
   Release builds only: a dev build (`NEVR-PLUGIN-TRUST dev`) never updates, so a developer's runtime is not replaced by a
-  signed one.
+  signed one. The one exception is the Quest dev source: `update.base` (and `update.pins`) in `config.yaml` give a dev build its own
+  manifest host and trusted keys, and a dev build with a valid base updates from that base. A release build ignores both keys and
+  says so; the pinned release keys and host never change (`ResolveSource` in `src/core/update/policy.cpp`, one `update source` line).
 - **Which channel.** `update.channel` in `config.yaml`, else the channel recorded in `update\state.json` by the installer
   that installed the runtime (`pc install --channel`), else the core's default. A player who installed from `beta` stays on
   `beta`.
@@ -155,7 +157,7 @@ units (`src/core/update/names.cpp`, `host/file_digest.cpp`), compiled into both 
 - **When.** `RunDeferredRuntimeBootstrap` calls `nevr_update::StartProcessWorker` last, after the log line `runtime bootstrap
   complete` and after the command line is parsed (so `-no-update` has been read). Nothing starts from `DllMain`, `initialize`
   or the host.
-- **One decision per launch, one line.** `Decide` names the first reason in this order: `dev_build`, `flag`, `config`,
+- **One decision per launch, one line.** `Decide` names the first reason in this order: `dev_build` (unless the dev build has a source of its own), `flag`, `config`,
   `host_cannot_swap`; the line is `update disabled reason=<word>`. A dev build and a host that cannot swap start no thread. A
   flag or a config key that is off starts the confirmation thread only.
 - **Two threads, independent.** The check thread runs `RunCheck` once and ends. The confirmation thread waits, on a mutex and a condition variable (`src/core/update/worker.cpp`), for the mark that the per-frame dispatcher raises (`nevr_update::OnFrame`, one atomic compare per dispatch) 10 s after its first call, then runs
@@ -174,8 +176,7 @@ units (`src/core/update/names.cpp`, `host/file_digest.cpp`), compiled into both 
   verified (`update verify`) with `nevr_plugin_trust::ProductionPolicy()`, the denylist included; one that fails removes
   `update\staging\<version>` and ends in `blocked reason=verify_failed`. Then the lock (5 s), a second look for `pending.json`,
   and `staged.json` by rename, last.
-- **The reasons.** `failed`: `core_open_failed`, `network` (the manifest could not be fetched), `manifest_check` (the core's
-  text names `FAIL step N`), `stage_failed`, `timeout`, `bad_result`, `lock_unavailable`, `publish_failed`,
+- **The reasons.** `failed`: `core_open_failed`, `network` (the core's error is `FAIL step 1`, the fetch), `manifest_check` (any other step, or text that is not `FAIL step N:`), `stage_failed`, `timeout`, `bad_result`, `lock_unavailable`, `publish_failed`,
   `root_unconvertible`, `running_runtime_unreadable`, `internal_error`. The core's own error text is never a log field (logging
   Rule 4); it is in `logs\nevr-update.jsonl`.
 - **F5.** A staged file that fails Authenticode is a discard, not a quarantine: the flowchart and F5 say the same thing. When the
@@ -395,6 +396,11 @@ and its journal, reached through the platform edges of `src/core/update/edges.h`
   `boot_attempts`, or `not_counted` with why (a runtime in use, a swap's cleanup finished, a runtime the host cannot open
   for write, a count that could not be written). A start that decides a rollback writes `update_rollback` instead
   (`rolled_back`, `deferred`, `failed`, `blocked`), never both.
+- **A load the host refuses is not a try** (Quest, `src/quest/shim/update_start.cpp`). A runtime the shim does not call because a
+  host input is missing (`runtime_load outcome=host_context_refused`) ran nothing and says nothing about the release, so the try
+  the start counted (the swap's first one, or the count) is given back under the lock (`UncountTryIn`: a second `update_trial`,
+  `outcome=not_counted reason=host_context_refused`), nothing is rolled back or marked, and the start tries the APK's baseline,
+  with the same inputs (its own `runtime_load` record says whether the same missing input refused it too).
 - **When the previous release cannot be restored in the same start**, the failed release stays in the root and is marked
   (`failed_reason`; the first failure stays), so the next start tries again; the `update_rollback` record of a runtime in use
   says whether the mark was made (`marked`).
@@ -478,6 +484,7 @@ A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag
 | Where | Event | Fields |
 | --- | --- | --- |
 | runtime | `update disabled` | `reason` (`dev_build`, `no_root` when `%LOCALAPPDATA%` is not set, `flag`, `config`, `host_cannot_swap`; `no_root` is a Warning, the rest Info) |
+| Quest runtime | `update source` | Warning, once per launch and only when `update.base` or `update.pins` is in `config.yaml`: `outcome` (`used`: a dev build reads that base, with `base_host` (host and port only) and `pins` (the key count, or `builtin`); `ignored`: a release build does not use the key, `reason=release_build`; `rejected`: a dev build refused the value, with `key` and `reason`: `empty`, `too_long`, `control_character`, `not_http_or_https`, `credentials_query_or_fragment`, `no_host`, `pins_without_base`, `no_keys`, `malformed_line`, `malformed_key`), `source=config`, `consequence`. The `update check` line carries `source_override=true` when the check ran against the override |
 | runtime | `update discard` | `version`, `recorded`, `reason` (`verify_failed`): the verifier refused a staged release and the core was told (Warning when it could not be recorded) |
 | runtime | `update check` | `channel` (`core_default` when none was named), `channel_source` (`config`, `state`, `default`), `current`, `target`, `direction`, `action` (`none`, `staged`, `blocked`, `failed`), `reason`, `config_channel_rejected` when `update.channel` is not a channel name, `elapsed_ms` |
 | core | `manifest_check`, `release_selected`, `artifact_fetch` | as ADR 0023 section 5; a cut-off download is `artifact_fetch ok=false reason=short_body bytes=<n> size=<n>` |
@@ -490,7 +497,7 @@ A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag
 | core | `update_state` | `ok`, `channel`, `version`, `runtime_sha256`, `state_before` (`absent`, `read`, `rebuilt`), `rebuilt_reason`, `owned`, `quarantine`, `lock_wait_ms`; on a failure `reason` and `detail` |
 | host | `update_swap` | `outcome` (`swapped`, `deferred`, `blocked`, `discarded`, `recovered`, `skipped`), `reason` (`skipped` has `root_unconvertible`: the runtime's root has no UTF-8 spelling and the start does no update work), `from`, `to`, `files` (path, sha256), `elapsed_ms` |
 | host | `update_rollback` | `mode` (`in_process`, `next_start`), `reason`, `from` (the failed release), `to` (the restored one), `outcome` (`rolled_back`, `scheduled`, `deferred`, `failed`, `blocked`, `discarded`), `boot_attempts`, `files`, `elapsed_ms` |
-| host | `update_trial` | one per start that loads a pending release without deciding a rollback (a rollback decision writes `update_rollback`): `outcome` (`counted`, `not_counted`), `reason` (`try`, `runtime_in_use`, `swap_finished`, `runtime_not_writable`, `pending_write_failed`), `release`, `boot_attempts` (after the start), `elapsed_ms` |
+| host | `update_trial` | one per start that loads a pending release without deciding a rollback (a rollback decision writes `update_rollback`), and on Quest a second one when a load the host refused gives the start's try back (`UncountTryIn`): `outcome` (`counted`, `not_counted`), `reason` (`try`, `runtime_in_use`, `swap_finished`, `runtime_not_writable`, `pending_write_failed`, and for the give-back `host_context_refused`, or `lock_timeout` and `pending_write_failed` when the try stays counted), `release` (absent on a give-back that could not take the lock: the record was not read), `boot_attempts` (after the start), `cause` and `win32_error` (a give-back that failed), `elapsed_ms` |
 | host | `crash_marker` | `outcome` (`written`, `failed`), `win32_error`, `path`, `thread` |
 | runtime | `update confirmed` | `version`, `after_ms`, `role` (`client`, `server`) |
 | runtime | `update confirm skipped` | `reason` (`no_pending`, `not_the_pending_release`, `pending_unreadable`, `state_unreadable`, `lock_unavailable`, `write_failed`, `running_runtime_unreadable`, `internal_error`), `version` when the record named one |
@@ -503,8 +510,9 @@ the second verdict, with `update_rollback` between the two.
 
 `NEVR_ROOT` replaces the root in a dev build only, and only for the host (`ResolveRuntimePathFrom`); the runtime's own state
 paths (`nevr_root::RootW`, `RootA`) read `%LOCALAPPDATA%` alone. The swap resolves the host's root through the same function,
-so in a dev build it would act on the override root while the runtime's state sits elsewhere. Self-update never runs in a dev
-build, so the two never disagree; a test pins that the worker refuses to start when the build is a dev build.
+so in a dev build it would act on the override root while the runtime's state sits elsewhere. Self-update never runs in a PC dev
+build, so the two never disagree; a test pins that the worker refuses to start when the build is a dev build. (A Quest dev build with
+`update.base` does update; the Quest has no `NEVR_ROOT`, its root is the host's `update_root`.)
 
 ## Failure cases
 

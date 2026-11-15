@@ -241,21 +241,26 @@ func TestEcPageIsAnExportedDataPage(t *testing.T) {
 // thread_local is emulated (__emutls_v.*) and its first use on a thread allocates,
 // which must not happen inside a hooked libc function. The only emulated-TLS
 // symbol allowed is libc++abi's own exception-globals slot.
+//
+// Both libraries are read: the shim, and the runtime library it maps, which installs and runs the hooks (the shim calls its
+// initialize: "Quest runtime library" in src/quest/sentinel/CMakeLists.txt).
 func TestNoEmulatedTLSInHookPath(t *testing.T) {
 	requireArtifact(t)
-	syms := run(t, "nm", soPath(t))
-	seen := 0
-	for _, line := range strings.Split(syms, "\n") {
-		if !strings.Contains(line, "__emutls_v.") {
-			continue
+	for _, path := range []string{soPath(t), runtimeSoPath(t)} {
+		syms := run(t, "nm", path)
+		seen := 0
+		for _, line := range strings.Split(syms, "\n") {
+			if !strings.Contains(line, "__emutls_v.") {
+				continue
+			}
+			seen++
+			if !strings.Contains(line, "__cxxabiv1") {
+				t.Errorf("%s: emulated TLS variable that is not libc++abi's: %s", path, line)
+			}
 		}
-		seen++
-		if !strings.Contains(line, "__cxxabiv1") {
-			t.Errorf("emulated TLS variable that is not libc++abi's: %s", line)
+		if seen == 0 {
+			t.Errorf("%s: no __emutls_v.* symbol at all: the allowlist is not looking at what it thinks it is", path)
 		}
-	}
-	if seen == 0 {
-		t.Errorf("no __emutls_v.* symbol at all: the allowlist is not looking at what it thinks it is")
 	}
 }
 
@@ -289,36 +294,6 @@ type elfFunc struct {
 	section    string
 }
 
-func parseFrames(t *testing.T) (cieAug map[string]string, fdeCIE map[uint64]string) {
-	t.Helper()
-	frames := run(t, "readelf", "--debug-dump=frames", soPath(t))
-	cieAug = map[string]string{} // CIE offset -> augmentation
-	fdeCIE = map[uint64]string{} // FDE start pc -> CIE offset
-	current := ""
-	for _, line := range strings.Split(frames, "\n") {
-		if m := cieRe.FindStringSubmatch(line); m != nil {
-			current = m[1]
-			continue
-		}
-		if m := augRe.FindStringSubmatch(line); m != nil && current != "" {
-			cieAug[current] = m[1]
-			current = ""
-			continue
-		}
-		if m := fdeRe.FindStringSubmatch(line); m != nil {
-			pc, err := strconv.ParseUint(m[2], 16, 64)
-			if err != nil {
-				t.Fatalf("bad pc %q", m[2])
-			}
-			fdeCIE[pc] = m[1]
-		}
-	}
-	if len(cieAug) == 0 || len(fdeCIE) == 0 {
-		t.Fatalf("parsed no CIE/FDE from readelf --debug-dump=frames; the parser is blind")
-	}
-	return cieAug, fdeCIE
-}
-
 var (
 	secRe   = regexp.MustCompile(`^\s*\[\s*(\d+)\]\s+(\S+)`)
 	secFull = regexp.MustCompile(`^\s*\[\s*\d+\]\s+(\S+)\s+\S+\s+([0-9a-f]+)\s+[0-9a-f]+\s+([0-9a-f]+)`)
@@ -328,36 +303,18 @@ var (
 	branchR = regexp.MustCompile(`^\s+[0-9a-f]+:\s+(bl|b)\s+0x([0-9a-f]+)\s+<(.*)>$`)
 )
 
-func parseFuncs(t *testing.T) []elfFunc {
-	t.Helper()
-	sections := map[string]string{}
-	for _, line := range strings.Split(run(t, "readelf", "-SW", soPath(t)), "\n") {
-		if m := secRe.FindStringSubmatch(line); m != nil {
-			sections[m[1]] = m[2]
-		}
-	}
-	var fs []elfFunc
-	for _, line := range strings.Split(run(t, "readelf", "-sW", soPath(t)), "\n") {
-		m := symRe.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		addr, _ := strconv.ParseUint(m[1], 16, 64)
-		size, _ := strconv.ParseUint(m[2], 10, 64)
-		if size == 0 {
-			continue
-		}
-		fs = append(fs, elfFunc{addr: addr, size: size, name: m[4], section: sections[m[3]]})
-	}
-	if len(fs) == 0 {
-		t.Fatalf("no function symbols parsed from readelf -s")
-	}
-	return fs
-}
-
+// Both libraries are walked: the shim, and the runtime library it maps, which installs and runs the hooks.
 func TestHookFramesCarryNoPersonality(t *testing.T) {
 	requireArtifact(t)
-	art := loadFrameGraph(t, soPath(t))
+	for _, path := range []string{soPath(t), runtimeSoPath(t)} {
+		t.Run(filepath.Base(path), func(t *testing.T) { checkHookFrames(t, path) })
+	}
+}
+
+// checkHookFrames applies the rule above to the library at path.
+func checkHookFrames(t *testing.T, path string) {
+	t.Helper()
+	art := loadFrameGraph(t, path)
 	// Exactly one record per thunk Entry, and no record for anything else but a reviewed assembly entry.
 	thunkEntries := map[uint64]bool{}
 	for i := range art.funcs {
@@ -372,7 +329,7 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 		t.Error(msg)
 	}
 	// A reviewed assembly entry's own text: its acquire loads, the branch to its record's continuation, its unwind rows at each bl.
-	for _, msg := range asmEntryErrors(t, soPath(t), art, thunkEntries) {
+	for _, msg := range asmEntryErrors(t, path, art, thunkEntries) {
 		t.Error(msg)
 	}
 
@@ -402,6 +359,21 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 		// std::exception itself). No exception leaves it: it is noexcept, and its translation unit is built
 		// -fno-exceptions (src/quest/sentinel/CMakeLists.txt).
 		"wizard metric observer (MetricLog)": regexp.MustCompile(`^_ZN10nevr_quest13wizard_metric12_GLOBAL__N_17ObserveE`),
+
+		// The arena-rules alias (config_alias_hook.cpp, AliasFor in config_alias_levels.cpp): the lookup handler calls it before it
+		// calls the game's lookup. It reconciles the alias table on the tick thread and resolves the key; it calls no game code and is
+		// noexcept, and its translation unit is built with exceptions and catches its own (config_alias_levels.cpp).
+		"config alias lookup (AliasFor)": regexp.MustCompile(`^_ZN10nevr_quest17config_alias_hook8AliasForE`),
+
+		// Cat's weapon values merged into mp_weapon_settings (MergeBalance in src/quest/sentinel/menu_cards_hook.cpp): the
+		// read-finished handler calls it before the game's allocator and the game's callback. It parses and builds JSON
+		// (core/combat_balance/balance_merge.h) and calls no game code; it is noexcept.
+		"combat balance merge (mp_weapon_settings)": regexp.MustCompile(`^_ZN10nevr_quest10menu_cards12_GLOBAL__N_112MergeBalanceE`),
+
+		// The end record of a held new-unlocks clear (LogEnd in src/quest/combat/new_unlocks_clear.cpp): ClearHandler calls it after
+		// the game's clear has returned. It reads the social layer's snapshot (a lock and a copy) and logs; it calls no game code and
+		// is noexcept.
+		"new unlocks clear end record": regexp.MustCompile(`^_ZN10nevr_quest6combat17new_unlocks_clear12_GLOBAL__N_16LogEndE`),
 	}
 	for what, re := range want {
 		if !anyMatches(v.annotatedReached, re) {
@@ -463,41 +435,58 @@ func backendFunctionNames(t *testing.T) map[string]bool {
 	return names
 }
 
+// The backend is linked into two libraries, and each is checked: the shim, whose constructor installs the crash-first hooks,
+// and the runtime library, which runs the constructor sequence and with it the reporter (the shim maps libnevr-runtime.so and
+// calls its initialize: "Quest runtime library" in src/quest/sentinel/CMakeLists.txt). Each must hold the backend functions it
+// runs, by mangled prefix, or the check is looking at nothing.
+var (
+	backendInstallPrefixes  = []string{"_ZN8sentinel7GotHook7Install", "_ZN8sentinel11ResolveSlot", "_ZN8sentinel9LogFields"}
+	backendReporterPrefixes = []string{"_ZN8sentinel13StartReporter", "_ZN8sentinel12_GLOBAL__N_112ReporterMain",
+		"_ZN8sentinel21RegisterReportCounter"}
+)
+
 func TestBackendBuiltWithoutExceptions(t *testing.T) {
 	requireArtifact(t)
-	cieAug, fdeCIE := parseFrames(t)
 	backend := backendFunctionNames(t)
-	// Functions that must be in the shipped .so, by mangled prefix, or the check is looking at nothing.
-	want := map[string]bool{"_ZN8sentinel7GotHook7Install": false, "_ZN8sentinel11ResolveSlot": false,
-		"_ZN8sentinel9LogFields": false, "_ZN8sentinel13StartReporter": false,
-		"_ZN8sentinel12_GLOBAL__N_112ReporterMain": false,
-		"_ZN8sentinel21RegisterReportCounter":      false}
+	checkBackendFrames(t, soPath(t), backend, backendInstallPrefixes)
+	checkBackendFrames(t, runtimeSoPath(t), backend, append(append([]string{}, backendInstallPrefixes...), backendReporterPrefixes...))
+}
+
+// checkBackendFrames fails for each backend function of the library at path that sits under a CIE other than "zR", and for each
+// prefix in want that no backend function of the library has.
+func checkBackendFrames(t *testing.T, path string, backend map[string]bool, want []string) {
+	t.Helper()
+	cieAug, fdeCIE := framesOf(t, path)
+	seen := map[string]bool{}
+	for _, k := range want {
+		seen[k] = false
+	}
 	checked := 0
-	for _, f := range parseFuncs(t) {
+	for _, f := range funcsOf(t, path) {
 		if !backend[f.name] {
 			continue
 		}
 		checked++
-		for k := range want {
+		for k := range seen {
 			if strings.HasPrefix(f.name, k) {
-				want[k] = true
+				seen[k] = true
 			}
 		}
 		cie, ok := fdeCIE[f.addr]
 		if !ok {
-			t.Errorf("%s has no FDE", f.name)
+			t.Errorf("%s: %s has no FDE", path, f.name)
 			continue
 		}
 		if aug := cieAug[cie]; aug != `"zR"` {
-			t.Errorf("backend function %s sits under CIE augmentation %s, want \"zR\"", f.name, aug)
+			t.Errorf("%s: backend function %s sits under CIE augmentation %s, want \"zR\"", path, f.name, aug)
 		}
 	}
-	for k, seen := range want {
-		if !seen {
-			t.Errorf("backend function with prefix %q not found: the test is looking at nothing", k)
+	for k, found := range seen {
+		if !found {
+			t.Errorf("%s: backend function with prefix %q not found: the test is looking at nothing", path, k)
 		}
 	}
-	t.Logf("backend functions in the archive=%d, present in the .so and checked=%d", len(backend), checked)
+	t.Logf("%s: backend functions in the archive=%d, present in the library and checked=%d", path, len(backend), checked)
 }
 
 // The raw GotHook::Install (any function pointer) is private. Its test access class may be

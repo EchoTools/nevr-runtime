@@ -28,6 +28,10 @@ inline constexpr char kSourceBaseline[] = "baseline";
 inline constexpr char kVerifyNone[] = "none";
 // The baseline is not checked by this shim: the APK signature covers its bytes at install. Piece 12 replaces this word.
 inline constexpr char kVerifyReasonBaseline[] = "apk_signature_covers_baseline";
+// The update root's file is not checked when it loads: the size and sha256 were checked at the swap, and the proof check at load is
+// the Quest load edge of a later release (KNOWN-WRONG: its tracking issue is not filed yet; see update_start.cpp).
+inline constexpr char kSourceUpdate[] = "update";
+inline constexpr char kVerifyReasonUpdate[] = "not_checked_at_load";
 inline constexpr char kPathFormat[] = "%s/%s";
 // PATH_MAX on Linux and on Bionic.
 inline constexpr std::size_t kPathCapacity = 4096;
@@ -43,9 +47,6 @@ inline constexpr std::size_t kDetailCapacity = 256;
 inline constexpr std::size_t kNumberCapacity = 24;
 // The most fields one record carries: outcome, source, file, verify, verify_reason, reason, detail, initialize_status, errno.
 inline constexpr std::uint32_t kMaxRecordFields = 12;
-// The capability word the context carries. Bit 0 (the staged swap) stays clear until the start decision is wired (piece 15), so the
-// runtime's worker never stages a release under this shim.
-inline constexpr std::uint64_t kCapabilitiesNone = 0;
 
 // The fields of one record, in the order given; the sink copies every string before it returns.
 struct FieldList {
@@ -96,6 +97,13 @@ void* MapFd(int fd) noexcept {
 #endif
 }
 
+// A runtime that failed before its entry ran no code (the Quest runtime has no constructors), so its mapping is released: a rollback in
+// the same start then loads the previous file under the same name without finding this one still mapped under it. Not used after
+// initialize, which may have installed hooks.
+void ReleaseUnrun(void* handle) noexcept {
+  if (handle != nullptr) ::dlclose(handle);
+}
+
 void Refuse(Attempt* out, const char* reason) noexcept {
   out->outcome = Outcome::kHostContextRefused;
   out->reason = reason;
@@ -118,6 +126,7 @@ void Run(int fd, const HostInputs& host, Attempt* out) noexcept {
   if (symbol == nullptr) {
     out->outcome = Outcome::kMissingEntry;
     out->reason = "no_export";
+    ReleaseUnrun(handle);
     return;
   }
   const auto get_api = reinterpret_cast<NevrQuestGetRuntimeApiFn>(symbol);
@@ -125,6 +134,7 @@ void Run(int fd, const HostInputs& host, Attempt* out) noexcept {
   if (api == nullptr) {
     out->outcome = Outcome::kNullDescriptor;
     out->reason = "null";
+    ReleaseUnrun(handle);
     return;
   }
   // ValidateRuntimeApi reads the header first and the initialize field only after the header passes.
@@ -132,6 +142,7 @@ void Run(int fd, const HostInputs& host, Attempt* out) noexcept {
   if (status != nevr_runtime_abi::Status::kOk) {
     out->outcome = Outcome::kAbiRejected;
     out->reason = nevr_runtime_abi::StatusName(status);
+    ReleaseUnrun(handle);
     return;
   }
 
@@ -146,8 +157,10 @@ void Run(int fd, const HostInputs& host, Attempt* out) noexcept {
   context.shim_version = host.shim_version;
   context.log = host.log;
   context.variant = host.variant;
-  context.capabilities = kCapabilitiesNone;
+  context.capabilities = host.capabilities;
 
+  // The lock the update start holds is released before initialize, so the runtime's worker can take it (HostInputs).
+  if (host.before_initialize != nullptr) host.before_initialize(host.before_initialize_arg);
   const std::int32_t result = api->initialize(&context);
   if (result != 0) {
     out->outcome = Outcome::kInitFailed;
@@ -159,7 +172,7 @@ void Run(int fd, const HostInputs& host, Attempt* out) noexcept {
 }
 
 // One record of the start, through the shim's sink. Nothing is written when there is no sink.
-void Report(const char* file, const HostInputs& host, const Attempt& attempt, int err) noexcept {
+void Report(const char* file, const HostInputs& host, const Attempt& attempt, int err, Source source) noexcept {
   if (host.log == nullptr) return;
   const bool loaded = attempt.outcome == Outcome::kLoaded;
   char status_text[kNumberCapacity] = {};
@@ -169,10 +182,11 @@ void Report(const char* file, const HostInputs& host, const Attempt& attempt, in
 
   FieldList fields;
   fields.Add("outcome", OutcomeName(attempt.outcome));
-  fields.Add("source", kSourceBaseline);
+  const bool baseline = source == Source::kBaseline;
+  fields.Add("source", baseline ? kSourceBaseline : kSourceUpdate);
   fields.Add("file", file);
   fields.Add("verify", kVerifyNone);
-  fields.Add("verify_reason", kVerifyReasonBaseline);
+  fields.Add("verify_reason", baseline ? kVerifyReasonBaseline : kVerifyReasonUpdate);
   if (!loaded) {
     fields.Add("reason", attempt.reason);
     if (attempt.detail[0] != '\0') fields.Add("detail", attempt.detail);
@@ -222,13 +236,30 @@ void RecordLoadedVersion(int fd) noexcept {
   std::memcpy(g_loadedVersion, version.data(), length);
 }
 
-Outcome LoadRuntimeFromFd(int fd, const char* file, const HostInputs& host) noexcept {
+Outcome LoadRuntimeFromFd(int fd, const char* file, const HostInputs& host, Source source) noexcept {
   const FdGuard guard = {fd};
   Attempt attempt;
   Run(fd, host, &attempt);
   if (attempt.outcome == Outcome::kLoaded) RecordLoadedVersion(fd);
-  Report(file, host, attempt, 0);
+  Report(file, host, attempt, 0, source);
   return attempt.outcome;
+}
+
+Outcome LoadUpdateFile(const char* path, const HostInputs& host) noexcept {
+  const int fd = ::open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (fd < 0) {
+    const int err = errno;
+    // No file at the path is no release on disk (the update folder can exist with no runtime in it yet): nothing is recorded, and
+    // the start loads the baseline. Any other failure to open is recorded.
+    if (err != ENOENT) {
+      Attempt attempt;
+      attempt.outcome = Outcome::kAbsent;
+      attempt.reason = "open_failed";
+      Report(kBaselineFileName, host, attempt, err, Source::kUpdate);
+    }
+    return Outcome::kAbsent;
+  }
+  return LoadRuntimeFromFd(fd, kBaselineFileName, host, Source::kUpdate);
 }
 
 Outcome LoadBaseline(const char* dir, const HostInputs& host) noexcept {
@@ -238,10 +269,10 @@ Outcome LoadBaseline(const char* dir, const HostInputs& host) noexcept {
     Attempt attempt;
     attempt.outcome = Outcome::kAbsent;
     attempt.reason = "open_failed";
-    Report(kBaselineFileName, host, attempt, err);
+    Report(kBaselineFileName, host, attempt, err, Source::kBaseline);
     return Outcome::kAbsent;
   }
-  return LoadRuntimeFromFd(fd, kBaselineFileName, host);
+  return LoadRuntimeFromFd(fd, kBaselineFileName, host, Source::kBaseline);
 }
 
 Outcome StartBaselineBesideShim(const void* in_shim, HostInputs host) noexcept {
@@ -251,7 +282,7 @@ Outcome StartBaselineBesideShim(const void* in_shim, HostInputs host) noexcept {
     Attempt attempt;
     attempt.outcome = Outcome::kAbsent;
     attempt.reason = "no_native_dir";
-    Report(kBaselineFileName, host, attempt, 0);
+    Report(kBaselineFileName, host, attempt, 0, Source::kBaseline);
     return Outcome::kAbsent;
   }
   return LoadBaseline(dir, host);

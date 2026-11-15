@@ -333,7 +333,16 @@ func cfiRowsOf(t *testing.T, path string, starts map[uint64]bool) map[uint64]fde
 	var cols []string
 	cie := ""                      // the CIE whose table is being read
 	fde, inFDE := uint64(0), false // the FDE whose table is being read
+	inEhFrame := false             // the .eh_frame section only, as framesOf reads it (login_hook_frames_test.go)
 	for _, line := range strings.Split(run(t, "readelf", "--debug-dump=frames-interp", path), "\n") {
+		if strings.HasPrefix(line, sectionContentsPrefix) {
+			inEhFrame = line == ehFrameContents
+			cie, inFDE, cols = "", false, nil
+			continue
+		}
+		if !inEhFrame {
+			continue
+		}
 		if m := cieHdrRe.FindStringSubmatch(line); m != nil {
 			cie, inFDE, cols = m[1], false, nil
 			continue

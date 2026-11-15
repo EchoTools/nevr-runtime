@@ -92,16 +92,30 @@ first. The platform library's slot may hold its own WriteLogV or libr15's (which
   network's and is not handed to the game: recvfrom is called again with the same arguments (a non-blocking socket gives the game the next
   datagram or EAGAIN). One call swallows at most 256 in a row. 'K', 'M' and the carried types come from any sender, de-duplicated by id
   (a ring of 32, which an 'M' takes a slot of, as on PC); 'A' (a server of an older build answering the hello) and a first-time 'M' are
-  counted and open nothing; C L R G are taken out and ignored. These rules are `src/runtime/patch/ec_rules.h`, which PC's
+  counted and open nothing; C L R G are taken out. These rules are `src/runtime/patch/ec_rules.h`, which PC's
   `src/runtime/combat/veilnet.cpp` follows too.
+- **Match control** (#2242): a 'G', 'R' or 'L' from the current server (the picked one, while the game still sends to it, at its address and
+  port; from any other sender it does nothing) goes through `src/runtime/combat/match_control_rules.h`, which PC's client branch calls too.
+  'G' writes the RULES mailbox's shown bytes (page +0xec0, the layout `src/runtime/combat/rules_state.h`: LOADOUTS +0x11, SERIES-10 ONLY
+  +0x2C, POINT RATE +0x2D, PAUSE +0x2E, the payload map, PAYLOAD SPEED, the checkpoint and its two progress bytes +0x30 to +0x34), 'R' writes
+  T at +0x08, 'L' is recorded only. The step puts the 'G' bytes back to zero while the server does not state EchoCombat. One record per
+  change: `combat_ec_rules` (`changed`, and the rules), `combat_ec_round_time`, `combat_ec_map`; the map record again once the client is on
+  another level. A script would find the mailbox there by inference from the address arithmetic: the reference build's lifted libraries
+  translate an echovr.exe address as `re33_ec_page - 0x2104000` and accept only [page + 0xc00, page + 0x1000), so RVA 0x2104ec0 maps to
+  page +0xec0. No wave-2 lift reads [page + 0xec0, page + 0xf00) today; the readers come with the script work. Not on the Quest
+  (KNOWN-WRONG #2242): the script hooks that read the mailbox on PC (clock and orb pause, the capture point's rules), the RULES page's
+  text pointer at +0x24, and PAUSE allowed at +0x35, which a PC client derives from the match-live byte +0x2F that the orb script hook
+  writes.
 - **The server's statement** (#2333): `CR15NetGame::LobbySettingsCB(SMsg)` (its GLOB_DAT word, which `BeginMultiplayer` registers) reads the
   `nevr_server` key of the lobby settings the server gives its clients (`src/runtime/compat/server_features.h`). A server that states
   `echocombat` opens the gate the tac-mod hide follows; any other document, or none, keeps it closed. A session in another lobby clears it
   (`src/runtime/compat/session_router.cpp`).
 - **The thread**, on a combat map or the combat lobby every 5 ms: the use counters become 'V' / 'P' / 'T' / 'O' packets sent twice to the server
-  (the busiest sendto destination of the last second), the hello 'H' every 2 s (the server relays only to clients that said hello), the page's +0x40 word (the server states EchoCombat), the summary every 10 s.
+  (the busiest sendto destination of the last second, and only while the game still sends to it: `kDestQuietMs`, `src/runtime/combat/veilnet_gate.h`), the hello 'H' every 2 s (the server relays only to clients that said hello; at most `kHelloTries` to a server that never states EchoCombat, until the game connects to another server or it states it), the page's +0x40 word (the server states EchoCombat), the summary every 10 s. A server that has not stated EchoCombat gets only the hello (`gate::SendAllowed`, EchoCombat 2.0.6).
 - **The selected tac mod**: the line `[NSUSER] sent profile update: %s` carries the profile json; its `ability` names the tac mod, and a known EC
-  one is stored at +0xe80 (with `equip`; `noequip` logs only).
+  one is stored at +0xe80 (with `equip`; `noequip` logs only). The local player's tac mod slot gives it too (EchoCombat 2.0.8): every call
+  on that slot's record, through either setter word of `equip_refire`, changed or not, calls `ec::TacModPicked`, which stores a known tac mod that
+  is not the selection already standing (`gate::PickFromSlot`, `combat_ec_sel` with `source` `tac_mod_slot`).
 - **The hide** (with `hide`, the gear gate in): on a server that does not answer, once the selection has been still for 2000 ms, the tac-mod list's
   count is lowered by 3 (smoke, buff, point are the list's last three, re-checked by name before any write; the count is written by
   compare-and-swap); it is put back when the server answers, and never cut while one of the three is selected. Reload and Unload of the
@@ -170,7 +184,7 @@ plugin's data directory is a Warning (`combat_ec_legacy_switch`, `combat_ecfx_le
     {"event":"combat_ec_scope","in_scope":0|1,"level_class":"combat_or_lobby|echo_arena|other|no_look|stale","level":"0x..","msg":".."}   (combat_scope.h LookClassName; level: the look's)
     {"event":"combat_ec_platform","lib":"libpnsovr|libpnsrad","status":"..","msg":".."}
     {"event":"combat_ec_server","addr":"..","port":<n>,"fd":<n>}   {"event":"combat_ec_server_features","state":"stated|not_stated"}
-    combat_ec_used, combat_ec_token, combat_ec_kill, combat_ec_sel, combat_ec_tacmods, combat_ec_skip, combat_ec_prelude, combat_ec_loc, combat_ec_wall
+    combat_ec_used, combat_ec_hello_end, combat_ec_token, combat_ec_kill, combat_ec_sel, combat_ec_tacmods, combat_ec_skip, combat_ec_prelude, combat_ec_loc, combat_ec_wall
     (48 each per process, kill 16), combat_ec_sum (every 10 s, 60 in all), combat_ec_legacy_switch (Warning)
     combat_ecfx_install, combat_ecfx_waiting (once), combat_ecfx_attach, combat_ecfx_gate (once), combat_ecfx_ran / combat_ecfx_drain (the first 96),
     combat_ecfx_lines (once: later ones are counted), combat_ecfx_sum (the counts, at most every 10 s and after 10 s quiet)

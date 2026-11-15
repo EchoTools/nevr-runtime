@@ -20,4 +20,16 @@ TEST(ArenaRoundTime, StoredSessionTypeIsReadBack) {
   EXPECT_EQ(nevr_arena_round_time::SessionGameType(), std::optional<std::string>("echo_combat"));
 }
 
+// #2242 (EchoCombat 2.0.3): VeilNet resets the RULES on each new session, so a store that starts a session must move the
+// generation on, and a second store must move it again.
+TEST(ArenaRoundTime, EverySessionStoreAdvancesTheGeneration) {
+  nevr_arena_round_time::ResetForTest();
+  const auto g0 = nevr_arena_round_time::SessionGeneration();
+  nevr_arena_round_time::SetSessionGameType("echo_arena_private");
+  const auto g1 = nevr_arena_round_time::SessionGeneration();
+  nevr_arena_round_time::SetSessionGameType("echo_arena_private");
+  EXPECT_GT(g1, g0);
+  EXPECT_GT(nevr_arena_round_time::SessionGeneration(), g1);
+}
+
 }  // namespace

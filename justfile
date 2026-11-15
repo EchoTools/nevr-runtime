@@ -73,7 +73,7 @@ worktree-setup:
 install-hooks:
     tools/install-git-hooks.sh
 
-# Land this worktree's branch on origin's main, one lander at a time: lock, fetch, rebase, rerun each --test, push the tip to refs/heads/main never forced, record main before and after (tools/cmd/land; AGENTS.md "Landing")
+# Land this worktree's branch on origin's main, one lander at a time: refuse unless -review <report> holds "Verdict: MERGE <HEAD's sha>", lock, fetch, rebase, rerun each --test, add the Reviewed-by-report trailer, push the tip to refs/heads/main never forced, record main before and after (tools/cmd/land; AGENTS.md "Landing"). Usage: just land -review <report> -test 'just test-changed'
 [positional-arguments]
 land *args: go-tools
     build/go-tools/land "$@"
@@ -203,8 +203,10 @@ check-android-static-init: build-android
 
 # Run the Quest .so ground-truth (ELF-shape) tests
 test-android: check-android-static-init
-    # The sentinel embeds exactly the public defaults file (the build reads no other source).
-    python3 tools/check_embedded_defaults.py --header build/android-arm64/generated/nevr_builtin_defaults.h --binary build/android-arm64/sentinel/libovrplatformloader.so
+    # The runtime library embeds exactly the public defaults file (the build reads no other source). The defaults are read by
+    # activation, which runs in libnevr-runtime.so's initialize; the shim (libovrplatformloader.so) maps that library and holds
+    # none, as on PC, where nevr-runtime.dll carries them and BugSplat64.dll does not.
+    python3 tools/check_embedded_defaults.py --header build/android-arm64/generated/nevr_builtin_defaults.h --binary build/android-arm64/sentinel/libnevr-runtime.so
     # CSymbol64Hash sign-extends a byte >= 0x80 under the NDK's AArch64 clang, where plain char is unsigned (#657).
     # The vectors are static_asserts, so compiling the file is the check: the target nevr_quest_symbol_hash_check
     # (src/quest/CMakeLists.txt) is that compile. The NDK's static bionic binary does not start under qemu-user
@@ -793,8 +795,9 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     python3 tools/package_release.py quest-library --lib "$out/loader/libovrplatformloader.so" --version "$ver" --commit "$tag_commit"
     # The variant word names the APK to the sentinel (stamped by the repack, docs/adr/0040 rule 1): empty for the release APK. No APK
     # carries a plugin library (the plugin argument is empty): the combat modules are the sentinel's own (src/quest/combat/).
-    # The baseline runtime the shim maps at start (quest-update piece shim-loads-baseline) is not a release asset: it is the sentinel's own
-    # libnevr-runtime.so from this checkout's build, which the HEAD == tag check above makes the tag's commit. The recipe compiles nothing, so it
+    # The baseline runtime the shim maps at start (quest-update piece shim-loads-baseline) is the sentinel's own libnevr-runtime.so
+    # from this checkout's build, which the HEAD == tag check above makes the tag's commit. Its release copy, the asset
+    # nevr-runtime-vX.Y.Z-quest-runtime.so, is built by build.yml's quest job from the same tag; this recipe builds its own copy. The recipe compiles nothing, so it
     # is built at the tag beforehand, and the repack's stage-runtime refuses an empty file.
     runtime="build/android-arm64/sentinel/libnevr-runtime.so"
     [ -s "$runtime" ] || { echo "$label: baseline runtime not found (build the Quest sentinel at $tag first): $runtime" >&2; exit 1; }
@@ -1112,6 +1115,22 @@ test-auth-unit *names: go-tools _build-guard generate-symcache _vcpkg-mingw _pro
             if [[ ! -f "$bin" ]]; then
                 echo "ERROR: GTest binary not found: $name (built by --target $name, looked for build/{{ preset }}/bin/$name.exe and build/{{ preset }}/bin/*/$name.exe)" >&2
                 exit 1
+            fi
+            # A binary one directory below bin/ that is not its directory's harness (test_<directory>, dashes as underscores) is a
+            # child the harness starts with what it stages for it (the bootstrap-attach static-import binary needs the runtime fixture
+            # beside it and a LOCALAPPDATA of its own). The full run runs only the harness, so naming the child runs the harness.
+            dir="$(dirname "$bin")"
+            if [[ "$dir" != "build/{{ preset }}/bin" ]]; then
+                harness="test_$(basename "$dir" | tr - _)"
+                if [[ "$name" != "$harness" ]]; then
+                    cmake --build --preset {{ preset }} --target "$harness"
+                    if [[ ! -f "$dir/$harness.exe" ]]; then
+                        echo "ERROR: $name runs as a child of $harness, which was not built: $dir/$harness.exe" >&2
+                        exit 1
+                    fi
+                    echo "test-auth-unit: $name is a child of $harness; running $harness, which starts it"
+                    bin="$dir/$harness.exe"
+                fi
             fi
             before=${#test_failures[@]}
             run_test "$bin"

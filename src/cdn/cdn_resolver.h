@@ -5,11 +5,13 @@
  * name on one thread, index 0 and then index 1. A set published between the two must not pair a stock descriptor with a CDN
  * payload, so the set that answered index 0 is pinned for that thread and name, and index 1 of the same name uses it.
  *
- * The pin lives in the calling thread's own thread-local storage. That is the game's own method for per-thread state: its resource
- * request function keeps per-thread state in a TLS slot (CResourceManager::FillResourceFileRequest, echovr.exe 0x140fa1fe0: the slot is
- * looked up at 0x140fa2155, CThreadData::LookupSlot, read through CPool::GetOrCreate at 0x140fa2171, which calls TlsGetValue, and
- * allocated at 0x140fa218d, CThreadData::AllocState). It is the game's method for per-thread state, not a resource pin of its own. A table of pins keyed by thread would need a size, and any size is a limit on how
- * many threads read resources; thread-local storage has none, and nothing here is shared between threads but the published set.
+ * The pin lives in the calling thread's own storage, not in a table: a table of pins keyed by thread would need a size, and any size is
+ * a limit on how many threads read resources. Per-thread state is also the game's own method: its resource request function keeps
+ * per-thread state in a TLS slot (CResourceManager::FillResourceFileRequest, echovr.exe 0x140fa1fe0: the slot is looked up at
+ * 0x140fa2155, CThreadData::LookupSlot, read through CPool::GetOrCreate at 0x140fa2171, which calls TlsGetValue, and allocated at
+ * 0x140fa218d, CThreadData::AllocState). On POSIX the storage is three pthread keys (quest/combat/thread_word.h), because the
+ * Quest build's thread_local is emulated and a thread's first use allocates; on PC it is thread_local, which the image's TLS holds.
+ * Nothing here is shared between threads but the published set.
  */
 #pragma once
 
@@ -35,10 +37,16 @@ class Resolver {
   // Test support: forgets the published set and every thread's pin.
   void Reset() noexcept;
 
+  // 0 when every thread keeps its own pin. Otherwise the error that refused a pin key (POSIX: pthread_key_create, EAGAIN when the
+  // process has no key left): index 1 is then answered from the set published at that moment, which can pair a stock descriptor
+  // with a CDN payload when a set is published between the two reads.
+  int pin_error() const noexcept { return pin_error_; }
+
  private:
   std::atomic<const nevr_shadow::Shadow*> published_{nullptr};
-  std::atomic<std::uint64_t> epoch_{1};  // a Reset starts a new epoch, and a pin of an older one is no pin
-  const std::uint64_t id_;               // one per Resolver ever made, so a pin of another resolver (or of a freed one's address) is no pin
+  std::atomic<std::uint64_t> generation_;  // one per Resolver ever made and per Reset, so a pin of another resolver, of a freed one's
+                                           // address or of an earlier epoch is no pin
+  const int pin_error_;
 };
 
 }  // namespace nevr_cdn

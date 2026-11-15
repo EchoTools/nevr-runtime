@@ -27,6 +27,7 @@
 
 #include "core/update/fs.h"
 #include "core/update/names.h"
+#include "quest/combat/thread_word.h"
 
 namespace nevr_update {
 namespace {
@@ -238,17 +239,18 @@ class FlockLock final : public FsLock {
 
 class PosixFs final : public UpdateFs {
  public:
-  explicit PosixFs(std::string root) : root_(WithoutTrailingSeparators(std::move(root))) {}
+  // Makes the key of last_error_ (idempotent). A process with no pthread key left has none: every error then reads 0.
+  explicit PosixFs(std::string root) : root_(WithoutTrailingSeparators(std::move(root))) { static_cast<void>(last_error_.Create()); }
 
   char Separator() const noexcept override { return kSeparator; }
 
   // The errno of the last failed call this thread made through this object (the engine's records carry it, and a Move's is also
-  // its out parameter). Per thread: last_error_ is thread_local, so two threads that share this object each read their own error.
-  int LastOsError() const noexcept override { return last_error_; }
+  // its out parameter). Per thread: last_error_ is a pthread key, so two threads that share this object each read their own error.
+  int LastOsError() const noexcept override { return static_cast<int>(static_cast<unsigned>(last_error_.Get())); }
 
   // The answer to a failed open of a file of update/: absent, or unreadable (a link, or a folder on the way that is not one).
   ReadResult FailedRead(int err) const noexcept {
-    last_error_ = err;
+    SetLastOsError(err);
     return AbsentOnPath(err) ? ReadResult::kAbsent : ReadResult::kUnreadable;
   }
 
@@ -263,18 +265,18 @@ class PosixFs final : public UpdateFs {
       if (!file.ok()) return FailedRead(errno);
       struct stat st{};
       if (::fstat(file.get(), &st) != 0) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         return ReadResult::kUnreadable;
       }
       if (!S_ISREG(st.st_mode)) {
-        last_error_ = EINVAL;
+        SetLastOsError(EINVAL);
         return ReadResult::kUnreadable;
       }
       if (st.st_size < 0 || static_cast<unsigned long long>(st.st_size) > names::kMaxJsonBytes) return ReadResult::kTooBig;
       std::string text(static_cast<std::size_t>(st.st_size), '\0');
       const FillResult filled = ReadAll(file.get(), &text);
       if (filled == FillResult::kReadError) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         return ReadResult::kUnreadable;
       }
       if (filled == FillResult::kEndedEarly) return ReadResult::kTooBig;
@@ -292,25 +294,25 @@ class PosixFs final : public UpdateFs {
       std::string leaf;
       Fd dir = OpenParentOf(root_, path, &leaf);
       if (!dir.ok()) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         return false;
       }
       const std::string temporary = leaf + ".tmp-" + std::to_string(::getpid());
       Fd file(::openat(dir.get(), temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, kNewFileMode));
       if (!file.ok()) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         return false;
       }
       const bool written = WriteAll(file.get(), text) && ::fsync(file.get()) == 0;
-      if (!written) last_error_ = errno;
+      if (!written) SetLastOsError(errno);
       file.Close();
       if (!written || ::renameat(dir.get(), temporary.c_str(), dir.get(), leaf.c_str()) != 0) {
-        if (written) last_error_ = errno;
+        if (written) SetLastOsError(errno);
         static_cast<void>(::unlinkat(dir.get(), temporary.c_str(), 0));
         return false;
       }
       if (!FlushFolder(dir.get())) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         return false;
       }
       return true;
@@ -325,15 +327,15 @@ class PosixFs final : public UpdateFs {
       std::string leaf;
       Fd dir = OpenParentOf(root_, path, &leaf);
       if (!dir.ok()) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         return false;
       }
       if (::unlinkat(dir.get(), leaf.c_str(), 0) != 0) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         return false;
       }
       if (!FlushFolder(dir.get())) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         return false;
       }
       return true;
@@ -445,7 +447,7 @@ class PosixFs final : public UpdateFs {
   bool Move(const std::string& from, const std::string& to, int* os_error) const noexcept override {
     int error = 0;
     const bool moved = MoveWithin(from, to, &error);
-    if (!moved) last_error_ = error;
+    if (!moved) SetLastOsError(error);
     if (os_error != nullptr) *os_error = error;
     return moved;
   }
@@ -456,23 +458,23 @@ class PosixFs final : public UpdateFs {
       std::string leaf;
       Fd dir = OpenParentOf(root_, path, &leaf);
       if (!dir.ok()) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         return false;
       }
       if (::mkdirat(dir.get(), leaf.c_str(), kNewFolderMode) != 0) {
         const int err = errno;
         struct stat st{};
         if (err == EEXIST && ::fstatat(dir.get(), leaf.c_str(), &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode)) return true;
-        last_error_ = err;
+        SetLastOsError(err);
         return false;
       }
       if (!FlushFolder(dir.get())) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         return false;
       }
       return true;
     } catch (const std::bad_alloc&) {
-      last_error_ = ENOMEM;
+      SetLastOsError(ENOMEM);
       return false;
     }
   }
@@ -483,20 +485,20 @@ class PosixFs final : public UpdateFs {
       std::string leaf;
       Fd dir = OpenParentOf(root_, path, &leaf);
       if (!dir.ok()) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         return false;
       }
       if (::unlinkat(dir.get(), leaf.c_str(), AT_REMOVEDIR) != 0) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         return false;
       }
       if (!FlushFolder(dir.get())) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         return false;
       }
       return true;
     } catch (const std::bad_alloc&) {
-      last_error_ = ENOMEM;
+      SetLastOsError(ENOMEM);
       return false;
     }
   }
@@ -519,17 +521,17 @@ class PosixFs final : public UpdateFs {
     try {
       Fd dir = OpenFolderUnder(root_, path);
       if (!dir.ok()) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         return false;
       }
       const int copy = ::dup(dir.get());
       if (copy < 0) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         return false;
       }
       DIR* folder = ::fdopendir(copy);
       if (folder == nullptr) {
-        last_error_ = errno;
+        SetLastOsError(errno);
         static_cast<void>(::close(copy));
         return false;
       }
@@ -545,7 +547,7 @@ class PosixFs final : public UpdateFs {
       *out = std::move(entries);
       return true;
     } catch (const std::bad_alloc&) {
-      last_error_ = ENOMEM;
+      SetLastOsError(ENOMEM);
       return false;
     }
   }
@@ -590,12 +592,14 @@ class PosixFs final : public UpdateFs {
 
  private:
   std::string root_;
-  // The errno of the last failed call of the calling thread (LastOsError). Static and thread_local: every operation writes it, and
-  // two threads that share one object must not share one error.
-  static thread_local int last_error_;
+  // The errno of the last failed call of the calling thread (LastOsError). Static and per thread: every operation writes it, and
+  // two threads that share one object must not share one error. A pthread key (quest/combat/thread_word.h), not thread_local:
+  // this file is linked into the Quest sentinel, where thread_local is emulated and a thread's first use allocates.
+  static nevr_quest::combat::ThreadWord last_error_;
+  static void SetLastOsError(int err) noexcept { last_error_.Set(static_cast<std::uintptr_t>(static_cast<unsigned>(err))); }
 };
 
-thread_local int PosixFs::last_error_ = 0;
+nevr_quest::combat::ThreadWord PosixFs::last_error_;
 
 }  // namespace
 

@@ -582,6 +582,42 @@ void AnUnchangedValueIsNotTracked() {
   Finish();
 }
 
+// #2242 (EchoCombat 2.0.8): a change of the local player's tac mod slot, through either word, is handed to the EC client's pick after the
+// game's setter ran, and so is a call that changes nothing (the pick drops a value that is already the selection); the weapon and ordnance
+// slots and another player's record are not.
+constexpr int kPickedMax = 8;  // the most picks one test records
+std::uint64_t g_pickedValue[kPickedMax];
+int g_pickedCount = 0;
+void PickRecorder(std::uint64_t value) noexcept {
+  if (g_pickedCount < kPickedMax) g_pickedValue[g_pickedCount] = value;
+  ++g_pickedCount;
+}
+void TheLocalTacModSlotIsHandedToThePick() {
+  constexpr std::uint64_t kFirst = 0x1001, kSecond = 0x1002, kOther = 0x2002, kSame = 0x3003;
+  QCHECK(InstallFresh());
+  g_pickedCount = 0;
+  eq::OnLocalTacMod(&PickRecorder);
+  CallWord(1, 0, Comp(), kLocalHandle, kFirst);   // the JUMP_SLOT word
+  QCHECK(g_pickedCount == 1 && g_pickedValue[0] == kFirst);
+  QCHECK(ValueOf(kLocalHandle, 1) == kFirst);     // the game's setter ran before the pick
+  CallWord(1, 1, Comp(), kLocalHandle, kSecond);  // the GLOB_DAT word
+  QCHECK(g_pickedCount == 2 && g_pickedValue[1] == kSecond);
+  CallWord(0, 0, Comp(), kLocalHandle, kOther);   // weapon slot
+  CallWord(2, 0, Comp(), kLocalHandle, kOther);   // ordnance slot
+  CallWord(1, 0, Comp(), kRemoteHandle, kOther);  // another player's tac mod
+  QCHECK(g_pickedCount == 2);
+  SetValue(kLocalHandle, 1, kSame);
+  CallWord(1, 0, Comp(), kLocalHandle, kSame);    // the value the record already holds: still a pick
+  QCHECK(g_pickedCount == 3 && g_pickedValue[2] == kSame && eq::CurrentCounts().unchanged == 1);
+  SetValue(kRemoteHandle, 1, kSame);
+  CallWord(1, 0, Comp(), kRemoteHandle, kSame);   // another player's record, unchanged: not a pick
+  QCHECK(g_pickedCount == 3);
+  eq::OnLocalTacMod(nullptr);
+  CallWord(1, 0, Comp(), kLocalHandle, kFirst);   // no pick registered: the setter still runs
+  QCHECK(g_pickedCount == 3 && ValueOf(kLocalHandle, 1) == kFirst);
+  Finish();
+}
+
 // Each word calls the original it stored, with the game's three arguments unchanged, and no other.
 void EachWordCallsItsOwnStoredOriginalWithTheGamesArguments() {
   QCHECK(InstallFresh());
@@ -830,6 +866,7 @@ int main() {
   TheHandlerGetsTheLastHandle();
   ARemoteRecordIsNeverRefired();
   AnUnchangedValueIsNotTracked();
+  TheLocalTacModSlotIsHandedToThePick();
   EachWordCallsItsOwnStoredOriginalWithTheGamesArguments();
   TheThreeSlotsCallTheirOwnHandler();
   AChangeUnderTheWaitIsSkippedAndSaid();

@@ -49,6 +49,19 @@ TEST(DotScriptDecision, OnlyTheDotsTwoEventsAndItsSetupNodeChange) {
   EXPECT_EQ(ds::NextNode(0x393f4ada, 0x19507dc91ULL), 0x19507dc91ULL) << "the whole result, not its low dword";
 }
 
+TEST(DotScriptDecision, TheFieldHideNodeContinuesToTheSoundStop) {
+  EXPECT_EQ(ds::NextNode(ds::kHideNode, ds::kHideStockNext), ds::kSoundStop)
+      << "the hide node (ARC_SCENE off) continues to the sound stop";
+}
+
+TEST(DotScriptDecision, TheHideRuleMatchesOnlyItsNodeAndStockResult) {
+  constexpr std::uint64_t kUnrelatedNext = 0x12345;
+  constexpr std::uint64_t kUnrelatedNode = 0x12345678ULL;
+  EXPECT_EQ(ds::NextNode(ds::kHideNode, kUnrelatedNext), kUnrelatedNext) << "another result of the hide node is the game's";
+  EXPECT_EQ(ds::NextNode(kUnrelatedNode, ds::kHideStockNext), ds::kHideStockNext)
+      << "another node with the hide node's stock result is the game's";
+}
+
 class DotScriptInstalled : public ::testing::Test {
  protected:
   void SetUp() override {

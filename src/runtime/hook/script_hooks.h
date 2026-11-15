@@ -59,6 +59,12 @@ void OnLoaded(std::uint64_t script, void* base);
 /// last reference this table saw loaded.
 void OnUnloading(std::uint64_t script, void* base);
 
+/// A function the table calls when the last reference to `script` is freed, before its hooks come out. A module's own state
+/// that a hook leaves behind is cleared there (the announcer's override). It runs with the table's lock held: it must not call
+/// the table.
+using FreeListener = void (*)(std::uint64_t script);
+void AddFreeListener(std::uint64_t script, FreeListener listener);
+
 /// The number of modules the table holds as loaded, and how many of them carry hooks (for tests and the summary).
 /// The base of a loaded module of script `script`, or null when none is loaded (a hook that calls the script's own
 /// code reads it; the table holds it from OnLoaded to the last OnUnloading).

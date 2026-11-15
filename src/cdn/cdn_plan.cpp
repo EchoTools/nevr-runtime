@@ -68,6 +68,11 @@ Plan MakePlan(const Manifest& manifest, const Platform& platform, const Policy& 
   for (const Entry& e : manifest.entries) {
     if (e.platform == platform.name) byLabel[e.label].push_back(&e);
   }
+  // The records of 0 bytes of each label for this platform, counted once the same way.
+  std::map<std::string, std::size_t> emptiesByLabel;
+  for (const EmptyRecord& e : manifest.empties) {
+    if (e.platform.empty() || e.platform == platform.name) ++emptiesByLabel[e.label];
+  }
   std::set<std::string> counted;  // blobs already charged to the budget by an earlier label (or held: those cost nothing)
   std::uint64_t used = 0;
   // The store files, as the store fills them: the held bytes fill whole files and leave a tail free in the last one; a blob is not
@@ -81,6 +86,8 @@ Plan MakePlan(const Manifest& manifest, const Platform& platform, const Policy& 
     PlanLabel pl;
     pl.label = label;
     pl.state = StateOf(label, policy);
+    const auto emptyCount = emptiesByLabel.find(label);
+    pl.empty_records = emptyCount != emptiesByLabel.end() ? emptyCount->second : 0;
     const auto found = byLabel.find(label);
     const std::vector<const Entry*>& mine = found != byLabel.end() ? found->second : none;
     if (pl.state == LabelState::kOff) {

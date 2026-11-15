@@ -10,10 +10,14 @@
 //   PendingTarget / StateChannel / StateQuarantine  what the runtime reads from the host's files in the update folder
 //   ConfirmDue     the 10 s of per-frame work that mark a swapped release as started (section 6)
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
+
+#include "core/update/names.h"
 
 namespace nevr_update {
 
@@ -24,16 +28,53 @@ enum class Disabled { kNone, kDevBuild, kNoRoot, kFlag, kConfig, kHostCannotSwap
 const char* DisabledWord(Disabled reason);
 
 struct Switches {
-  bool dev_build = false;                  ///< `NEVR-PLUGIN-TRUST dev` (nevr_plugin_trust::IsDevBuild): a developer's runtime is never replaced
+  bool dev_build = false;                  ///< `NEVR-PLUGIN-TRUST dev` (nevr_plugin_trust::IsDevBuild): a developer's runtime is never replaced ...
+  /// ... unless the build also has a usable update source of its own (ResolveSource returned kUsed). Only a dev build ever sets it.
+  bool dev_source_override = false;
   bool flag_no_update = false;             ///< `-no-update` on the command line
   std::optional<bool> config_enabled;      ///< `update.enabled` in config.yaml; unset means on
   bool host_can_swap = false;              ///< NevrHostContext::capabilities bit 0 (nevr_runtime_abi::HostCanSwap)
   bool no_root = false;                    ///< %LOCALAPPDATA% is not set or does not fit: there is no nevr root to stage into or confirm in
 };
 
-/// The first reason that applies, in this order: dev build, no root, flag, config, host. The order is the log's: a dev build says
+/// The first reason that applies, in this order: dev build without a source of its own, no root, flag, config, host. The order is the log's: a dev build says
 /// dev_build even when the flag is also given. No root comes before the switches because it stops the confirmation too.
 Disabled Decide(const Switches& switches);
+
+/// What a dev build may use in place of the release host and the pinned keys (`update.base`, `update.pins` of config.yaml). The core
+/// takes them as `base` and `pins` of its open-config JSON (installer/src/ffi.rs config_from_json); `pins` REPLACES the built-in keys
+/// there (Pins::parse is assigned, not merged), so a dev build with pins trusts only those keys for that base.
+struct SourceOverride {
+  std::string base;  ///< http(s) base, no trailing '/', no credentials, query or fragment; the core joins "<base>/<name>"
+  std::string pins;  ///< the core's pin text, "LABEL BASE64KEY" lines; empty means the core's built-in pins
+};
+
+enum class SourceVerdict { kNone, kUsed, kIgnoredRelease, kRejected };
+/// none, used, ignored, rejected: the `outcome` field of the `update source` line.
+const char* SourceVerdictWord(SourceVerdict verdict);
+
+struct SourceResolution {
+  SourceVerdict verdict = SourceVerdict::kNone;
+  SourceOverride use;  ///< set when verdict is kUsed
+  /// For kIgnoredRelease and kRejected: the config key the verdict is about (update.base or update.pins) and a plain word.
+  std::string key;
+  std::string reason;
+  bool pins_given = false;
+  std::size_t pins_count = 0;  ///< kUsed: how many keys `use.pins` holds
+};
+
+/// The longest base and pins text a config may hold: a bound on a value read from a file, not a device limit.
+inline constexpr std::size_t kMaxSourceBaseBytes = 200;
+inline constexpr std::size_t kMaxSourcePinsBytes = 4096;
+/// A minisign public key as the core pins it: 42 bytes, 56 base64 characters (installer/src/manifest.rs Pins::parse).
+inline constexpr std::size_t kPinKeyBase64Chars = 56;
+
+/// The one place a source override is decided. `base` and `pins` are the raw `update.base` and `update.pins` values (nullopt: the key
+/// is absent). A RELEASE build (dev_build false) uses neither, whatever they hold: kIgnoredRelease when either is given, kNone when
+/// neither is. A dev build uses the pair only when both parts are valid: base is http:// or https://, a host, no control or space
+/// character, no '@', '?' or '#'; pins (only with a base) are pin lines of a label and a 56-character base64 key. Anything else is
+/// kRejected with the key and a reason word, and nothing is used: a dev build then stays disabled (dev_build).
+SourceResolution ResolveSource(bool dev_build, const std::optional<std::string>& base, const std::optional<std::string>& pins);
 
 enum class ChannelSource { kConfig, kState, kDefault };
 /// config, state, default: the `channel_source` field of the `update check` line.
@@ -61,7 +102,7 @@ std::string BuildCurrentJson(const std::string& version, const std::string& runt
                              const std::vector<QuarantineEntry>& quarantine);
 
 struct StagedFile {
-  std::string path;  ///< "nevr-runtime.dll" or "plugins/<name>.dll"
+  std::string path;  ///< the platform's runtime ("nevr-runtime.dll", "libnevr-runtime.so") or "plugins/<name>.dll" (PC only)
   std::uint64_t size = 0;
   std::string sha256;
 };
@@ -76,8 +117,11 @@ struct StageResult {
 };
 
 /// False, with `error`, when the text is not a result of that shape or names a version, path or hash outside the
-/// vocabulary the host accepts (core/update/names.h): such a result is never published.
-bool ParseStageResult(const std::string& text, StageResult* out, std::string* error);
+/// vocabulary the host accepts (core/update/names.h): such a result is never published. The members are those of the
+/// platform whose runtime is `runtime_file` (names.h ParseMemberOf: nevr-runtime.dll and its plugins on PC, libnevr-runtime.so
+/// alone on Quest), and a staged result lists that runtime exactly once.
+bool ParseStageResult(const std::string& text, StageResult* out, std::string* error,
+                      std::string_view runtime_file = nevr_update_names::kRuntimeMember);
 
 /// update\staged.json: {"version", "files": [{"path", "size", "sha256"}]}, the spelling the host reads.
 std::string BuildStagedJson(const StageResult& staged);

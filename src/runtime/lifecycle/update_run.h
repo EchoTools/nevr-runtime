@@ -24,7 +24,7 @@ bool RootToUtf8(const std::wstring& wide, std::string* utf8);
 
 /// The PC verifier takes the wide path (Authenticode, opened with CreateFileW); the engine hands it the UTF-8 path. A path that does not
 /// convert is not a verdict on the bytes: it is refused as `path_unconvertible`, with ok and refused both false, and `verify` is not run.
-std::function<VerifyOutcome(const std::string& utf8_path)> WidenVerifier(
+std::function<VerifyOutcome(const std::string& utf8_path, const ExpectedFile& expected)> WidenVerifier(
     std::function<VerifyOutcome(const std::wstring& path)> verify);
 
 }  // namespace nevr_update

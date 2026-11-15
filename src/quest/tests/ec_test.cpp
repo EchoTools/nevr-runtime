@@ -44,6 +44,7 @@
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/combat_scope_world.h"
+#include "runtime/combat/veilnet_gate.h"
 #include "runtime/compat/server_features.h"
 
 // The arena path's read count, through safe_read.h's test seam: every SafeRead after StartReadCount adds one.
@@ -720,7 +721,8 @@ static void WrapperTests() {
   g_in.push_back(Plain(16));
   fl = sizeof from;
   CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 16, "a 16-byte foreign datagram swallowed");
-  // #2358: both magics and a type the wire does not carry is the game's; a PC server's match control ('G') is ours, taken out, nothing done
+  // #2358: both magics and a type the wire does not carry is the game's; a PC server's match control ('G') is ours and taken out; from a
+  // sender that is not the picked server (none is picked here) it writes nothing (#2242, MatchControlTests)
   g_in.clear();
   g_in_next = 0;
   g_recv_calls = 0;
@@ -736,6 +738,7 @@ static void WrapperTests() {
   CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 31 && g_recv_calls == 2 && StatsNow().consumed == 1 &&
             StatsNow().tokens == 0,
         "a G from a PC server reached the game: calls %d", g_recv_calls);
+  CHECK(!HasLine("\"event\":\"combat_ec_rules\""), "a G from no picked server was applied");
   ResetAll();
   InstallOk();
   // ours: a first-time T is consumed; the real recvfrom is called again and the NEXT datagram is returned
@@ -1073,17 +1076,28 @@ static void LeavePickTests() {
         "the hello did not go to the server the game sends to: %zu sent, the first on fd %d", g_sent.size(), g_sent.empty() ? -1 : g_sent[0].fd);
 }
 
+// The hellos (a 16-byte datagram of type 'H') among the packets sent since g_sent was cleared; the game's own 8-byte sends are not.
+static int HelloCount() {
+  int n = 0;
+  for (const Sent& s : g_sent) n += s.len == sizeof(Packet) && s.bytes[4] == 'H';
+  return n;
+}
+// The client's 2 s hello period and the test's own step. (The gate's windows are gate::kDestQuietMs and gate::kHelloTries.)
+constexpr uint64_t kHelloSlotMs = 2000;
+constexpr uint64_t kStepMs = 100;
+
 static void StepTests() {
   // use counters -> packets twice to the server, hello every 2 s, server line once
   ResetAll();
   InstallOk();
+  ServerStates(true);  // #2242: only a server that states EchoCombat gets the use packets
   Step(g_now100);  // no server yet
   uint8_t* page = EcPage();
   __atomic_store_n(reinterpret_cast<uint32_t*>(page + kLocUse), 1u, __ATOMIC_SEQ_CST);
   AdvanceMs(5);
   Step(g_now100);
   CHECK(g_sent.empty(), "a use sent with no server");
-  CHECK(HasLine("\"sent\":\"no (no server seen yet)\""), "no record for a use without a server");
+  CHECK(HasLine("\"sent\":\"no (no server the game is sending to)\""), "no record for a use without a server");
   GameTalks(7);
   g_sent.clear();
   __atomic_store_n(reinterpret_cast<uint32_t*>(page + kLocUse), 2u, __ATOMIC_SEQ_CST);
@@ -1105,14 +1119,20 @@ static void StepTests() {
   Step(g_now100);
   CHECK(g_sent.size() == 1 && g_sent[0].bytes[4] == 'H' && HasLine("\"event\":\"combat_ec_server\"") && HasLine("\"addr\":\"1.0.0.10\""), "hello + server line");
   g_sent.clear();
+  int early = 0;
   for (int i = 0; i < 19; ++i) {
-    AdvanceMs(100);
+    AdvanceMs(kStepMs);
+    GameTalks();  // the game keeps sending to its server (the hello goes only to a destination it still uses)
+    g_sent.clear();
     Step(g_now100);
+    early += HelloCount();
   }
-  CHECK(g_sent.empty(), "hello sent more than every 2 s: %zu in 1.9 s", g_sent.size());
-  AdvanceMs(100);
+  CHECK(early == 0, "hello sent more than every 2 s: %d in 1.9 s", early);
+  AdvanceMs(kStepMs);
+  GameTalks();
+  g_sent.clear();
   Step(g_now100);
-  CHECK(g_sent.size() == 1, "no hello after 2 s: %zu", g_sent.size());
+  CHECK(HelloCount() == 1, "no hello after 2 s: %d", HelloCount());
   // a V use gives a local token and sends twice
   g_sent.clear();
   __atomic_store_n(reinterpret_cast<uint32_t*>(page + kVeilUse), 1u, __ATOMIC_SEQ_CST);
@@ -1164,6 +1184,137 @@ static void StepTests() {
   Step(g_now100);
   Stats s = StatsNow();
   CHECK(s.serverAddr == 0x0a000003 && s.serverFd == 8, "the busiest destination of the last second is not the server");
+}
+
+// #2242 (EchoCombat 2.0.6): the picked server is the server only while the game still sends to it, and a server that never states EchoCombat
+// gets gate::kHelloTries hellos, then none until the game connects to another server or it states it. The windows are the shared gate's.
+constexpr int kHellosPastTheLimit = 3;  // slots stepped after the last hello, to see that none follows
+static void HelloGateTests() {
+  using ::nevr_combat::gate::kDestQuietMs;
+  using ::nevr_combat::gate::kHelloTries;
+  // a destination the game has left gets nothing: no hello, no use packet; the game's next send brings it back
+  ResetAll();
+  InstallOk();
+  ServerStates(true);
+  GameTalks();
+  Step(g_now100);  // arms the 2 s slot
+  AdvanceMs(kHelloSlotMs);
+  GameTalks();
+  g_sent.clear();
+  Step(g_now100);
+  CHECK(HelloCount() == 1, "the hello did not go to a server the game just sent to: %d", HelloCount());
+  g_sent.clear();
+  AdvanceMs(kDestQuietMs);  // the game says nothing more to it
+  AdvanceMs(kHelloSlotMs);
+  uint8_t* page = EcPage();
+  __atomic_store_n(reinterpret_cast<uint32_t*>(page + kLocUse), 1u, __ATOMIC_SEQ_CST);
+  Step(g_now100);
+  CHECK(g_sent.empty(), "a destination the game left for %llu ms was sent %zu packet(s), the first '%c'",
+        static_cast<unsigned long long>(kDestQuietMs + kHelloSlotMs), g_sent.size(), g_sent.empty() ? '-' : static_cast<char>(g_sent[0].bytes[4]));
+  CHECK(HasLine("no (no server the game is sending to)"), "the use that was not sent is not said");
+  AdvanceMs(kHelloSlotMs);
+  GameTalks();
+  g_sent.clear();
+  Step(g_now100);
+  CHECK(HelloCount() == 1, "the game's send did not bring the hello back: %d", HelloCount());
+
+  // a server that never states EchoCombat: kHelloTries hellos, the last says so, then none
+  ResetAll();
+  InstallOk();
+  ServerStates(false);
+  GameTalks();
+  g_sent.clear();
+  Step(g_now100);  // the first pass sends the first hello
+  int hellos = HelloCount();
+  for (int i = 0; i < kHelloTries + kHellosPastTheLimit; ++i) {
+    AdvanceMs(kHelloSlotMs);
+    GameTalks();
+    g_sent.clear();
+    Step(g_now100);
+    hellos += HelloCount();
+  }
+  CHECK(hellos == kHelloTries, "an unanswered server got %d hellos, not %d", hellos, kHelloTries);
+  CHECK(HasLine("\"event\":\"combat_ec_hello_end\"") && HasLine("no more hellos"), "the last hello does not say the server never stated EchoCombat");
+  // a use is not sent to a server that has not stated it
+  __atomic_store_n(reinterpret_cast<uint32_t*>(page + kLocUse), 1u, __ATOMIC_SEQ_CST);
+  AdvanceMs(kStepMs);
+  GameTalks();
+  g_sent.clear();
+  Step(g_now100);
+  int uses = 0;
+  for (const Sent& s : g_sent) uses += s.len == sizeof(Packet) && s.bytes[4] != 'H';
+  CHECK(uses == 0, "%d use packet(s) went to a server that has not stated EchoCombat", uses);
+  CHECK(HasLine("no (the server has not stated EchoCombat)"), "the use that was not sent is not said");
+  // it states EchoCombat: the hellos start again
+  ServerStates(true);
+  AdvanceMs(kHelloSlotMs);
+  GameTalks();
+  g_sent.clear();
+  Step(g_now100);
+  CHECK(HelloCount() == 1, "the hellos did not start again when the server stated EchoCombat: %d", HelloCount());
+
+  // the count starts again after a leave from combat scope: a server that was given up on gets hellos when the game is back on it
+  ResetAll();
+  InstallOk();
+  ServerStates(false);
+  GameTalks();
+  g_sent.clear();
+  Step(g_now100);
+  hellos = HelloCount();
+  for (int i = 0; i < kHelloTries + kHellosPastTheLimit; ++i) {
+    AdvanceMs(kHelloSlotMs);
+    GameTalks();
+    g_sent.clear();
+    Step(g_now100);
+    hellos += HelloCount();
+  }
+  CHECK(hellos == kHelloTries, "setup: an unanswered server got %d hellos, not %d", hellos, kHelloTries);
+  ForceScopeForTest(0);
+  CHECK(!RefreshScope(static_cast<uint64_t>(ScopeClock())), "setup: still in scope");
+  AdvanceMs(kDestQuietMs);
+  ForceScopeForTest(1);
+  CHECK(RefreshScope(static_cast<uint64_t>(ScopeClock())), "setup: not back in scope");
+  GameTalks();  // the same server, the same socket
+  g_sent.clear();
+  Step(g_now100);
+  CHECK(HelloCount() == 1, "back in scope on the server it gave up on, the hellos did not start again: %d", HelloCount());
+}
+
+// #2242 (EchoCombat 2.0.8): the local tac mod slot gives the selection (TacModPicked); the profile line still does.
+static void TacModPickTests() {
+  // a pick made before Install has published the module's words stores nothing (the setter's hook is installed first)
+  ResetAll();
+  InstallOk();
+  SetInstalledForTest(false);
+  TacModPicked(kSymSmoke);
+  CHECK(Load64(EcPage() + kEquipSel) == 0, "a pick before Install stored the tac mod");
+  SetInstalledForTest(true);
+  TacModPicked(kSymSmoke);
+  CHECK(Load64(EcPage() + kEquipSel) == kSymSmoke, "a pick after Install was not stored");
+
+  constexpr uint64_t kReruns = 5;
+  ResetAll();
+  InstallOk();
+  uint8_t* page = EcPage();
+  TacModPicked(kSymSmoke);
+  CHECK(Load64(page + kEquipSel) == kSymSmoke, "the slot's tac mod was not stored");
+  CHECK(HasLine("\"event\":\"combat_ec_sel\"") && HasLine("\"source\":\"tac_mod_slot\""), "no sel record for the slot's pick");
+  // the setter is re-fired with the same value: not stored again (the re-run count stays)
+  *reinterpret_cast<uint32_t*>(page + kEquipReruns) = kReruns;
+  TacModPicked(kSymSmoke);
+  CHECK(Load32(page + kEquipReruns) == kReruns, "the selection already standing was stored again");
+  // a new tac mod: stored, re-runs cleared
+  TacModPicked(kSymPoint);
+  CHECK(Load64(page + kEquipSel) == kSymPoint && Load32(page + kEquipReruns) == 0, "a new tac mod was not stored with the re-runs cleared");
+  // not a tac mod (a weapon's item, zero): nothing
+  TacModPicked(0);
+  TacModPicked(kMagic);
+  CHECK(Load64(page + kEquipSel) == kSymPoint, "a value that is not a tac mod replaced the selection");
+  // noequip: nothing stored
+  ResetAll();
+  InstallOk("types=T noequip");
+  TacModPicked(kSymSmoke);
+  CHECK(Load64(EcPage() + kEquipSel) == 0, "noequip stored the slot's pick");
 }
 
 static void HideTests() {
@@ -1629,6 +1780,124 @@ static void OneLookTests() {
         "the scope line does not name the look that decided (a second read named another look)");
 }
 
+// ---- #2242: the server's match control into the RULES mailbox ----
+// Where the scripts look and the bytes a client writes, stated here (echovr.exe RVA 0x2104ec0 = page +0xec0; veilnet.cpp's 'G' branch),
+// so a moved offset in a header fails here.
+constexpr std::uint32_t kMailboxAt = 0xec0;
+constexpr std::uint32_t kLoadoutsAt = 0x11, kChassisAt = 0x2C, kRateAt = 0x2D, kPauseAt = 0x2E, kPayloadMapAt = 0x30, kSpeedAt = 0x31,
+                        kRoundTotalAt = 0x08;
+// LOADOUTS NEW (2), PAUSE on (1 << 3), POINT RATE 6 quarters (6 << 8), PAYLOAD SPEED 3 quarters (3 << 16)
+constexpr std::uint32_t kRulesWord = 0x2u | 0x8u | 0x600u | 0x30000u;
+constexpr std::uint8_t kLoadoutNew = 2, kPauseOn = 1, kRate6 = 6, kSpeed3 = 3;
+constexpr std::uint32_t kOtherAddr = 0x0a000002;
+constexpr float kTwoMinutesFive = 125.0f;  // POINT UNLOCK 2 min, CAPTURE TIME 5 s
+constexpr std::uint32_t kFission = 2, kNoMap = 9;
+constexpr int kGameFd = 7;
+constexpr std::uint64_t kScopeStepMs = 300;  // past the ec thread's 250 ms between looks
+constexpr std::size_t kBufBytes = 256;
+constexpr std::size_t kNextBytes = 32;  // the plain datagram queued after each one: its length says the game got it, not ours
+
+static uint8_t* MailboxByte(std::uint32_t at) { return EcPage() + kMailboxAt + at; }
+static int CountLines(const char* needle) {
+  int n = 0;
+  for (const auto& l : g_lines) n += l.text.find(needle) != std::string::npos ? 1 : 0;
+  return n;
+}
+// One datagram through the game's recvfrom; true when it was taken out (the next one, a plain datagram, is what the game got).
+static bool Deliver(const Dgram& d) {
+  g_in.clear();
+  g_in_next = 0;
+  g_in.push_back(d);
+  g_in.push_back(Plain(kNextBytes));
+  uint8_t buf[kBufBytes];
+  sockaddr_in from{};
+  socklen_t fl = sizeof from;
+  return GameRecv(kGameFd, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == static_cast<ssize_t>(kNextBytes);
+}
+static uint32_t BitsOf(float f) {
+  uint32_t u = 0;
+  std::memcpy(&u, &f, sizeof u);
+  return u;
+}
+
+static void MatchControlTests() {
+  CHECK(kRulesMailbox == kMailboxAt, "the mailbox is not at page +0xec0: +%x", kRulesMailbox);
+  ResetAll();
+  InstallOk();
+  ServerStates(true);
+  GameTalks(kGameFd);
+  Step(g_now100);
+  // a 'G' from the server: the shown bytes, one record
+  CHECK(Deliver(Veil('G', kRulesWord)), "a G from the server was not taken out");
+  CHECK(*MailboxByte(kLoadoutsAt) == kLoadoutNew && *MailboxByte(kPauseAt) == kPauseOn && *MailboxByte(kRateAt) == kRate6 &&
+            *MailboxByte(kSpeedAt) == kSpeed3 && *MailboxByte(kPayloadMapAt) == 0 && *MailboxByte(kChassisAt) == 0,
+        "the G did not reach the mailbox: loadouts %u pause %u rate %u speed %u", *MailboxByte(kLoadoutsAt), *MailboxByte(kPauseAt),
+        *MailboxByte(kRateAt), *MailboxByte(kSpeedAt));
+  CHECK(CountLines("\"event\":\"combat_ec_rules\"") == 1 && HasLine("\"changed\":\"rate payload pause loadout\"", 1) &&
+            HasLine("\"loadouts\":\"NEW\"") && HasLine("\"pause\":\"on\""),
+        "no one Info rules record naming the change");
+  // the same word every 2 s: nothing changes, no record
+  CHECK(Deliver(Veil('G', kRulesWord)), "a repeated G was not taken out");
+  CHECK(CountLines("\"event\":\"combat_ec_rules\"") == 1, "a repeated G wrote a record");
+  // a 'G' from another sender: taken out, nothing written
+  CHECK(Deliver(Veil('G', 0, kOtherAddr)) && *MailboxByte(kPauseAt) == kPauseOn, "a G from another sender reached the mailbox");
+  // a 'G' from the server on another port is not the server's
+  CHECK(Deliver(Veil('G', 0, Server(), SPort() + 1)) && *MailboxByte(kPauseAt) == kPauseOn, "a G from another port reached the mailbox");
+  // 'R': T into +0x08, one record with its two rows
+  CHECK(Deliver(Veil('R', BitsOf(kTwoMinutesFive))), "an R was not taken out");
+  float t = 0;
+  std::memcpy(&t, MailboxByte(kRoundTotalAt), sizeof t);
+  CHECK(t == kTwoMinutesFive, "T not in the mailbox: %f", static_cast<double>(t));
+  CHECK(HasLine("\"event\":\"combat_ec_round_time\"") && HasLine("\"point_unlock_min\":2") && HasLine("\"capture_time_s\":5"),
+        "no round time record");
+  CHECK(Deliver(Veil('R', BitsOf(kTwoMinutesFive))) && CountLines("combat_ec_round_time") == 1, "a repeated R wrote a record");
+  // 'L': one record per change of map; an index past the four is nothing
+  CHECK(Deliver(Veil('L', kFission)) && HasLine("\"map\":\"FISSION\""), "no map record");
+  CHECK(Deliver(Veil('L', kFission)) && CountLines("combat_ec_map") == 1, "a repeated L wrote a record");
+  CHECK(Deliver(Veil('L', kNoMap)) && CountLines("combat_ec_map") == 1, "an L past the four maps wrote a record");
+  // the game stops sending to the server: its 'G' is no longer the current server's
+  AdvanceMs(::nevr_combat::gate::kDestQuietMs + 1);
+  CHECK(Deliver(Veil('G', 0)) && *MailboxByte(kPauseAt) == kPauseOn, "a G from a server the game has left reached the mailbox");
+  // a server that does not state EchoCombat: the G bytes back to zero, T kept, one record
+  GameTalks(kGameFd);
+  ServerStates(false);
+  Step(g_now100);
+  CHECK(*MailboxByte(kLoadoutsAt) == 0 && *MailboxByte(kPauseAt) == 0 && *MailboxByte(kRateAt) == 0 && *MailboxByte(kSpeedAt) == 0,
+        "the server's RULES stayed on a server that does not state EchoCombat");
+  std::memcpy(&t, MailboxByte(kRoundTotalAt), sizeof t);
+  CHECK(t == kTwoMinutesFive, "T was cleared with the G bytes");
+  CHECK(HasLine("\"changed\":\"cleared\"", 1), "no record for the clear");
+  const int cleared = CountLines("\"changed\":\"cleared\"");
+  Step(g_now100);
+  CHECK(CountLines("\"changed\":\"cleared\"") == cleared, "the clear wrote a record on a step that changed nothing");
+  // out of scope a 'G' is the game's and the mailbox is not touched
+  ResetAll();
+  InstallOk();
+  ServerStates(true);
+  GameTalks(kGameFd);
+  Step(g_now100);
+  ForceScopeForTest(0);
+  RefreshScope(static_cast<std::uint64_t>(ScopeClock()));
+  CHECK(!Deliver(Veil('G', kRulesWord)) && *MailboxByte(kPauseAt) == 0, "a G out of scope was taken out or applied");
+  // the switch ends when the client is on another level (PC: ApplyMapSwitch clears g_map_target): the same 'L' then is recorded again
+  ResetAll();
+  ForceScopeForTest(-1);
+  InstallOk();
+  LoadLevels({"mpl_combat_dyson"});
+  AdvanceMs(kScopeStepMs);
+  CHECK(LookAndAsk(), "a combat map is not in scope");
+  GameTalks(kGameFd);
+  ServerStates(true);
+  Step(g_now100);
+  CHECK(Deliver(Veil('L', kFission)) && CountLines("combat_ec_map") == 1, "no map record on dyson");
+  CHECK(Deliver(Veil('L', kFission)) && CountLines("combat_ec_map") == 1, "a repeated L on the same level wrote a record");
+  LoadLevels({"mpl_combat_fission"});
+  AdvanceMs(kScopeStepMs);
+  CHECK(LookAndAsk(), "the new combat map is not in scope");
+  GameTalks(kGameFd);
+  CHECK(Deliver(Veil('L', kFission)) && CountLines("combat_ec_map") == 2, "the L after the level changed wrote no record: the switch never ended");
+}
+
 static void PageTests() {
   ResetAll();
   uint8_t* p = EcPage();
@@ -1655,6 +1924,8 @@ int main() {
   LeaveTests();
   LeavePickTests();
   StepTests();
+  HelloGateTests();
+  TacModPickTests();
   HideTests();
   SelectionTests();
   PlatformTests();
@@ -1662,6 +1933,7 @@ int main() {
   ArenaTests();
   OneLookTests();
   PageTests();
+  MatchControlTests();
   sentinel::SetLogSink(nullptr);
   if (g_fail == 0) std::printf("ec_test: all checks passed\n");
   return g_fail == 0 ? 0 : 1;

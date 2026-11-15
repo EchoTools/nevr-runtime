@@ -63,19 +63,23 @@ type entryDoc struct {
 	Align    uint32 `json:"align"`
 }
 
-// emptyDoc is a resource of 0 bytes: there is no frame to store, and the parser refuses a size of 0.
+// emptyDoc is a resource of 0 bytes: there is no frame to store, and the parser refuses a size of 0. It names its platform
+// and sits in its label's empty list.
 type emptyDoc struct {
-	Type  string `json:"type"`
-	Name  string `json:"name"`
-	Align uint32 `json:"align"`
+	Platform string `json:"platform"`
+	Type     string `json:"type"`
+	Name     string `json:"name"`
+	Align    uint32 `json:"align"`
 }
 
 type labelDoc struct {
 	Entries []entryDoc `json:"entries"`
+	Empty   []emptyDoc `json:"empty,omitempty"`
 }
 
 // manifestDoc is the manifest: the cargo schema's keys, then `sets` (which package sets it was extracted from, which
-// verify reads back) and `empty`. The parser counts a key it does not know and goes on.
+// verify reads back) and `empty`, which is always [] (the records of 0 bytes are in their label). The parser counts a
+// key it does not know and goes on.
 type manifestDoc struct {
 	Schema        string              `json:"schema"`
 	SchemaVersion int                 `json:"schema_version"`
@@ -416,7 +420,7 @@ func extract(ctx context.Context, o extractOptions, log *slog.Logger) (*summary,
 			sum.RecordBytes += uint64(r.Size)
 			sum.LargestRecordBytes = max(sum.LargestRecordBytes, uint64(r.Size))
 			if r.Size == 0 {
-				empties = append(empties, emptyDoc{Type: hexOf(typ), Name: hexOf(name), Align: r.Alignment})
+				empties = append(empties, emptyDoc{Platform: o.platform, Type: hexOf(typ), Name: hexOf(name), Align: r.Alignment})
 				continue
 			}
 			plan = append(plan, planned{set: si, chunk: r.Chunk, offset: r.Offset, size: r.Size, typ: typ, name: name, align: r.Alignment})
@@ -549,11 +553,8 @@ feed:
 		return nil, err
 	}
 
-	doc := manifestDoc{Schema: schemaName, SchemaVersion: schemaVersion, Labels: map[string]labelDoc{labelName: {Entries: entries}},
-		Sets: setDocs, Empty: empties}
-	if doc.Empty == nil {
-		doc.Empty = []emptyDoc{}
-	}
+	doc := manifestDoc{Schema: schemaName, SchemaVersion: schemaVersion,
+		Labels: map[string]labelDoc{labelName: {Entries: entries, Empty: empties}}, Sets: setDocs, Empty: []emptyDoc{}}
 	body, err := json.Marshal(doc)
 	if err != nil {
 		return nil, err

@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -108,13 +110,22 @@ func (r *repos) records() []map[string]any {
 	return recs
 }
 
+func (r *repos) hasOutcome(outcome string) bool {
+	for _, rec := range r.records() {
+		if rec["outcome"] == outcome {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *repos) last() map[string]any { recs := r.records(); return recs[len(recs)-1] }
 
 func TestLandsTheBranchAndRecordsMainBeforeAndAfter(t *testing.T) {
 	t.Parallel()
 	r := setup(t)
 	before := r.originMain()
-	if code, errs := r.land(r.wt, "-test", "true"); code != 0 {
+	if code, errs := r.land(r.wt, "-review", r.mergeReview(), "-test", "true"); code != 0 {
 		t.Fatalf("exit %d: %s", code, errs)
 	}
 	tip := r.git(r.wt, "rev-parse", "HEAD")
@@ -136,7 +147,7 @@ func TestAMovedMainIsRebasedUnderEachCommitAndEveryMessageIsKept(t *testing.T) {
 	r := setup(t)
 	r.commit(r.main, "d.txt", "docs: elsewhere")
 	r.git(r.main, "push", "origin", "main")
-	if code, errs := r.land(r.wt, "-test", "true"); code != 0 {
+	if code, errs := r.land(r.wt, "-review", r.mergeReview(), "-test", "true"); code != 0 {
 		t.Fatalf("exit %d: %s", code, errs)
 	}
 	subjects := r.git(r.root, "--git-dir", r.origin, "log", "--format=%s", "main")
@@ -155,7 +166,7 @@ func TestAFailingTestStopsBeforeThePush(t *testing.T) {
 	t.Parallel()
 	r := setup(t)
 	before := r.originMain()
-	if code, _ := r.land(r.wt, "-test", "true", "-test", "exit 3"); code != 5 {
+	if code, _ := r.land(r.wt, "-review", r.mergeReview(), "-test", "true", "-test", "exit 3"); code != 5 {
 		t.Fatalf("exit %d, want 5", code)
 	}
 	if r.originMain() != before {
@@ -207,7 +218,7 @@ func TestAHeldLockKeepsASecondLanderOut(t *testing.T) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
 		t.Fatal(err)
 	}
-	if code, _ := r.land(r.wt, "-lock-wait", "300ms", "-test", "true"); code != 3 {
+	if code, _ := r.land(r.wt, "-review", r.mergeReview(), "-lock-wait", "300ms", "-test", "true"); code != 3 {
 		t.Fatalf("exit %d, want 3", code)
 	}
 	if r.originMain() != before {
@@ -232,14 +243,15 @@ func TestARejectedPushLeavesOriginAloneAndSaysSo(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := r.originMain()
-	if code, _ := r.land(r.wt, "-test", "true"); code != 6 {
+	if code, _ := r.land(r.wt, "-review", r.mergeReview(), "-test", "true"); code != 6 {
 		t.Fatalf("exit %d, want 6", code)
 	}
 	if r.originMain() != before {
 		t.Fatal("origin's main moved after a rejected push")
 	}
-	if r.last()["outcome"] != "push_rejected" {
-		t.Fatalf("last record %v", r.last())
+	// The branch is put back at the reviewed commit after the refusal, so the refusal is not the last record.
+	if !r.hasOutcome("push_rejected") {
+		t.Fatalf("no push_rejected record in %v", r.records())
 	}
 }
 
@@ -248,7 +260,7 @@ func TestPlantedTipWithoutEvidenceIsRefusedBeforeTheTests(t *testing.T) {
 	r := setup(t)
 	r.commit(r.wt, "e.txt", "fix: bare")
 	before := r.originMain()
-	code, errText := r.land(r.wt, "-test", "true")
+	code, errText := r.land(r.wt, "-review", r.mergeReview(), "-test", "true")
 	if code != exitEvidenceMissing || !strings.Contains(errText, "## Search statement") || !strings.Contains(errText, "landed-commit-evidence") {
 		t.Fatalf("code %d: %s", code, errText)
 	}
@@ -257,5 +269,165 @@ func TestPlantedTipWithoutEvidenceIsRefusedBeforeTheTests(t *testing.T) {
 	}
 	if got := r.last()["outcome"]; got != "evidence_missing" {
 		t.Fatalf("outcome %v", got)
+	}
+}
+
+// writeReview writes a review report whose verdict line is "Verdict: <verdict> <sha>" and returns its path.
+func (r *repos) writeReview(verdict, sha string) string {
+	r.t.Helper()
+	path := filepath.Join(r.root, "review-report.md")
+	// CRLF line ends, as an editor on Windows writes them: the verdict line is read without its \r.
+	body := "# Review\r\n\r\nFindings: none.\r\n\r\n" + reviewVerdictPrefix + verdict + " " + sha + "\r\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		r.t.Fatal(err)
+	}
+	return path
+}
+
+// mergeReview is a MERGE report of the worktree's HEAD.
+func (r *repos) mergeReview() string { return r.writeReview("MERGE", r.git(r.wt, "rev-parse", "HEAD")) }
+
+// assertRefusedBeforeTheLock checks a review refusal: its exit code, its line, origin untouched, no lock taken.
+func (r *repos) assertRefusedBeforeTheLock(code int, errText, want string) {
+	r.t.Helper()
+	if code != exitReviewRefused || !strings.Contains(errText, want) || strings.Count(strings.TrimSpace(errText), "\n") != 0 {
+		r.t.Fatalf("code %d, want %d with one line containing %q: %q", code, exitReviewRefused, want, errText)
+	}
+	for _, rec := range r.records() {
+		if rec["event"] == "land_locked" {
+			r.t.Fatal("the lock was taken before the review was checked")
+		}
+	}
+	if r.last()["outcome"] != "review_refused" {
+		r.t.Fatalf("last record %v", r.last())
+	}
+}
+
+func TestReviewGateNoReviewFlagIsRefused(t *testing.T) {
+	t.Parallel()
+	r := setup(t)
+	before := r.originMain()
+	code, errText := r.land(r.wt, "-test", "true")
+	r.assertRefusedBeforeTheLock(code, errText, "no -review")
+	if r.originMain() != before {
+		t.Fatal("origin's main moved without a review")
+	}
+}
+
+func TestReviewGateMissingReportIsRefused(t *testing.T) {
+	t.Parallel()
+	r := setup(t)
+	code, errText := r.land(r.wt, "-review", filepath.Join(r.root, "absent.md"), "-test", "true")
+	r.assertRefusedBeforeTheLock(code, errText, "cannot be read")
+}
+
+func TestReviewGateFixVerdictIsRefused(t *testing.T) {
+	t.Parallel()
+	r := setup(t)
+	path := r.writeReview("FIX", r.git(r.wt, "rev-parse", "HEAD"))
+	code, errText := r.land(r.wt, "-review", path, "-test", "true")
+	r.assertRefusedBeforeTheLock(code, errText, "the verdict is FIX")
+}
+
+func TestReviewGateMergeOfAnotherTipIsRefused(t *testing.T) {
+	t.Parallel()
+	r := setup(t)
+	other := r.git(r.wt, "rev-parse", "HEAD~1")
+	head := r.git(r.wt, "rev-parse", "HEAD")
+	code, errText := r.land(r.wt, "-review", r.writeReview("MERGE", other), "-test", "true")
+	r.assertRefusedBeforeTheLock(code, errText, "the review is of "+other+", HEAD is "+head)
+}
+
+func TestReviewGateMergeOfTheTipLandsWithTheReviewTrailer(t *testing.T) {
+	t.Parallel()
+	r := setup(t)
+	reviewed := r.git(r.wt, "rev-parse", "HEAD")
+	path := r.writeReview("MERGE", reviewed)
+	if code, errs := r.land(r.wt, "-review", path, "-test", "true"); code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	trailer := r.git(r.root, "--git-dir", r.origin, "log", "-1", "--format=%(trailers:key="+reviewTrailerKey+",valueonly)", "main")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	want := "<scratch>/review-report.md " + reviewVerdictPrefix + "MERGE " + reviewed + " sha256=" + hex.EncodeToString(sum[:])
+	if trailer != want {
+		t.Fatalf("the landed commit's review trailer is %q, want %q", trailer, want)
+	}
+	if got := r.git(r.wt, "rev-parse", "HEAD"); got != r.originMain() {
+		t.Fatalf("the branch is at %s, origin's main at %s", got, r.originMain())
+	}
+}
+
+// After a push origin refuses, the branch is back at the reviewed commit, so the same review lands it on the next run.
+func TestReviewGateARejectedPushLeavesTheBranchAtTheReviewedCommit(t *testing.T) {
+	t.Parallel()
+	r := setup(t)
+	r.commit(r.main, "d.txt", "docs: elsewhere")
+	r.git(r.main, "push", "origin", "main")
+	reviewed := r.git(r.wt, "rev-parse", "HEAD")
+	path := r.writeReview("MERGE", reviewed)
+	hook := filepath.Join(r.origin, "hooks", "pre-receive")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := r.land(r.wt, "-review", path, "-test", "true"); code != 6 {
+		t.Fatalf("exit %d, want 6", code)
+	}
+	if got := r.git(r.wt, "rev-parse", "HEAD"); got != reviewed {
+		t.Fatalf("after the refused push the branch is at %s, want the reviewed %s", got, reviewed)
+	}
+	if err := os.Remove(hook); err != nil {
+		t.Fatal(err)
+	}
+	if code, errs := r.land(r.wt, "-review", path, "-test", "true"); code != 0 {
+		t.Fatalf("the second run: exit %d: %s", code, errs)
+	}
+}
+
+// A report must hold exactly one verdict line, and it must name a full sha.
+func TestReviewGateAReportWithoutOneWellFormedVerdictLineIsRefused(t *testing.T) {
+	t.Parallel()
+	r := setup(t)
+	head := r.git(r.wt, "rev-parse", "HEAD")
+	line := reviewVerdictPrefix + "MERGE " + head + "\n"
+	for name, body := range map[string]string{
+		"none":      "# Review\nMERGE\n",
+		"two":       line + line,
+		"short sha": reviewVerdictPrefix + "MERGE " + head[:12] + "\n",
+		"no sha":    reviewVerdictPrefix + "MERGE\n",
+	} {
+		path := filepath.Join(r.root, strings.ReplaceAll(name, " ", "-")+".md")
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		code, errText := r.land(r.wt, "-review", path, "-test", "true")
+		if code != exitReviewRefused || !strings.Contains(errText, "want") {
+			t.Fatalf("%s: code %d: %s", name, code, errText)
+		}
+	}
+}
+
+// A push origin took is never undone on the branch: when main moves on right after the push (exit 7), the branch stays
+// at the commit it pushed, so its work reads as landed.
+func TestReviewGateAPushedTipIsKeptWhenMainMovesAfterThePush(t *testing.T) {
+	t.Parallel()
+	r := setup(t)
+	path := r.mergeReview()
+	// A post-receive hook stands in for another lander that pushed on top right after this one.
+	hook := filepath.Join(r.origin, "hooks", "post-receive")
+	script := "#!/bin/sh\nexec 2>>hook.err\nexport GIT_AUTHOR_NAME=o GIT_AUTHOR_EMAIL=o@example.org GIT_COMMITTER_NAME=o GIT_COMMITTER_EMAIL=o@example.org\nnew=$(git commit-tree refs/heads/main^{tree} -p refs/heads/main -m later) && git update-ref refs/heads/main \"$new\"\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if code, errs := r.land(r.wt, "-review", path, "-test", "true"); code != 7 {
+		hookErr, _ := os.ReadFile(filepath.Join(r.origin, "hook.err"))
+		t.Fatalf("exit %d, want 7: %s; the hook's errors: %s", code, errs, hookErr)
+	}
+	pushed := r.git(r.root, "--git-dir", r.origin, "rev-parse", "main~1")
+	if got := r.git(r.wt, "rev-parse", "HEAD"); got != pushed {
+		t.Fatalf("the branch is at %s, want the pushed tip %s", got, pushed)
 	}
 }

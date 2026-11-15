@@ -2,7 +2,10 @@
 // One pointer-sized value per thread, for code that runs inside a hooked game call, in place of `thread_local`.
 //
 // The Quest build targets API 26, where the compiler emulates thread_local (`__emutls_v.*`): a thread's first use allocates, and a
-// hooked call must not allocate (the sentinel's TestNoEmulatedTLSInHookPath holds the same line for its own library). A pthread key keeps its value in an array of the thread's own
+// hooked call must not allocate (the sentinel's TestNoEmulatedTLSInHookPath holds the same line for its own library). POSIX only:
+// the PC build's thread_local is the image's own TLS (not emulated), so a file built for both platforms (cdn/cdn_resolver.cpp)
+// includes this header only where `_WIN32` is not defined. Users outside the combat modules: core/update/fs_posix.cpp,
+// cdn/cdn_resolver.cpp. A pthread key keeps its value in an array of the thread's own
 // static TLS block (bionic: `bionic_tls::key_data`), made when the thread is created, so Get and Set never allocate or lock.
 //
 // The key is made once, by Create() at the module's install, before the first hook that reads or writes the value can run. It is

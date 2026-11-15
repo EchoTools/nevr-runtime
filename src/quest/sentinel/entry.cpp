@@ -25,6 +25,7 @@
 #include "quest/cdn/cdn_worker.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_install.h"
+#include "quest/combat/ec.h"
 #include "quest/combat/equip_refire.h"
 #include "quest/combat/match_tags.h"
 #include "quest/combat/new_unlocks_clear.h"
@@ -60,10 +61,12 @@
 #include "quest/integration/entry_hooks.h"
 #include "quest/redirect/hook_adapter.h"
 #include "quest/shim/runtime_load.h"
+#include "quest/shim/update_start.h"
 #include "quest/shim/update_root.h"
 #include "libr15_identity.h"
 
 #include <jni.h>
+#include <unistd.h>
 
 #include <atomic>
 #include <cstddef>
@@ -221,7 +224,11 @@ bool InstallMatchTagsHook() noexcept { return nevr_quest::combat::match_tags::In
 // setters, a word that holds anything but the setter refused on its own, and a frame work on the game thread. Its
 // combat_equip_refire_install line says which words went in; a refused install leaves the game's calls as they are. The sequence
 // asks only where combat runs (docs/adr/0047).
-bool InstallEquipRefireHook() noexcept { return nevr_quest::combat::equip_refire::Install(); }
+bool InstallEquipRefireHook() noexcept {
+    // The local tac mod slot is also the EC client's selection (#2242, EchoCombat 2.0.8).
+    nevr_quest::combat::equip_refire::OnLocalTacMod(&nevr_quest::combat::ec::TacModPicked);
+    return nevr_quest::combat::equip_refire::Install();
+}
 
 // The Vulkan extension window (#868): the device extensions libr15 requires stay inside the 128 entries it reads. A
 // refused install is logged by GotHook and leaves the game's calls intact.
@@ -403,15 +410,25 @@ void StartRuntime(std::uint32_t variant) {
   host.shim_version = nevr_build::kVersion;
   host.variant = variant;
   host.log = &RuntimeLog;
-  const nevr_quest::runtime_load::Outcome outcome = nevr_quest::runtime_load::StartBaselineBesideShim(&kShimAnchor, host);
-  if (outcome == nevr_quest::runtime_load::Outcome::kLoaded) {
+  // The update start (update_start.h) runs first: it swaps a staged runtime in and judges a pending one, then loads what it chose.
+  // With no update folder it loads the baseline, as this function did before the update start existed.
+  nevr_quest::update_start::Inputs inputs;
+  inputs.root = nevr_quest::update_root::Resolve();
+  inputs.in_shim = &kShimAnchor;
+  inputs.host = host;
+  const nevr_quest::update_start::Result start = nevr_quest::update_start::Start(inputs);
+  // A release whose initialize failed: the process ends with the stop code, and game_stop is already in the log.
+  if (start.stop) _exit(nevr_quest::update_start::kUpdateFailedExitCode);
+  if (start.outcome == nevr_quest::runtime_load::Outcome::kLoaded) {
     // The versions record: the shim's version and the loaded runtime's, apart. The APK's versionCode is read at android_main
     // (update_root.h), so it is not part of this record.
     nevr_quest::update_root::VersionsFacts facts;
     facts.host_version = host.shim_version;
     const char* runtimeVersion = nevr_quest::runtime_load::LoadedRuntimeVersion();
     facts.runtime_version = runtimeVersion[0] != '\0' ? runtimeVersion : nevr_quest::update_root::kUnknownValue;
-    facts.runtime_path = nevr_quest::runtime_load::kBaselineFileName;
+    facts.runtime_path = start.origin == nevr_quest::update_start::Origin::kUpdate
+                             ? start.path
+                             : std::string(nevr_quest::runtime_load::kBaselineFileName);
     nevr_quest::update_root::LogVersions(facts);
   }
 }

@@ -14,7 +14,7 @@
 //   match control         combat.match_control   on (needs combat.veil: it rides the combat net)
 //   balance values        combat.balance         on
 //   clean exit            combat.clean_exit      on, as his loader always applies it (the TerminateProcess stub is never written while off)
-//   unfinished / unsafe   (none)                 never: party guns, payload speed, a client's own damage bonus, CombatBots
+//   unfinished / unsafe   (none)                 never: party guns, a client's own damage bonus, CombatBots
 
 #include <array>
 #include <cstddef>
@@ -47,9 +47,8 @@ struct Disabled {
   const char* name;
   const char* reason;
 };
-inline constexpr std::array<Disabled, 4> kNeverOn = {{
+inline constexpr std::array<Disabled, 3> kNeverOn = {{
     {"party guns", "unfinished: Cat hides them"},
-    {"payload speed", "unfinished: Cat parked it"},
     {"client damage bonus", "unsafe: a client would raise its own damage"},
     {"CombatBots", "not in Cat's release (bot brain, ML port)"},
 }};

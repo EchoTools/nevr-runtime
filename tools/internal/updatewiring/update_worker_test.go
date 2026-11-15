@@ -248,6 +248,13 @@ func TestTheTwoConfigKeysAreReadThroughTheAccessorsAndDocumented(t *testing.T) {
 	mustMatch(t, `(?m)^# update:\n#   enabled: true\n#   channel: beta$`, read(t, "docs/reference/example-config.yaml"), "example-config.yaml")
 }
 
+func TestTheQuestRuntimePassesTheDevSourceKeysToTheWiring(t *testing.T) {
+	entry := code(t, "src/quest/runtime/runtime_entry.cpp")
+	mustMatch(t, `in\.config_base = config\.update\.base;`, entry, "runtime_entry.cpp")
+	mustMatch(t, `in\.config_pins = config\.update\.pins;`, entry, "runtime_entry.cpp")
+	mustMatch(t, `in\.dev_build = nevr_build::kIsDev;`, entry, "runtime_entry.cpp")
+}
+
 // ---- the confirmation outlives the off switches ----
 
 func TestOnlyADevBuildAndAHostThatCannotSwapSkipTheConfirmation(t *testing.T) {
@@ -332,13 +339,36 @@ func TestARefusedReleaseIsRecordedByTheCore(t *testing.T) {
 	run := code(t, "src/core/update/engine_check.cpp")
 	mustMatch(t, `env\.core\.discard\s*&&\s*env\.core\.discard\(env\.root, staged\.version, runtime_sha, "verify_failed"`, run, "engine_check.cpp")
 	before(t, run, "env.core.discard", "run.Finish(\"unchanged\", \"verify_failed\")", "the discard is recorded while the core session is still open")
-	proc := code(t, "src/runtime/lifecycle/update_process.cpp")
-	mustMatch(t, `NevrPcDiscard\(\*session,`, proc, "update_process.cpp")
-	mustMatch(t, `out\.refused\s*=\s*!out\.ok;`, proc, "update_process.cpp: only a verdict is a refusal")
+	proc := code(t, "src/core/update/core_ffi.cpp")
+	mustMatch(t, `NevrPcDiscard\(\*session,`, proc, "core_ffi.cpp")
+	mustMatch(t, `out\.refused\s*=\s*!out\.ok;`, code(t, "src/runtime/lifecycle/update_process.cpp"), "update_process.cpp: only a verdict is a refusal")
 	if !strings.Contains(read(t, "installer/include/nevr_install.h"), "int NevrPcDiscard(") {
 		t.Error("nevr_install.h does not declare NevrPcDiscard")
 	}
 	if strings.Contains(read(t, "docs/adr/0024-pc-self-update.md"), "KNOWN"+"-WRONG") {
 		t.Error("ADR 0024 marks F5 as a known-wrong state again")
 	}
+}
+
+// The Quest runtime stages its library through the same core as PC, with the quest-runtime profile (installer/src/stage.rs names the
+// text; the runtime must pass the same text), and verifies each staged file against its stage entry (src/quest/runtime/update_wiring.cpp).
+// Source guards: the wiring is one call in runtime_entry.cpp, so a removed line fails here, not only on a headset.
+func TestTheQuestRuntimeStagesTheQuestProfileAndVerifiesTheBytes(t *testing.T) {
+	profile := regexp.MustCompile(`(?m)^pub const QUEST_PROFILE: &str = r#"(.*)"#;$`).FindStringSubmatch(read(t, "installer/src/stage.rs"))
+	if profile == nil {
+		t.Fatal("installer/src/stage.rs: no QUEST_PROFILE constant")
+	}
+	mustMatch(t, regexp.QuoteMeta(`inline constexpr char kQuestStageProfile[] = R"(`+profile[1]+`)";`), read(t, "src/quest/runtime/update_wiring.h"),
+		"update_wiring.h: kQuestStageProfile is not installer's QUEST_PROFILE")
+	entry := read(t, "src/quest/runtime/runtime_entry.cpp")
+	mustMatch(t, `in\.core = nevr_update::MakeFfiCore\(nevr_quest::update_wiring::kQuestStageProfile\);`, entry, "runtime_entry.cpp")
+	mustMatch(t, `in\.verify = &nevr_quest::update_wiring::VerifyStagedQuestFile;`, entry, "runtime_entry.cpp")
+	core := read(t, "src/core/update/core_ffi.cpp")
+	mustMatch(t, `status = profile\.empty\(\)\s*\?\s*NevrPcStage\(`, core, "core_ffi.cpp: the PC stage is the empty profile")
+	mustMatch(t, `:\s*NevrStage\(\*session, root_dir\.c_str\(\), profile\.c_str\(\)`, core, "core_ffi.cpp: a profile goes to NevrStage")
+	verify := read(t, "src/quest/runtime/update_wiring.cpp")
+	mustMatch(t, `O_RDONLY \| O_NOFOLLOW \| O_CLOEXEC`, verify, "update_wiring.cpp: the staged file is opened without following a link")
+	mustMatch(t, `S_ISREG\(st\.st_mode\)`, verify, "update_wiring.cpp: the staged file must be a regular file")
+	mustMatch(t, `size != expected\.size`, verify, "update_wiring.cpp: the size is checked against the entry")
+	mustMatch(t, `sha256 != expected\.sha256`, verify, "update_wiring.cpp: the sha256 is checked against the entry")
 }

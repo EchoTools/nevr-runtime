@@ -16,6 +16,10 @@
 //  +0x2E         PAUSE shown (u8: 0 off, 1 paused, 2 the 5 s resume countdown; VeilNet writes, on server and client)
 //  +0x2F         match live (u8: 1 once the spawn orbs read a set spawn_access other than pre_match; the orb hook
 //                writes, VeilNet reads for TEAM READY -> PAUSE)
+// The bytes a client takes from the server's 'G' word (runtime/combat/match_control_rules.h Apply): +0x11 LOADOUTS, +0x2C
+// SERIES-10 ONLY, +0x2D POINT RATE, +0x2E PAUSE, +0x30 payload map, +0x31 PAYLOAD SPEED, +0x32 checkpoint used, +0x33 driving to
+// the checkpoint, +0x34 PAUSE queued; and T at +0x08 from its 'R'. The mailbox is kMailboxSize bytes: the EC page's veil use
+// counter follows it (runtime/patch/ec_rules.h kVeilUse, page +0xF00 = mailbox +0x40).
 // Every byte field is written and read whole by one store or load, as VeilNet's code does; the two scores are floats,
 // each one aligned 4-byte store or load.
 
@@ -24,6 +28,7 @@
 namespace nevr_combat::rules {
 
 inline constexpr std::uintptr_t kMailboxRva = 0x2104ec0;
+inline constexpr std::uint32_t kMailboxSize = 0x40;
 inline constexpr std::uint32_t kBlueStartScore = 0x00;
 inline constexpr std::uint32_t kOrangeStartScore = 0x04;
 inline constexpr std::uint32_t kRoundTotal = 0x08;
@@ -32,6 +37,17 @@ inline constexpr std::uint32_t kStationCells = 0x14;
 inline constexpr std::uint32_t kPointRate = 0x2d;
 inline constexpr std::uint32_t kPausedShown = 0x2e;
 inline constexpr std::uint32_t kMatchLive = 0x2f;
+// The bytes a new session starts with (#2242, EchoCombat 2.0.3): LOADOUTS all, SERIES-10 ONLY off, POINT RATE and PAYLOAD SPEED
+// x1 (4 quarters), PAUSE off and nothing queued. The LOADOUTS byte is veilnet.cpp's LOADOUT_ALL, the mailbox's +11h.
+inline constexpr std::uint32_t kClassicShown = 0x11;
+inline constexpr std::uint32_t kChassisShown = 0x2C;
+inline constexpr std::uint32_t kPspeedShown = 0x31;
+inline constexpr std::uint32_t kPauseQueuedShown = 0x34;
+inline constexpr std::uint32_t kPayloadMap = 0x30;
+inline constexpr std::uint32_t kCheckpointShown = 0x32;
+inline constexpr std::uint32_t kSkipShown = 0x33;
+inline constexpr std::uint8_t kLoadoutAll = 0;
+inline constexpr std::uint8_t kRateDefault = 4;
 
 enum class Pause : std::uint8_t { kOff = 0, kOn = 1, kResuming = 2 };
 enum class Team : std::uint8_t { kBlue, kOrange };
@@ -71,5 +87,30 @@ class RulesState {
  private:
   volatile std::uint8_t* m_;
 };
+
+// Writes a new session's defaults into the mailbox at `mailbox` (game base + kMailboxRva): the four scores and T and the
+// capture time read as zero, and the shown bytes of the defaults above. Nothing else of the mailbox is touched.
+inline void ApplyDefaults(volatile std::uint8_t* mailbox) {
+  *reinterpret_cast<volatile float*>(mailbox + kBlueStartScore) = 0.0f;
+  *reinterpret_cast<volatile float*>(mailbox + kOrangeStartScore) = 0.0f;
+  *reinterpret_cast<volatile float*>(mailbox + kRoundTotal) = 0.0f;
+  *reinterpret_cast<volatile float*>(mailbox + kCaptureTime) = 0.0f;
+  mailbox[kClassicShown] = kLoadoutAll;
+  mailbox[kChassisShown] = 0;
+  mailbox[kPointRate] = kRateDefault;
+  mailbox[kPspeedShown] = kRateDefault;
+  mailbox[kPausedShown] = static_cast<std::uint8_t>(Pause::kOff);
+  mailbox[kPauseQueuedShown] = 0;
+}
+
+// VeilNet's once-per-session watch: `generation` is the session store's count (nevr_arena_round_time::SessionGeneration). True
+// when a session has been seen before and this one is another; the first session the process sees is not a new one, and no
+// session yet (generation 0) changes nothing. `seen` takes the generation.
+inline bool NewSessionSeen(std::uint64_t& seen, std::uint64_t generation) {
+  if (generation == 0 || generation == seen) return false;
+  const bool again = seen != 0;
+  seen = generation;
+  return again;
+}
 
 }  // namespace nevr_combat::rules

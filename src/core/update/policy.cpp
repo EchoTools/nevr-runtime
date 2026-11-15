@@ -48,12 +48,115 @@ const char* DisabledWord(Disabled reason) {
 }
 
 Disabled Decide(const Switches& s) {
-  if (s.dev_build) return Disabled::kDevBuild;
+  if (s.dev_build && !s.dev_source_override) return Disabled::kDevBuild;
   if (s.no_root) return Disabled::kNoRoot;
   if (s.flag_no_update) return Disabled::kFlag;
   if (s.config_enabled.has_value() && !*s.config_enabled) return Disabled::kConfig;
   if (!s.host_can_swap) return Disabled::kHostCannotSwap;
   return Disabled::kNone;
+}
+
+const char* SourceVerdictWord(SourceVerdict verdict) {
+  switch (verdict) {
+    case SourceVerdict::kNone: return "none";
+    case SourceVerdict::kUsed: return "used";
+    case SourceVerdict::kIgnoredRelease: return "ignored";
+    case SourceVerdict::kRejected: return "rejected";
+  }
+  return "none";
+}
+
+namespace {
+
+constexpr char kSchemeHttps[] = "https://";
+constexpr char kSchemeHttp[] = "http://";
+constexpr char kLastPrintableAscii = 0x7e;
+constexpr char kSpace = 0x20;
+
+bool StartsWith(const std::string& s, const char* prefix) { return s.compare(0, std::string(prefix).size(), prefix) == 0; }
+
+// A reason word for a base that is not usable, or "" when it is.
+std::string BaseProblem(const std::string& in, std::string* normalized) {
+  if (in.empty()) return "empty";
+  if (in.size() > kMaxSourceBaseBytes) return "too_long";
+  for (const char c : in) {
+    if (c < kSpace || c > kLastPrintableAscii || c == kSpace) return "control_character";
+  }
+  const char* scheme = StartsWith(in, kSchemeHttps) ? kSchemeHttps : StartsWith(in, kSchemeHttp) ? kSchemeHttp : nullptr;
+  if (scheme == nullptr) return "not_http_or_https";
+  if (in.find_first_of("@?#") != std::string::npos) return "credentials_query_or_fragment";
+  std::string base = in;
+  while (!base.empty() && base.back() == '/') base.pop_back();
+  const std::size_t schemeLen = std::string(scheme).size();
+  const std::size_t hostEnd = base.find('/', schemeLen);
+  if ((hostEnd == std::string::npos ? base.size() : hostEnd) <= schemeLen) return "no_host";
+  *normalized = base;
+  return "";
+}
+
+bool IsBase64Char(char c) { return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '+' || c == '/' || c == '='; }
+
+// A reason word for pin text that is not usable, or "" when it is; `count` is the number of keys.
+std::string PinsProblem(const std::string& in, std::size_t* count) {
+  if (in.empty()) return "empty";
+  if (in.size() > kMaxSourcePinsBytes) return "too_long";
+  for (const char c : in) {
+    if (c != '\n' && (c < kSpace || c > kLastPrintableAscii)) return "control_character";
+  }
+  std::size_t keys = 0;
+  std::size_t at = 0;
+  while (at <= in.size()) {
+    std::size_t end = in.find('\n', at);
+    if (end == std::string::npos) end = in.size();
+    const std::string line = in.substr(at, end - at);
+    at = end + 1;
+    if (line.find_first_not_of(' ') == std::string::npos || line[0] == '#') continue;
+    const std::size_t labelEnd = line.find(' ');
+    if (labelEnd == std::string::npos) return "malformed_line";
+    const std::size_t keyStart = line.find_first_not_of(' ', labelEnd);
+    if (keyStart == std::string::npos) return "malformed_line";
+    const std::string key = line.substr(keyStart, line.find(' ', keyStart) == std::string::npos ? std::string::npos : line.find(' ', keyStart) - keyStart);
+    if (key.size() != kPinKeyBase64Chars || !std::all_of(key.begin(), key.end(), IsBase64Char)) return "malformed_key";
+    ++keys;
+  }
+  if (keys == 0) return "no_keys";
+  *count = keys;
+  return "";
+}
+
+}  // namespace
+
+SourceResolution ResolveSource(bool dev_build, const std::optional<std::string>& base, const std::optional<std::string>& pins) {
+  SourceResolution r;
+  if (!base.has_value() && !pins.has_value()) return r;
+  if (!dev_build) {
+    r.verdict = SourceVerdict::kIgnoredRelease;
+    r.key = base.has_value() ? "update.base" : "update.pins";
+    r.reason = "release_build";
+    r.pins_given = pins.has_value();
+    return r;
+  }
+  const auto reject = [&r](const char* key, const std::string& reason) {
+    r.verdict = SourceVerdict::kRejected;
+    r.key = key;
+    r.reason = reason;
+    return r;
+  };
+  if (!base.has_value()) return reject("update.pins", "pins_without_base");
+  std::string normalized;
+  const std::string baseProblem = BaseProblem(*base, &normalized);
+  if (!baseProblem.empty()) return reject("update.base", baseProblem);
+  if (pins.has_value()) {
+    std::size_t count = 0;
+    const std::string pinsProblem = PinsProblem(*pins, &count);
+    if (!pinsProblem.empty()) return reject("update.pins", pinsProblem);
+    r.use.pins = *pins;
+    r.pins_given = true;
+    r.pins_count = count;
+  }
+  r.use.base = normalized;
+  r.verdict = SourceVerdict::kUsed;
+  return r;
 }
 
 const char* ChannelSourceWord(ChannelSource source) {
@@ -89,7 +192,7 @@ std::string BuildCurrentJson(const std::string& version, const std::string& runt
   return json{{"version", version}, {"runtime_sha256", runtime_sha256}, {"quarantine", q}}.dump();
 }
 
-bool ParseStageResult(const std::string& text, StageResult* out, std::string* error) {
+bool ParseStageResult(const std::string& text, StageResult* out, std::string* error, std::string_view runtime_file) {
   const auto fail = [error](const char* why) {
     if (error != nullptr) *error = why;
     return false;
@@ -108,6 +211,7 @@ bool ParseStageResult(const std::string& text, StageResult* out, std::string* er
   if (doc->contains("direction") && (*doc)["direction"].is_string()) r.direction = (*doc)["direction"].get<std::string>();
   if (doc->contains("reason") && (*doc)["reason"].is_string()) r.reason = (*doc)["reason"].get<std::string>();
   if (!IsWord(r.direction) || !IsWord(r.reason)) return fail("the stage result's direction or reason is not a plain word");
+  int runtimes = 0;
   if (doc->contains("files")) {
     if (!(*doc)["files"].is_array()) return fail("the stage result's files is not a list");
     for (const json& f : (*doc)["files"]) {
@@ -120,13 +224,12 @@ bool ParseStageResult(const std::string& text, StageResult* out, std::string* er
       file.path = f["path"].get<std::string>();
       file.size = f["size"].get<std::uint64_t>();
       file.sha256 = f["sha256"].get<std::string>();
-      if (!names::ParseMember(file.path, &member)) return fail("a file of the stage result is outside the member vocabulary");
+      if (!names::ParseMemberOf(runtime_file, file.path, &member)) return fail("a file of the stage result is outside the platform's member vocabulary");
       if (!IsSha256Hex(file.sha256)) return fail("a file of the stage result has a sha256 that is not 64 lowercase hex characters");
+      runtimes += member.runtime ? 1 : 0;
       r.files.push_back(std::move(file));
     }
   }
-  int runtimes = 0;
-  for (const StagedFile& f : r.files) runtimes += f.path == names::kRuntimeMember ? 1 : 0;
   if (r.action == "staged" && runtimes != 1) return fail("a staged result must list exactly one runtime");
   *out = std::move(r);
   return true;

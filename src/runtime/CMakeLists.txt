@@ -59,6 +59,8 @@ set(PATCHES_SOURCES
     "../core/update/policy.cpp"
     "../core/update/engine_check.cpp"
     "../core/update/worker.cpp"
+    # The core's C binding (installer/include/nevr_install.h), shared with the Quest runtime (src/quest/sentinel/CMakeLists.txt).
+    "../core/update/core_ffi.cpp"
     "lifecycle/update_fs_win32.cpp"
     "lifecycle/update_run.cpp"
     "lifecycle/update_process.cpp"
@@ -95,12 +97,14 @@ set(PATCHES_SOURCES
     "hook/script_hooks.cpp"
     "hook/script_resource_hook.cpp"
     # EchoCombat: he_is_the_cat's three plugins, ported, see runtime/combat/combat.h
+    "combat/announcer_callouts.cpp"
     "combat/clock_pause.cpp"
     "combat/capture_scores.cpp"
     "combat/capture_time.cpp"
     "combat/clock_pause.cpp"
     "combat/combat.cpp"
     "combat/dot_script.cpp"
+    "combat/drone_script.cpp"
     "combat/orb_pause.cpp"
     "combat/point_rate.cpp"
     "combat/rules_button.cpp"
@@ -1356,6 +1360,15 @@ if(BUILD_TESTING)
     target_link_libraries(test_clock_pause PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_clock_pause DISCOVERY_MODE PRE_TEST)
 
+    # #2242: the announcer callouts (runtime/combat/announcer_callouts.h), on a fake announcer script.
+    add_executable(test_announcer_callouts tests/test_announcer_callouts.cpp combat/announcer_callouts.cpp hook/script_hooks.cpp hook/hook_guard.cpp "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp")
+    set_source_files_properties(tests/test_announcer_callouts.cpp combat/announcer_callouts.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_announcer_callouts PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_announcer_callouts PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_announcer_callouts PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_announcer_callouts DISCOVERY_MODE PRE_TEST)
+
     # #600: POINT RATE and PAUSE on the capture points (runtime/combat/point_rate.h), on a fake capture point script.
     add_executable(test_point_rate tests/test_point_rate.cpp combat/point_rate.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
     set_source_files_properties(tests/test_point_rate.cpp combat/point_rate.cpp hook/script_hooks.cpp hook/hook_guard.cpp
@@ -1364,6 +1377,16 @@ if(BUILD_TESTING)
     target_include_directories(test_point_rate PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_point_rate PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_point_rate DISCOVERY_MODE PRE_TEST)
+
+    # #2242: the drone's death explosion from the stock drone script (runtime/combat/drone_script.h): the dispatcher's
+    # record, the stubs' node layout (run on the detonator's pinned constructors) and the pins.
+    add_executable(test_drone_script tests/test_drone_script.cpp combat/drone_script.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_drone_script.cpp combat/drone_script.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_drone_script PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_drone_script PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_drone_script PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_drone_script DISCOVERY_MODE PRE_TEST)
 
     # #600: the RULES page's starting scores on the capture points (runtime/combat/capture_scores.h), on two fake scripts.
     add_executable(test_capture_scores tests/test_capture_scores.cpp combat/capture_scores.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
@@ -2336,6 +2359,24 @@ if(BUILD_TESTING)
     target_include_directories(test_combat_match_type PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_combat_match_type PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json nevr::plugin_sdk)
     gtest_discover_tests(test_combat_match_type DISCOVERY_MODE PRE_TEST)
+
+    # #2242 (EchoCombat 2.0.3): the RULES defaults a new session starts with, and the once-per-new-session watch (runtime/combat/rules_state.h).
+    add_executable(test_veilnet_rules tests/test_veilnet_rules.cpp)
+    target_include_directories(test_veilnet_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_veilnet_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_veilnet_rules DISCOVERY_MODE PRE_TEST)
+
+    # #2242 (EchoCombat 2.0.6): the destination recency, the send gate and the hello tries (runtime/combat/veilnet_gate.h).
+    add_executable(test_veilnet_gate tests/test_veilnet_gate.cpp)
+    target_include_directories(test_veilnet_gate PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_veilnet_gate PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_veilnet_gate DISCOVERY_MODE PRE_TEST)
+
+    # #2242 (EchoCombat 82ad7ba): PAYLOAD SPEED, the payload PAUSE rule and the third row's text (runtime/combat/payload_speed_rules.h).
+    add_executable(test_payload_speed_rules tests/test_payload_speed_rules.cpp)
+    target_include_directories(test_payload_speed_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_payload_speed_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_payload_speed_rules DISCOVERY_MODE PRE_TEST)
 
     # #600: the PowerBoost values his release ships, for a key config.yaml leaves out (runtime/combat/shipped_settings.h).
     add_executable(test_combat_shipped_settings tests/test_combat_shipped_settings.cpp)

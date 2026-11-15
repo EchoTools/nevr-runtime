@@ -29,7 +29,6 @@ constexpr std::size_t kMaxReasonLength = 40;
 constexpr char kDigits[] = "0123456789";
 constexpr char kTempInfix[] = ".tmp-";
 constexpr char kRelSeparator = '/';
-constexpr const char* kRuntimeRelative = names::kRuntimeFile;  // the runtime's file in the root, the vocabulary's spelling
 
 // Two names of a release's files are one file when they differ only in case: Windows opens either.
 bool SameName(const std::string& a, const std::string& b) {
@@ -91,9 +90,19 @@ bool HasMember(const std::vector<names::Member>& members, const names::Member& m
   return false;
 }
 
+// The runtime's file in this start's root is the one name the start treats as its runtime: nevr-runtime.dll on PC, libnevr-runtime.so
+// on Quest (StartContext::runtime_file). The rule is names.h's (ParseMemberOf), the same one the check reads a stage result with: the
+// other platform's runtime name is refused, and a Quest release is the runtime file alone.
+bool ParseFileMember(std::string_view runtime_file, std::string_view path, names::Member* out) {
+  return names::ParseMemberOf(runtime_file, path, out);
+}
+
+// The path of a member relative to the root, in the spelling of this start's runtime file.
+std::string MemberFile(std::string_view runtime_file, const names::Member& member) { return names::MemberPathOf(runtime_file, member); }
+
 // staged.json: {"version", "files": [{"path", "size", "sha256"}]}, the spelling of NevrPcStage's result. Every name in
 // the vocabulary, no file twice (in any case), exactly one runtime.
-bool ParseStaged(const json& doc, Staged* out) {
+bool ParseStaged(std::string_view runtime_file, const json& doc, Staged* out) {
   if (!doc.is_object() || !doc.contains("version") || !doc["version"].is_string() || !doc.contains("files") ||
       !doc["files"].is_array() || doc["files"].empty()) {
     return false;
@@ -108,7 +117,7 @@ bool ParseStaged(const json& doc, Staged* out) {
       return false;
     }
     StagedFile staged;
-    if (!names::ParseMember(file["path"].get<std::string>(), &staged.member)) return false;
+    if (!ParseFileMember(runtime_file, file["path"].get<std::string>(), &staged.member)) return false;
     if (HasMember(seen, staged.member)) return false;
     seen.push_back(staged.member);
     staged.size = file["size"].get<std::uint64_t>();
@@ -123,11 +132,11 @@ bool ParseStaged(const json& doc, Staged* out) {
   return runtimes == 1;
 }
 
-bool ParseMembers(const json& list, std::vector<names::Member>* out) {
+bool ParseMembers(std::string_view runtime_file, const json& list, std::vector<names::Member>* out) {
   if (!list.is_array()) return false;
   for (const json& path : list) {
     names::Member member;
-    if (!path.is_string() || !names::ParseMember(path.get<std::string>(), &member) || HasMember(*out, member)) return false;
+    if (!path.is_string() || !ParseFileMember(runtime_file, path.get<std::string>(), &member) || HasMember(*out, member)) return false;
     out->push_back(member);
   }
   return true;
@@ -154,7 +163,7 @@ struct Journal {
   std::string from_sha256;
 };
 
-bool ParseJournal(const json& doc, Journal* out) {
+bool ParseJournal(std::string_view runtime_file, const json& doc, Journal* out) {
   if (!doc.is_object()) return false;
   for (const char* key : {"kind", "from", "to", "phase"}) {
     if (!doc.contains(key) || !doc[key].is_string()) return false;
@@ -184,18 +193,19 @@ bool ParseJournal(const json& doc, Journal* out) {
     if (!doc["in_sha256"].is_object()) return false;
     for (const auto& [path, sha] : doc["in_sha256"].items()) {
       names::Member member;
-      if (!names::ParseMember(path, &member) || !sha.is_string() || !IsSha256Hex(sha.get<std::string>())) return false;
+      if (!ParseFileMember(runtime_file, path, &member) || !sha.is_string() || !IsSha256Hex(sha.get<std::string>())) return false;
       out->in_sha256[path] = sha.get<std::string>();
     }
   }
-  return doc.contains("out") && doc.contains("in") && ParseMembers(doc["out"], &out->out) && ParseMembers(doc["in"], &out->in);
+  return doc.contains("out") && doc.contains("in") && ParseMembers(runtime_file, doc["out"], &out->out) &&
+         ParseMembers(runtime_file, doc["in"], &out->in);
 }
 
-json JournalJson(const Journal& journal) {
+json JournalJson(std::string_view runtime_file, const Journal& journal) {
   json out = json::array();
   json in = json::array();
-  for (const names::Member& m : journal.out) out.push_back(names::MemberPath(m));
-  for (const names::Member& m : journal.in) in.push_back(names::MemberPath(m));
+  for (const names::Member& m : journal.out) out.push_back(MemberFile(runtime_file, m));
+  for (const names::Member& m : journal.in) in.push_back(MemberFile(runtime_file, m));
   json doc = {{"kind", journal.kind}, {"from", journal.from}, {"to", journal.to}, {"phase", journal.phase}, {"out", out}, {"in", in}};
   if (journal.kind == "rollback") {
     doc["failed_sha256"] = journal.failed_sha256;
@@ -212,14 +222,14 @@ json JournalJson(const Journal& journal) {
 
 // state.json (ADR 0024, section 2): an object; "owned", when present, a list of {"path", "sha256"} in the vocabulary;
 // "discards", when present, an object of version to count; "quarantine", when present, a list.
-bool ValidState(const json& doc) {
+bool ValidState(std::string_view runtime_file, const json& doc) {
   if (!doc.is_object()) return false;
   if (doc.contains("owned")) {
     if (!doc["owned"].is_array()) return false;
     for (const json& entry : doc["owned"]) {
       names::Member member;
       if (!entry.is_object() || !entry.contains("path") || !entry["path"].is_string() || !entry.contains("sha256") ||
-          !entry["sha256"].is_string() || !names::ParseMember(entry["path"].get<std::string>(), &member) ||
+          !entry["sha256"].is_string() || !ParseFileMember(runtime_file, entry["path"].get<std::string>(), &member) ||
           !IsSha256Hex(entry["sha256"].get<std::string>())) {
         return false;
       }
@@ -256,6 +266,7 @@ class SwapRun {
   explicit SwapRun(const StartContext& context)
       : ctx_(context), fs_(context.edges.fs), started_(context.edges.clock.TickMs()) {
     root_ = context.root;
+    runtime_file_ = context.runtime_file;
     sep_ = fs_.Separator();
     update_ = Abs(names::kUpdateDir);
   }
@@ -346,7 +357,7 @@ class SwapRun {
     }
     Pending pending;
     if (read != JsonRead::kOk || !ParsePending(doc, &pending)) return Load();  // nothing is pending any more
-    const ArtifactFacts runtime = Facts(Abs(kRuntimeRelative));
+    const ArtifactFacts runtime = Facts(Abs(runtime_file_));
     if (runtime.present && !runtime.sha256.empty() && runtime.sha256 != pending.to_sha256) return Load();  // already put back
     const InUseAnswer write = RuntimeWrite();
     if (write.state != InUse::kFree) {
@@ -400,6 +411,29 @@ class SwapRun {
     return true;
   }
 
+  /// A load the host refused judges nothing: the try this start counted is given back (UncountTryIn, engine_start.h).
+  bool UncountTry(std::uint64_t counted_attempts, const char* reason) {
+    if (counted_attempts == 0 || root_.empty() || !fs_.IsDirectory(update_) || fs_.IsLink(update_)) return false;
+    if (!AcquireLock()) {
+      RecordTrial("counted", "lock_timeout", Pending{}, counted_attempts, {{"cause", reason}});
+      return false;  // the record names no release: pending.json was not read without the lock
+    }
+    json doc;
+    int error = 0;
+    Pending pending;
+    if (ReadJson(UpdateFile(names::kPendingJson), &doc, &error) != JsonRead::kOk || !ParsePending(doc, &pending) ||
+        pending.boot_attempts != counted_attempts) {
+      return false;  // not the record this start counted: nothing of it is this start's to give back
+    }
+    doc["boot_attempts"] = counted_attempts - 1;
+    if (!WriteJson(UpdateFile(names::kPendingJson), doc)) {
+      RecordTrial("counted", "pending_write_failed", pending, counted_attempts, {{"cause", reason}, {"win32_error", last_error_}});
+      return false;
+    }
+    RecordTrial("not_counted", reason, pending, counted_attempts - 1);
+    return true;
+  }
+
   /// The answer after an exception: stop when a journal says the root may be half moved, else load.
   StartResult AfterException() {
     Record("blocked", "internal_error");
@@ -412,8 +446,9 @@ class SwapRun {
   enum class RollbackEnd { kDone, kBlocked, kStop };
 
   static StartResult Load() { return {StartAction::kLoad, nullptr, false}; }
-  // Load, and the release in the root is on trial (the load of it that fails is the host's to handle).
-  static StartResult Trial() { return {StartAction::kLoad, nullptr, true}; }
+  // Load, and the release in the root is on trial (the load of it that fails is the host's to handle), with the try this
+  // start counted, if any.
+  StartResult Trial() const { return {StartAction::kLoad, nullptr, true, counted_attempts_}; }
   static StartResult Stop(const char* reason) { return {StartAction::kStop, reason, false}; }
 
   // ---- paths --------------------------------------------------------------------------------------------------------
@@ -441,8 +476,8 @@ class SwapRun {
   std::string StagingDir(const std::string& version) const { return Abs(StagingRel(version)); }
   std::string PreviousDir(const std::string& version) const { return Abs(PreviousRel(version)); }
   std::string FailedDir(const std::string& version) const { return Abs(FailedRel(version)); }
-  std::string InRoot(const names::Member& member) const { return Abs(names::MemberPath(member)); }
-  std::string In(const std::string& dir, const names::Member& member) const { return dir + sep_ + Os(names::MemberPath(member)); }
+  std::string InRoot(const names::Member& member) const { return Abs(MemberFile(runtime_file_, member)); }
+  std::string In(const std::string& dir, const names::Member& member) const { return dir + sep_ + Os(MemberFile(runtime_file_, member)); }
   // The first of `relative` (folders relative to the root) that is a link, spelled as the record names it ("update/staging");
   // empty when none is. The swap never moves, makes or deletes anything through a link out of the root (ADR 0024, section 4.2).
   std::string FirstLink(std::initializer_list<std::string> relative) const {
@@ -456,7 +491,7 @@ class SwapRun {
   // ---- the edges ----------------------------------------------------------------------------------------------------
 
   ArtifactFacts Facts(const std::string& path) const { return ctx_.edges.verifier.Measure(path); }
-  InUseAnswer RuntimeWrite() const { return ctx_.edges.in_use.Query(Abs(kRuntimeRelative)); }
+  InUseAnswer RuntimeWrite() const { return ctx_.edges.in_use.Query(Abs(runtime_file_)); }
 
   // A step that changed the disk. False when the test seam ended the start here (as a kill would).
   bool Step() {
@@ -538,7 +573,7 @@ class SwapRun {
     record["event"] = "update_trial";
     record["outcome"] = outcome;
     record["reason"] = reason;
-    record["release"] = pending.to_version;
+    if (!pending.to_version.empty()) record["release"] = pending.to_version;
     record["boot_attempts"] = boot_attempts;
     record["elapsed_ms"] = ctx_.edges.clock.TickMs() - started_;
     ctx_.edges.log.Emit(record);
@@ -573,9 +608,9 @@ class SwapRun {
 
   json RebuiltState() const {
     json state = {{"owned", json::array()}};
-    const ArtifactFacts runtime = Facts(Abs(kRuntimeRelative));
+    const ArtifactFacts runtime = Facts(Abs(runtime_file_));
     if (!runtime.sha256.empty()) {
-      state["owned"].push_back({{"path", names::kRuntimeMember}, {"sha256", runtime.sha256}});
+      state["owned"].push_back({{"path", runtime_file_}, {"sha256", runtime.sha256}});
       if (names::IsVersionName(runtime.version)) {
         state["current"] = {{"version", runtime.version}, {"runtime_sha256", runtime.sha256}};
       }
@@ -635,7 +670,7 @@ class SwapRun {
       Record("deferred", "state_unreadable", {{"win32_error", error}});
       return StateRead::kUnreadable;
     }
-    if (read == JsonRead::kOk && ValidState(doc)) {
+    if (read == JsonRead::kOk && ValidState(runtime_file_, doc)) {
       state_ = std::move(doc);
       return StateRead::kOk;
     }
@@ -662,7 +697,7 @@ class SwapRun {
       Record("blocked", "journal_unreadable", {{"win32_error", error}});
       return Stop("journal_unreadable");
     }
-    if (read != JsonRead::kOk || !ParseJournal(doc, &journal)) {
+    if (read != JsonRead::kOk || !ParseJournal(runtime_file_, doc, &journal)) {
       Record("blocked", "bad_journal");
       return Stop("bad_journal");
     }
@@ -735,7 +770,7 @@ class SwapRun {
     json owned = json::array();
     std::string to_sha256;
     for (const names::Member& member : journal.in) {
-      const std::string path = names::MemberPath(member);
+      const std::string path = MemberFile(runtime_file_, member);
       const auto known = journal.in_sha256.find(path);
       std::string sha256;
       if (known != journal.in_sha256.end()) {
@@ -758,7 +793,7 @@ class SwapRun {
       if (!journal.from_sha256.empty()) {
         from = {{"version", journal.from}, {"sha256", journal.from_sha256}};
       } else {
-        const ArtifactFacts previous = Facts(SubOf(PreviousDir(journal.from), names::kRuntimeFile));
+        const ArtifactFacts previous = Facts(SubOf(PreviousDir(journal.from), runtime_file_.c_str()));
         if (previous.unreadable) return false;
         if (previous.present && !previous.sha256.empty()) from = {{"version", journal.from}, {"sha256", previous.sha256}};
       }
@@ -767,6 +802,7 @@ class SwapRun {
                             {"boot_attempts", 1},
                             {"failed_reason", nullptr}};
       if (!WriteJson(UpdateFile(names::kPendingJson), pending)) return false;
+      counted_attempts_ = 1;  // this start is the release's first try
     }
     if (StagedNames(journal.to) && !Remove(UpdateFile(names::kStagedJson))) return false;
     const std::string staging = StagingDir(journal.to);
@@ -835,7 +871,7 @@ class SwapRun {
       Record("deferred", "staged_unreadable", {{"win32_error", read_error}});
       return Load();
     }
-    if (read != JsonRead::kOk || !ParseStaged(doc, &staged)) {
+    if (read != JsonRead::kOk || !ParseStaged(runtime_file_, doc, &staged)) {
       // A name outside the vocabulary: the file is not used (section 4.2), and not counted against any release.
       const bool removed = Remove(UpdateFile(names::kStagedJson));
       if (killed_) return Load();
@@ -878,27 +914,31 @@ class SwapRun {
       Record("blocked", "runtime_not_writable", {{"to", staged.version}, {"win32_error", write.os_error}});
       return Load();
     }
-    const ArtifactFacts runtime = Facts(Abs(kRuntimeRelative));
-    if (runtime.version.empty()) {
+    const ArtifactFacts runtime = Facts(Abs(runtime_file_));
+    // A root with no runtime at all, and an edge that names the baseline: the baseline is the release replaced, and nothing is moved
+    // out of the root for it (the baseline lives in the APK, not in the root).
+    const bool from_baseline = !runtime.present && ctx_.baseline.present && names::IsVersionName(ctx_.baseline.version);
+    if (!from_baseline && runtime.version.empty()) {
       // The release in the root has no NEVR-BUILD version to name update\previous\<from>\ by (or there is no runtime at all).
       // ADR 0024 does not say what happens then (an open question on #2105); until it does, nothing is moved.
       Record("blocked", "no_from_version", {{"to", staged.version}});
       return Load();
     }
-    if (!names::IsVersionName(runtime.version)) {
+    if (!from_baseline && !names::IsVersionName(runtime.version)) {
       // The NEVR-BUILD field of a file nothing has verified yet would name update\previous\<from>\: a value outside the
       // vocabulary is never used as a path (section 4.2), and never logged.
       Record("blocked", "bad_from_version", {{"to", staged.version}});
       return Load();
     }
     // Ownership (section 4.7): the runtime always; a plugin when state.json lists it with the sha256 of the file in the root.
-    const std::vector<names::Member> out = OwnedMembers();
+    const std::vector<names::Member> out = from_baseline ? std::vector<names::Member>{} : OwnedMembers();
     for (const StagedFile& file : staged.files) {
       if (!file.member.runtime && fs_.Exists(InRoot(file.member)) && !HasMember(out, file.member)) {
-        Record("blocked", "foreign_file", {{"to", staged.version}, {"path", names::MemberPath(file.member)}});
+        Record("blocked", "foreign_file", {{"to", staged.version}, {"path", MemberFile(runtime_file_, file.member)}});
         return Load();
       }
     }
+    if (from_baseline) return Swap(staged, ctx_.baseline.version, ctx_.baseline.sha256, out);
     return Swap(staged, runtime.version, runtime.sha256, out);
   }
 
@@ -921,7 +961,7 @@ class SwapRun {
     if (!linked->empty()) return false;
     for (const std::string& version : versions) {
       const std::string dir = previous + sep_ + version;
-      if (!Remove(dir + sep_ + names::kRuntimeFile)) return false;
+      if (!Remove(dir + sep_ + runtime_file_)) return false;
       const std::string plugins = dir + sep_ + names::kPluginsDir;
       std::vector<DirEntry> files;
       if (fs_.ListFolder(plugins, &files)) {
@@ -949,8 +989,8 @@ class SwapRun {
     journal.from_sha256 = from_sha256;
     for (const StagedFile& file : staged.files) {
       journal.in.push_back(file.member);
-      journal.in_sha256[names::MemberPath(file.member)] = file.sha256;
-      files.push_back({{"path", names::MemberPath(file.member)}, {"sha256", file.sha256}});
+      journal.in_sha256[MemberFile(runtime_file_, file.member)] = file.sha256;
+      files.push_back({{"path", MemberFile(runtime_file_, file.member)}, {"sha256", file.sha256}});
     }
     const json identity = {{"from", from}, {"to", staged.version}};
     const auto failed = [&](bool phase_in) {
@@ -972,7 +1012,7 @@ class SwapRun {
       Record("blocked", "reparse_point", fields);
       return Load();
     }
-    if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(journal))) {
+    if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(runtime_file_, journal))) {
       if (killed_) return Load();
       json fields = identity;
       fields["win32_error"] = last_error_;
@@ -987,14 +1027,14 @@ class SwapRun {
       if (!Move(InRoot(member), In(previous, member))) return failed(false);
     }
     journal.phase = "in";
-    if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(journal))) return failed(false);
+    if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(runtime_file_, journal))) return failed(false);
     const std::string staging = StagingDir(staged.version);
     for (const names::Member& member : journal.in) {
       MakeDirFor(InRoot(member));
       if (!Move(In(staging, member), InRoot(member))) return failed(true);
     }
     journal.phase = "done";
-    if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(journal))) return failed(true);
+    if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(runtime_file_, journal))) return failed(true);
     const bool finished = FinishDone(journal);
     if (killed_) return Load();
     json fields = identity;
@@ -1012,7 +1052,7 @@ class SwapRun {
     if (!state_.contains("owned")) return out;
     for (const json& entry : state_["owned"]) {
       names::Member member;
-      names::ParseMember(entry["path"].get<std::string>(), &member);
+      ParseFileMember(runtime_file_, entry["path"].get<std::string>(), &member);
       if (member.runtime || HasMember(out, member)) continue;
       const ArtifactFacts facts = Facts(InRoot(member));
       if (facts.present && facts.sha256 == entry["sha256"].get<std::string>()) out.push_back(member);
@@ -1023,7 +1063,7 @@ class SwapRun {
   // The files of a release kept in a generation folder: its runtime, then its plugins in name order.
   std::vector<names::Member> MembersIn(const std::string& dir) const {
     std::vector<names::Member> out;
-    if (fs_.Exists(dir + sep_ + names::kRuntimeFile)) out.push_back(names::Member{true, {}});
+    if (fs_.Exists(dir + sep_ + runtime_file_)) out.push_back(names::Member{true, {}});
     std::vector<std::string> plugins;
     std::vector<DirEntry> entries;
     if (fs_.ListFolder(dir + sep_ + names::kPluginsDir, &entries)) {
@@ -1054,7 +1094,7 @@ class SwapRun {
         if (!Move(InRoot(member), In(failed, member))) return false;
       }
       journal->phase = "in";
-      if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(*journal))) return false;
+      if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(runtime_file_, *journal))) return false;
     }
     if (journal->phase == "in") {
       for (const names::Member& member : journal->in) {
@@ -1063,7 +1103,7 @@ class SwapRun {
         if (!Move(In(previous, member), InRoot(member))) return false;
       }
       journal->phase = "done";
-      if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(*journal))) return false;
+      if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(runtime_file_, *journal))) return false;
     }
     return FinishRollback(*journal);
   }
@@ -1075,7 +1115,7 @@ class SwapRun {
     json owned = json::array();
     std::string runtime_sha256;
     for (const names::Member& member : journal.in) {
-      const std::string path = names::MemberPath(member);
+      const std::string path = MemberFile(runtime_file_, member);
       const auto known = journal.in_sha256.find(path);
       std::string sha256;
       if (known != journal.in_sha256.end()) {
@@ -1146,12 +1186,17 @@ class SwapRun {
                                           Child(PreviousRel(restored), names::kPluginsDir)});
     if (!linked.empty()) return fail("reparse_point", RollbackEnd::kBlocked, {{"folder", linked}});
     const std::string previous = PreviousDir(restored);
-    const std::string previous_runtime = previous + sep_ + names::kRuntimeFile;
-    // The previous release's runtime is there and verifies (ADR 0024, section 6), or the answer is why not.
-    const RollbackCheck target = ctx_.edges.rollback.Check(previous_runtime);
-    if (target.state == RollbackState::kAbsent) return fail("no_previous", RollbackEnd::kStop);
-    if (target.state == RollbackState::kUnverified) {
-      return fail("previous_unverified", RollbackEnd::kStop, {{"verify_reason", target.reason}});
+    const std::string previous_runtime = previous + sep_ + runtime_file_;
+    // The baseline is the release a fresh root swapped over (see StartContext::baseline): nothing is restored from previous\, the root
+    // is left with no runtime, and the start loads the baseline. Only the failed runtime moves (to failed\).
+    const bool to_baseline = ctx_.baseline.present && restored == ctx_.baseline.version && pending.from_sha256 == ctx_.baseline.sha256;
+    if (!to_baseline) {
+      // The previous release's runtime is there and verifies (ADR 0024, section 6), or the answer is why not.
+      const RollbackCheck target = ctx_.edges.rollback.Check(previous_runtime);
+      if (target.state == RollbackState::kAbsent) return fail("no_previous", RollbackEnd::kStop);
+      if (target.state == RollbackState::kUnverified) {
+        return fail("previous_unverified", RollbackEnd::kStop, {{"verify_reason", target.reason}});
+      }
     }
 
     Journal journal;
@@ -1167,14 +1212,14 @@ class SwapRun {
     for (const names::Member& member : journal.in) {
       const ArtifactFacts facts = Facts(In(previous, member));
       if (facts.unreadable || facts.sha256.empty()) {
-        return fail("previous_unreadable", RollbackEnd::kBlocked, {{"path", names::MemberPath(member)}});
+        return fail("previous_unreadable", RollbackEnd::kBlocked, {{"path", MemberFile(runtime_file_, member)}});
       }
-      journal.in_sha256[names::MemberPath(member)] = facts.sha256;
+      journal.in_sha256[MemberFile(runtime_file_, member)] = facts.sha256;
     }
     // A file that is not the failed release's sits where a restored plugin goes: it is not replaced (section 4.7).
     for (const names::Member& member : journal.in) {
       if (!member.runtime && fs_.Exists(InRoot(member)) && !HasMember(journal.out, member)) {
-        return fail("foreign_file", RollbackEnd::kBlocked, {{"path", names::MemberPath(member)}});
+        return fail("foreign_file", RollbackEnd::kBlocked, {{"path", MemberFile(runtime_file_, member)}});
       }
     }
     std::string cleared;
@@ -1183,7 +1228,7 @@ class SwapRun {
       if (!cleared.empty()) return fail("reparse_point", RollbackEnd::kBlocked, {{"folder", cleared}});
       return fail("move_failed", RollbackEnd::kBlocked, {{"win32_error", last_error_}});
     }
-    if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(journal))) {
+    if (!WriteJson(UpdateFile(names::kSwapJson), JournalJson(runtime_file_, journal))) {
       if (killed_) return RollbackEnd::kBlocked;
       return fail("journal_write_failed", RollbackEnd::kBlocked, {{"win32_error", last_error_}});
     }
@@ -1194,7 +1239,7 @@ class SwapRun {
     }
     json files = json::array();
     for (const names::Member& member : journal.in) {
-      files.push_back({{"path", names::MemberPath(member)}, {"sha256", Facts(InRoot(member)).sha256}});
+      files.push_back({{"path", MemberFile(runtime_file_, member)}, {"sha256", Facts(InRoot(member)).sha256}});
     }
     json fields = common;
     fields["files"] = files;
@@ -1209,7 +1254,7 @@ class SwapRun {
     PendingFacts facts = ReadPendingFacts(fs_, update_, std::string(), finished_swap_);
     if (facts.pending_read == ReadResult::kOk) {
       // The root's runtime is measured only when a record is pending: the decision compares the record's release with it.
-      const ArtifactFacts runtime = Facts(Abs(kRuntimeRelative));
+      const ArtifactFacts runtime = Facts(Abs(runtime_file_));
       if (runtime.present) facts.root_runtime_sha256 = runtime.sha256;
     }
     const PendingDecision decision = nevr_update::DecidePending(facts, [this]() { return WriteAccessOf(RuntimeWrite()); });
@@ -1264,7 +1309,8 @@ class SwapRun {
       case PendingAction::kCountTry:
         // One more try. The count is written, or the start says it could not be.
         if (WriteJson(UpdateFile(names::kPendingJson), decision.counted)) {
-          RecordTrial("counted", "try", pending, pending.boot_attempts + 1);
+          counted_attempts_ = pending.boot_attempts + 1;
+          RecordTrial("counted", "try", pending, counted_attempts_);
         } else {
           if (killed_) return PendingStep::kHold;
           RecordRollback("blocked", "pending_write_failed", {{"win32_error", last_error_}});
@@ -1300,6 +1346,7 @@ class SwapRun {
   std::uint64_t started_;
   char sep_ = '\\';
   std::string root_;
+  std::string runtime_file_;  // the runtime's file in the root (StartContext::runtime_file)
   std::string update_;
   json state_ = json::object();
   int moves_ = 0;
@@ -1309,6 +1356,8 @@ class SwapRun {
   // A swap's cleanup this start finished: that swap's start was killed before its runtime could load, so this start's load
   // is the release's first try, not a second.
   bool finished_swap_ = false;
+  // The boot_attempts this start wrote into pending.json as its own try; 0 when it counted none (StartResult).
+  std::uint64_t counted_attempts_ = 0;
 };
 
 }  // namespace
@@ -1455,6 +1504,9 @@ PendingFailure ClassifyPendingFailure(LoadClass load, bool code_before_entry) no
   switch (load) {
     case LoadClass::kNeverRan: return PendingFailure::kNeverRan;
     case LoadClass::kEntryOnly:
+      // A runtime whose constructors ran (PC: DllMain, at the map) is mapped and stays so; one that ran no code before its entry
+      // (the Quest runtime, no constructors) never ran, so the previous release is put back in the same start.
+      return code_before_entry ? PendingFailure::kMapped : PendingFailure::kNeverRan;
     case LoadClass::kInitFailed:
       // code_before_entry does not change the answer yet: both answers are kMapped. ADR 0024, section 6 (R1), defines the answer for a
       // runtime whose code ran, and RuntimeLoaderEdge::CodeBeforeEntry (edges.h) is the input that would split the two.
@@ -1491,6 +1543,16 @@ StartResult RollBackNowIn(const StartContext& context, const char* reason) noexc
     }
   } catch (const std::exception&) {
     return {StartAction::kStop, "internal_error", false};
+  }
+}
+
+bool UncountTryIn(const StartContext& context, std::uint64_t counted_attempts, const char* reason) noexcept {
+  if (reason == nullptr) return false;
+  try {
+    SwapRun start(context);
+    return start.UncountTry(counted_attempts, reason);
+  } catch (const std::exception&) {
+    return false;
   }
 }
 

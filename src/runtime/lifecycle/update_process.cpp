@@ -11,9 +11,7 @@
 
 #include "core/logging.h"
 #include "core/nevr_root.h"
-#ifdef NEVR_UPDATE_CORE_LINKED
-#include "installer/include/nevr_install.h"
-#endif
+#include "core/update/core_ffi.h"
 #include "runtime/ext/plugin_signature.h"
 #include "runtime/ext/plugin_trust.h"
 #include "runtime/host/file_digest.h"
@@ -29,66 +27,6 @@ static_assert(EchoLevelBits(kDebug) == static_cast<int>(EchoVR::LogLevel::Debug)
 static_assert(EchoLevelBits(kInfo) == static_cast<int>(EchoVR::LogLevel::Info));
 static_assert(EchoLevelBits(kWarning) == static_cast<int>(EchoVR::LogLevel::Warning));
 static_assert(EchoLevelBits(kError) == static_cast<int>(EchoVR::LogLevel::Error));
-
-// The core's C ABI (installer/include/nevr_install.h), statically linked into this DLL (ADR 0024, section 3: one signed file, no
-// extra DLL for the plugin gate to verify). One session per check. The session is used from one thread at a time: the check thread.
-#ifdef NEVR_UPDATE_CORE_LINKED
-Core MakeFfiCore() {
-  auto session = std::make_shared<NevrSession*>(nullptr);
-  Core core;
-  core.open = [session](const std::string& config_json, std::string* error) {
-    NevrSession* s = nullptr;
-    if (NevrInstallOpen(config_json.c_str(), &s) != NEVR_OK || s == nullptr) {
-      if (error != nullptr) *error = "NevrInstallOpen failed";
-      return false;
-    }
-    *session = s;
-    return true;
-  };
-  core.manifest_fetch = [session](std::string* error) {
-    if (NevrManifestFetch(*session) == NEVR_OK) return true;
-    if (error != nullptr) *error = NevrLastError(*session);
-    return false;
-  };
-  core.stage = [session](const std::string& root_dir, const std::string& current_json, std::string* result, std::string* error) {
-    char* out = nullptr;
-    if (NevrPcStage(*session, root_dir.c_str(), current_json.c_str(), &out) != NEVR_OK) {
-      if (error != nullptr) *error = NevrLastError(*session);
-      if (out != nullptr) NevrStringFree(out);
-      return false;
-    }
-    if (out != nullptr) {
-      *result = out;
-      NevrStringFree(out);
-    }
-    return true;
-  };
-  core.run_end = [session](const std::string& state, const std::string& reason) {
-    if (*session != nullptr) NevrRunEnd(*session, state.c_str(), reason.c_str());
-  };
-  core.discard = [session](const std::string& root_dir, const std::string& version, const std::string& sha256, const std::string& reason,
-                           std::string* error) {
-    if (*session != nullptr && NevrPcDiscard(*session, root_dir.c_str(), version.c_str(), sha256.c_str(), reason.c_str()) == NEVR_OK) return true;
-    if (error != nullptr && *session != nullptr) *error = NevrLastError(*session);
-    return false;
-  };
-  core.close = [session] {
-    if (*session != nullptr) NevrClose(*session);
-    *session = nullptr;
-  };
-  return core;
-}
-#else
-// A build configured with -DNEVR_UPDATE_CORE=OFF has no core to call: the check ends in `update check action=failed reason=core_open_failed`.
-Core MakeFfiCore() {
-  Core core;
-  core.open = [](const std::string&, std::string* error) {
-    if (error != nullptr) *error = "this build does not link the core install method";
-    return false;
-  };
-  return core;
-}
-#endif
 
 // The version and the sha256 of the file this process loaded: the runtime's own module file, read once on the worker's thread. The
 // version is the one in its NEVR-BUILD literal, the same source the host reads for `from` in its swap.
@@ -178,7 +116,7 @@ void StartProcessWorker(bool host_can_swap, bool flag_no_update, bool server) {
   }
   deps.fs = &Win32UpdateFs();
   deps.read_running = &ReadRunningRuntime;
-  deps.core = MakeFfiCore();
+  deps.core = nevr_update::MakeFfiCore(nullptr);  // the PC stage: NevrPcStage, the windows-zip profile
   deps.verify = WidenVerifier(&VerifyStaged);
   deps.log = [](int level, const std::string& line) {
     Log(static_cast<EchoVR::LogLevel>(EchoLevelBits(level)), "%s", line.c_str());

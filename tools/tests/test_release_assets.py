@@ -16,8 +16,56 @@ def listed(version="5.5.0"):
 
 
 class ReleaseAssetsTest(unittest.TestCase):
-    def test_the_release_lists_exactly_these_two_names(self):
-        self.assertEqual(listed(), ["nevr-runtime-v5.5.0-windows.zip", "nevr-runtime-v5.5.0-quest-libovrplatformloader.so"])
+    def test_the_release_lists_exactly_these_three_names(self):
+        self.assertEqual(listed(), ["nevr-runtime-v5.5.0-windows.zip", "nevr-runtime-v5.5.0-quest-libovrplatformloader.so",
+                                    "nevr-runtime-v5.5.0-quest-runtime.so"])
+
+    def test_the_packager_and_the_shell_name_the_quest_runtime_library_the_same_way(self):
+        # Two sources by necessity (the shell list, the Python release set): this pins them to one spelling.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("package_release", REPO / "tools" / "package_release.py")
+        packager = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(packager)
+        out = subprocess.run(["bash", "-c", f'source "{NAMES}"; release_quest_runtime_asset_name 5.5.0'],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(packager.quest_runtime_asset_name("5.5.0"), out)
+        self.assertIn(out, listed())
+
+    def test_the_loader_downloader_names_the_quest_library_as_the_shell_list_does(self):
+        # quest_release_loader.asset_name is a Python mirror of release_quest_asset_name; this pins them to one spelling.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("quest_release_loader", REPO / "tools" / "quest_release_loader.py")
+        loader = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(loader)
+        out = subprocess.run(["bash", "-c", f'source "{NAMES}"; release_quest_asset_name 5.5.0'],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(loader.asset_name("5.5.0"), out)
+        self.assertIn(out, listed())
+
+    def test_the_quest_runtime_check_matches_the_version_and_commit_whole_and_needs_no_plugin_trust(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("package_release", REPO / "tools" / "package_release.py")
+        packager = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(packager)
+        commit = "a" * 40
+        blob = b"\x7fELF xx\x00NEVR-BUILD 5.5.0 " + commit.encode() + b"\x00yy"
+        self.assertEqual(packager.quest_runtime_problems(blob, "5.5.0", commit), [])
+        self.assertTrue(packager.quest_runtime_problems(blob, "5.5.0-dev.1", commit))
+        self.assertTrue(packager.quest_runtime_problems(blob, "5.5.0", "b" * 40))
+        self.assertTrue(packager.quest_runtime_problems(b"\x7fELF no literal", "5.5.0", commit))
+
+    def test_releasing_md_says_a_draft_built_before_the_runtime_asset_is_not_published(self):
+        flat = " ".join((REPO / "RELEASING.md").read_text(encoding="utf-8").split())
+        self.assertIn("Do not publish a draft built before this change.", flat)
+        self.assertIn("`tools/release_already_built.sh` lists the three names", flat)
+
+    def test_the_build_copies_the_runtime_library_under_its_release_name_and_checks_its_identity(self):
+        build = (REPO / ".github/workflows/build.yml").read_text(encoding="utf-8")
+        self.assertIn('runtime=build/android-arm64/sentinel/libnevr-runtime.so', build)
+        self.assertIn('runtime_out="quest-asset/$(release_quest_runtime_asset_name "$version")"', build)
+        self.assertIn('python3 tools/package_release.py quest-runtime --lib "$runtime" --version "$version" --commit "$GITHUB_SHA"', build)
+        window = build.split("Name and check the release asset", 1)[1].split("Upload the Quest library", 1)[0]
+        self.assertNotRegex(window, r"(?m)^\s*(llvm-)?strip\s")
 
     def test_no_checksum_or_notes_file_and_no_second_windows_zip_is_a_release_asset(self):
         names = listed()

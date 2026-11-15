@@ -10,6 +10,11 @@
 
 #include "core/quest_runtime_abi.h"
 
+// The NEVR-BUILD literal the update start reads a fixture's version from (core/build_literal_scan.h): the NUL that starts it, the
+// prefix, the version, a space, a 40-digit commit and the closing NUL. Every mode carries it, so a fixture in the root names a version.
+extern "C" __attribute__((used, visibility("default"))) const char NEVR_FixtureBuildLiteral[] =
+    "\0NEVR-BUILD 6.18.0 0123456789abcdef0123456789abcdef01234567";
+
 namespace {
 
 /// The status initialize returns in the init-failed mode, which the test expects in the record.

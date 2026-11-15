@@ -10,6 +10,7 @@
 #include <elf.h>
 #include <sys/mman.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -334,7 +335,7 @@ int GameOriginal(std::uint64_t* /*version*/) { return 0; }
 
 constexpr std::size_t kSlotImageBytes = 4 * 4096;
 constexpr std::uint64_t kSlotStrtab = 0x100, kSlotSymtab = 0x200, kSlotJmprel = 0x400, kSlotDynamic = 0x1800;
-constexpr std::uint64_t kSlotAt = 0x3008;  // a writable slot, not RELRO
+constexpr std::uint64_t kSlotAt = 0x3008;  // a writable slot, not RELRO (the small fixture's; a whole one uses the pinned slot)
 constexpr std::uint64_t kSlotNoteAt = 0x3800;  // the build note of a whole-library fixture, inside its one PT_LOAD
 constexpr std::size_t kNoteBytes = sizeof(Elf64_Nhdr) + 4 + 20;  // header, "GNU\0", a 20-byte build ID
 constexpr std::uint32_t kStockBodyWord = 0xd10283ffU;  // sub sp, sp, #0xa0: the stock body (os_build_gate_hook.cpp)
@@ -345,16 +346,20 @@ constexpr std::size_t kPageBytes = 4096;
 // dynamic pointers (the Bionic shape), so the image is mapped at its own address. Kept for the process's life: the hook
 // stays installed in it.
 struct SlotImage {
+  std::uint64_t slotAt;  // the slot's address in the image, and its relocation's r_offset
   unsigned char* mem = nullptr;
   Elf64_Phdr phdr[3] = {};
   sentinel::ElfImage image;
 
   // `whole`: also the pinned build's note, the stock first instruction word at the pinned OSBuildVersion address and the
-  // floor at the pinned floor address, as Install reads them. The mapping then reaches the floor's address (about 46 MB,
-  // reserved and never touched except those pages).
-  explicit SlotImage(bool whole = false) {
+  // floor at the pinned floor address, as Install reads them, and the slot at the JUMP_SLOT address Install's target pins
+  // (pinned::LibR15OSBuildVersion), which the hook manager refuses any other relocation for (slot_offset_mismatch). The
+  // mapping and its PT_LOAD then reach the slot's address (about 55 MB, reserved and never touched except those pages).
+  explicit SlotImage(bool whole = false)
+      : slotAt(whole ? *sentinel::pinned::LibR15OSBuildVersion().slotVaddr : kSlotAt) {
     const std::size_t bytes =
-        whole ? static_cast<std::size_t>(sentinel::pinned::kMinOSBuildVersionVaddr) + kPageBytes : kSlotImageBytes;
+        whole ? static_cast<std::size_t>(std::max(slotAt, sentinel::pinned::kMinOSBuildVersionVaddr)) + kPageBytes
+              : kSlotImageBytes;
     void* const region =
         mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     QCHECK(region != MAP_FAILED);
@@ -366,7 +371,7 @@ struct SlotImage {
     syms[1].st_name = 1;
     std::memcpy(mem + kSlotSymtab, syms, sizeof(syms));
     Elf64_Rela rel{};
-    rel.r_offset = kSlotAt;
+    rel.r_offset = slotAt;
     rel.r_info = ELF64_R_INFO(1, sentinel::kNativeRelocs.jumpSlot);
     std::memcpy(mem + kSlotJmprel, &rel, sizeof(rel));
     Elf64_Dyn dyn[8] = {};
@@ -386,12 +391,12 @@ struct SlotImage {
     add(DT_NULL, 0);
     std::memcpy(mem + kSlotDynamic, dyn, sizeof(dyn));
     void* const original = reinterpret_cast<void*>(&GameOriginal);
-    std::memcpy(mem + kSlotAt, &original, sizeof(original));
+    std::memcpy(mem + slotAt, &original, sizeof(original));
 
     phdr[0].p_type = PT_LOAD;
     phdr[0].p_flags = PF_R | PF_W;
-    phdr[0].p_filesz = kSlotImageBytes;
-    phdr[0].p_memsz = kSlotImageBytes;
+    phdr[0].p_filesz = bytes;
+    phdr[0].p_memsz = bytes;
     phdr[1].p_type = PT_DYNAMIC;
     phdr[1].p_flags = PF_R | PF_W;
     phdr[1].p_vaddr = kSlotDynamic;
@@ -424,7 +429,7 @@ struct SlotImage {
       std::memcpy(mem + sentinel::pinned::kMinOSBuildVersionVaddr, &floor, sizeof(floor));
     }
   }
-  void** Slot() const { return reinterpret_cast<void**>(mem + kSlotAt); }
+  void** Slot() const { return reinterpret_cast<void**>(mem + slotAt); }
 };
 
 SlotImage& Fixture() {

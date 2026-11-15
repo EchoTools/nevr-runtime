@@ -1,6 +1,6 @@
 // Host test for the CDN resolver pins (src/cdn/cdn_resolver.*; docs/adr/0045-cdn-texture-delivery.md D3 "A texture's pair"): the
 // shadow that answers a texture's index 0 answers its index 1, on that thread, however many sets are published between the two, and a
-// thread that saw no CDN at index 0 sees none at index 1. Distinct threads have distinct pins, kept in thread-local storage like the
+// thread that saw no CDN at index 0 sees none at index 1. Distinct threads have distinct pins, kept in per-thread storage (pthread keys on POSIX) like the
 // game's own per-thread state, so no number of threads can fill a table.
 //
 // Built and run by `just test-quest-data`.

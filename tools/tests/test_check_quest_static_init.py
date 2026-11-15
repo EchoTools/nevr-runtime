@@ -156,6 +156,21 @@ cat {fix}/obj_$base
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("OK (2 .init_array entries", result.stdout)
 
+    def test_a_plugin_may_carry_the_rust_core_cpu_feature_constructor(self) -> None:
+        # The runtime library's second entry is compiler-rt's CPU-feature constructor under the name Rust's compiler-builtins gives it.
+        (self.fix / "sections").write_text(SECTIONS.replace("000018", "000010"))
+        (self.fix / "symbols").write_text(SYMBOLS.replace("init_cpu_features", "__init_cpu_features"))
+        result = self.run_check(plugin=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("OK (2 .init_array entries", result.stdout)
+
+    def test_the_sentinel_may_not_carry_the_rust_core_cpu_feature_constructor(self) -> None:
+        # The shim links no Rust core: its allowance is the NDK's own name only.
+        (self.fix / "symbols").write_text(SYMBOLS.replace("init_cpu_features", "__init_cpu_features"))
+        result = self.run_check(self.add_object("a.o"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("__init_cpu_features", result.stderr)
+
     def test_a_plugin_with_no_init_array_passes(self) -> None:
         (self.fix / "sections").write_text("\n".join(l for l in SECTIONS.splitlines() if ".init_array" not in l) + "\n")
         result = self.run_check(plugin=True)

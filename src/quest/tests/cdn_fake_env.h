@@ -95,6 +95,9 @@ class FakeEnv : public nevr_cdn::Env {
   std::function<bool()> allow_get;                   // when set and false, a GET is cancelled before it starts (a shutdown)
   std::vector<Record> records;                       // every event, with its fields
   std::map<std::string, int> corrupt_times;          // by URL: the next N responses flip the body's first byte
+  // The PC's share modes (src/cdn/env_windows.cpp): an append handle shares only reading, a blob handle shares only reading, so a
+  // blob cannot be opened while an append handle is live on its file, and an appender cannot open a file a blob handle holds.
+  bool windows_sharing = false;
   static nevr_cdn::DeviceFacts DefaultDevice() {
     nevr_cdn::DeviceFacts d;
     d.have_free = true;
@@ -127,11 +130,15 @@ class FakeEnv : public nevr_cdn::Env {
   class FakeAppend : public nevr_cdn::AppendFile {
    public:
     FakeAppend(FakeEnv* env, std::string path) : env_(env), path_(std::move(path)) {
+      ++env_->appenders_[path_];
       if (env_->fs_->files.find(path_) == env_->fs_->files.end()) {
         env_->fs_->files[path_];  // created when absent
         env_->fs_->Wrote(path_);
       }
     }
+    ~FakeAppend() override { --env_->appenders_[path_]; }
+    FakeAppend(const FakeAppend&) = delete;
+    FakeAppend& operator=(const FakeAppend&) = delete;
     std::uint64_t Size() const override { return env_->fs_->files[path_].size(); }
     bool Append(const void* data, std::size_t length) override {
       if (!env_->Tick()) return false;
@@ -160,6 +167,11 @@ class FakeEnv : public nevr_cdn::Env {
 
   std::unique_ptr<nevr_cdn::AppendFile> OpenAppend(const std::string& path) override {
     if (Dead()) return nullptr;
+    if (windows_sharing) {
+      for (const auto& h : open_) {
+        if (h.second == path) return nullptr;  // a blob handle on this file admits no writer
+      }
+    }
     return std::unique_ptr<nevr_cdn::AppendFile>(new FakeAppend(this, path));
   }
   bool QueryDevice(const std::string&, nevr_cdn::DeviceFacts* out) override {
@@ -177,6 +189,7 @@ class FakeEnv : public nevr_cdn::Env {
   bool OpenBlob(const std::string& path, std::int64_t* handle, std::uint64_t* size) override {
     const auto it = fs_->files.find(path);
     if (it == fs_->files.end()) return false;
+    if (windows_sharing && appenders_[path] > 0) return false;  // the live append handle has write access: a sharing violation
     *handle = next_handle_++;
     open_[*handle] = path;
     *size = it->second.size();
@@ -311,6 +324,7 @@ class FakeEnv : public nevr_cdn::Env {
  private:
   std::int64_t next_handle_ = 100;
   std::map<std::int64_t, std::string> open_;
+  std::map<std::string, int> appenders_;  // live append handles by path
 };
 
 // A stored frame that satisfies the validator: the zstd magic, a single-segment header that states `bytes` as its content size, then

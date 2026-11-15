@@ -37,12 +37,30 @@ func probePath(t *testing.T) string {
 	return p
 }
 
+// The header readelf prints before each section it dumps, and the one of the section framesOf reads.
+const (
+	sectionContentsPrefix = "Contents of the "
+	ehFrameContents       = "Contents of the .eh_frame section:"
+)
+
+// framesOf reads the .eh_frame section only: it is what the unwinder reads at run time. A library that keeps its debug info also
+// has a .debug_frame, whose CIE offsets start at 0 again and whose augmentation is empty, so mixing the two would hand an FDE the
+// augmentation of another section's CIE.
 func framesOf(t *testing.T, path string) (map[string]string, map[uint64]string) {
 	t.Helper()
 	cieAug := map[string]string{}
 	fdeCIE := map[uint64]string{}
 	current := ""
+	inEhFrame := false
 	for _, line := range strings.Split(run(t, "readelf", "--debug-dump=frames", path), "\n") {
+		if strings.HasPrefix(line, sectionContentsPrefix) {
+			inEhFrame = line == ehFrameContents
+			current = ""
+			continue
+		}
+		if !inEhFrame {
+			continue
+		}
 		if m := cieRe.FindStringSubmatch(line); m != nil {
 			current = m[1]
 			continue

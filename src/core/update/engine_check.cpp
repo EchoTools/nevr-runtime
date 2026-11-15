@@ -33,8 +33,9 @@ struct Paths {
   std::string UpdateFile(const char* name) const { return Join(Update(), name); }
   std::string Staging() const { return Join(Update(), names::kStagingDir); }
   // A member's path inside a release's folder, written with the fs's separator ("plugins/<name>.dll" has a slash in the files).
-  std::string MemberIn(const std::string& folder, const names::Member& member) const {
-    std::string rel = names::MemberPath(member);
+  // `member_path` is a path ParseStageResult accepted (names.h ParseMemberOf), so it never leaves the folder.
+  std::string MemberIn(const std::string& folder, const std::string& member_path) const {
+    std::string rel = member_path;
     std::replace(rel.begin(), rel.end(), '/', fs.Separator());
     return Join(folder, rel);
   }
@@ -67,9 +68,28 @@ std::string VersionWord(const std::string& v) { return names::IsVersionName(v) ?
 
 // ---- the core's error text is classified, never logged (logging Rule 4: remote text is not a field) -----------------------
 
-// A manifest that failed a check of the method (ADR 0023: "FAIL step N") is not the network.
+// The core displays every error as "FAIL step N: <message>" (installer/src/error.rs; ADR 0023: the nine steps). Step 1 is the fetch
+// (installer/src/session.rs), so a step-1 error is the connection (network); a step of 2 or more is a manifest that failed a check
+// (manifest_check). The step is read strictly from the start of the text; text that does not parse is manifest_check, because the
+// connection is claimed only when the core says it was the fetch.
+constexpr char kCoreErrorPrefix[] = "FAIL step ";
+constexpr unsigned kFetchStep = 1;
+constexpr unsigned kDecimalBase = 10;
+constexpr std::size_t kStepDigitsMax = 9;  // every step the core numbers fits in 9 digits; a longer run stops short of the ':' and is not a step
+
 const char* ManifestReason(const std::string& core_error) {
-  return core_error.find("FAIL step") != std::string::npos ? "manifest_check" : "network";
+  const std::string prefix = kCoreErrorPrefix;
+  if (core_error.compare(0, prefix.size(), prefix) != 0) return "manifest_check";
+  std::size_t at = prefix.size();
+  unsigned step = 0;
+  std::size_t digits = 0;
+  while (at < core_error.size() && core_error[at] >= '0' && core_error[at] <= '9' && digits < kStepDigitsMax) {
+    step = step * kDecimalBase + static_cast<unsigned>(core_error[at] - '0');
+    ++at;
+    ++digits;
+  }
+  const bool parsed = at < core_error.size() && core_error[at] == ':';
+  return parsed && step == kFetchStep ? "network" : "manifest_check";
 }
 
 struct CoreRun {
@@ -145,6 +165,7 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
       f.push_back({"action", CheckActionWord(action)});
       if (!reason.empty()) f.push_back({"reason", reason});
       if (channel.config_rejected) f.push_back({"config_channel_rejected", "true"});
+      if (env.source.has_value()) f.push_back({"source_override", "true"});
       f.push_back({"elapsed_ms", std::to_string(now >= started ? now - started : 0)});
       Emit(env.log, action == CheckAction::kFailed ? kWarning : kInfo, "update check", f);
       return out;
@@ -177,6 +198,10 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
 
     json config = {{"platform", env.platform}, {"nevr_root", env.root}};
     if (!channel.name.empty()) config["channel"] = channel.name;
+    if (env.source.has_value()) {
+      config["base"] = env.source->base;
+      if (!env.source->pins.empty()) config["pins"] = env.source->pins;
+    }
 
     CoreRun run(env.core);
     std::string error;
@@ -196,8 +221,10 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
       return done(CheckAction::kFailed, "stage_failed", "", "");
     }
 
+    // The member set is the platform's: libnevr-runtime.so alone on Quest, nevr-runtime.dll and its plugins on PC.
+    const char* runtime_file = names::RuntimeMemberFor(env.platform);
     StageResult staged;
-    if (!ParseStageResult(result_text, &staged, &error)) {
+    if (!ParseStageResult(result_text, &staged, &error, runtime_file)) {
       run.Finish("unchanged", "bad_result");
       return done(CheckAction::kFailed, "bad_result", "", "");
     }
@@ -224,11 +251,9 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
     bool all_ok = true;
     bool refused = false;
     for (const StagedFile& file : staged.files) {
-      names::Member member;
-      names::ParseMember(file.path, &member);  // parsed once already (ParseStageResult)
-      const std::string path = paths.MemberIn(folder, member);
+      const std::string path = paths.MemberIn(folder, file.path);
       VerifyOutcome v;
-      if (env.verify) v = env.verify(path);
+      if (env.verify) v = env.verify(path, ExpectedFile{file.size, file.sha256});
       Emit(env.log, v.ok ? kInfo : kWarning, "update verify",
            {{"path", file.path}, {"version", staged.version}, {"ok", v.ok ? "true" : "false"},
             {"reason", v.ok ? std::string("accepted") : v.reason}});
@@ -242,7 +267,7 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
         // could not be read is not a refusal (a scanner's lock): nothing is recorded, and the next launch tries again.
         std::string runtime_sha;
         for (const StagedFile& f : staged.files) {
-          if (f.path == names::kRuntimeMember) runtime_sha = f.sha256;
+          if (f.path == runtime_file) runtime_sha = f.sha256;
         }
         std::string discard_error;
         const bool recorded = env.core.discard && env.core.discard(env.root, staged.version, runtime_sha, "verify_failed", &discard_error);

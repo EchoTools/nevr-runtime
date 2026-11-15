@@ -39,6 +39,19 @@ struct HostInputs {
   const char* shim_version = nullptr;     ///< the shim's NEVR-BUILD version
   std::uint32_t variant = 0;              ///< the APK's variant word (build_variant::Variant numbering)
   NevrQuestLogFn log = nullptr;           ///< the shim's log sink; null when there is none
+  /// Called once, after the runtime is mapped and its descriptor validated, and before `initialize`: the update start releases
+  /// update\lock here, so the runtime's worker can take it (the PC load releases its lock at the same point). Null: nothing.
+  void (*before_initialize)(void* arg) noexcept = nullptr;
+  void* before_initialize_arg = nullptr;
+  /// The capability word handed to the runtime (NevrQuestHostContext::capabilities). Bit 0, the staged swap, is set only by a caller
+  /// whose update start (update_start.h) ran to a decision; every other load passes 0.
+  std::uint64_t capabilities = 0;
+};
+
+/// Where the loaded file came from: the APK's baseline, or the update root's runtime (the staged swap, piece 15).
+enum class Source : std::uint8_t {
+  kBaseline,  ///< the APK's libnevr-runtime.so, covered by the APK signature
+  kUpdate,    ///< update\...\libnevr-runtime.so in the update root, put there by the engine's swap
 };
 
 /// How a start ended. OutcomeName gives the record's `outcome` token.
@@ -60,10 +73,15 @@ const char* OutcomeName(Outcome outcome) noexcept;
 int OpenBaselineIn(const char* dir) noexcept;
 
 /// Maps `fd` as the runtime, resolves NEVR_GetRuntimeApi, validates the descriptor, and calls `initialize` once with a context
-/// built from `host` (abi major and minor from core/quest_runtime_abi.h, capabilities 0: the staged swap is not wired yet). It
-/// takes ownership of `fd` and closes it before it returns; the mapping stays. `file` is the basename the record names.
-/// Writes exactly one runtime_load record through host.log (Info when loaded, Error otherwise).
-Outcome LoadRuntimeFromFd(int fd, const char* file, const HostInputs& host) noexcept;
+/// built from `host` (abi major and minor from core/quest_runtime_abi.h; its capabilities word is host.capabilities, which the caller
+/// sets). It takes ownership of `fd` and closes it before it returns; the mapping stays. `file` is the
+/// basename the record names. `source` is the record's `source` field. Writes exactly one runtime_load record through host.log
+/// (Info when loaded, Error otherwise).
+Outcome LoadRuntimeFromFd(int fd, const char* file, const HostInputs& host, Source source = Source::kBaseline) noexcept;
+
+/// Opens the update root's runtime at `path` with O_NOFOLLOW (a link there is refused) and loads it as LoadRuntimeFromFd with
+/// Source::kUpdate. A file that cannot be opened is outcome absent with the errno in its record.
+Outcome LoadUpdateFile(const char* path, const HostInputs& host) noexcept;
 
 /// The baseline start from `dir`: OpenBaselineIn, then LoadRuntimeFromFd. A file that cannot be opened is outcome absent with
 /// the errno in its record.

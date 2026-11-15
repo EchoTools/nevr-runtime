@@ -24,6 +24,7 @@ TOOL = ROOT / "tools" / "rollback_beta.py"
 sys.path.insert(0, str(ROOT / "tools"))
 
 import rollback_beta  # noqa: E402 - the tool itself, for the tests that run it in this process
+import owned_remove  # noqa: E402 - the module whose remove_checked_tree calls shutil.rmtree (the cleanup's removal)
 
 SECRETS = {
     "R2_ENDPOINT": "https://sentinel-endpoint.invalid",
@@ -172,7 +173,7 @@ def signer(a):
         else:
             arts = m["releases"].get(version, {}).get("artifacts", [])
             print(json.dumps([{"name": x["name"], "sha256": x["sha256"], "size": x["size"]} for x in arts
-                              if x["kind"] not in ("windows-zip", "quest-library")]))
+                              if x["kind"] not in ("windows-zip", "quest-library", "quest-runtime")]))
 
 
 def build_tool(who, a):
@@ -477,6 +478,16 @@ class Refusals(RollbackCase):
         proc = self.run_tool("v5.17.0", "--dry-run")
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("without a name and a sha256", proc.stderr)
+
+    def test_a_release_listing_the_quest_runtime_library_is_not_refused_for_a_claim_it_cannot_have(self) -> None:
+        # quest-runtime is held by GitHub like windows-zip and quest-library, so listed-claims never prints it.
+        m = manifest("5.18.0")
+        runtime = {"name": "nevr-runtime-v5.17.0-quest-runtime.so", "kind": "quest-runtime", "platform": "android-arm64",
+                   "sha256": hashlib.sha256(b"rt").hexdigest(), "size": 7}
+        m["releases"]["5.17.0"]["artifacts"].append(runtime)
+        self.set_manifest(m)
+        proc = self.run_tool("v5.17.0", "--dry-run")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
     def test_a_claim_the_listed_release_does_not_carry_is_refused(self) -> None:
         self.configure(claims=[{"name": "nevr-runtime-v5.17.0-quest.apk", "sha256": "f" * 64, "size": 1}])
@@ -932,11 +943,11 @@ class FailurePaths(RollbackCase):
 
     def test_a_cleanup_that_fails_after_a_verified_rollback_says_so_and_exits_zero(self) -> None:
         env = {k: v for k, v in self.env.items() if k not in ("RELEASE_SIGNER_BIN", "RELEASE_SIGNER_DIR")}
-        with mock.patch.object(rollback_beta.shutil, "rmtree", side_effect=OSError(13, "Permission denied")):
+        with mock.patch.object(owned_remove.shutil, "rmtree", side_effect=OSError(13, "Permission denied")):
             code, out, err = self.run_inproc("v5.17.0", "--live", "--yes", env=env)
         self.assertEqual(code, 0, err)
         self.assertIn("rolled back and verified; cleanup of ", err)
-        self.assertIn(" failed: Permission denied", err)
+        self.assertIn(" failed: [Errno 13] Permission denied", err)
         self.assertNotIn("not confirmed", err + out)
         self.assertNotIn("undo", err)
         self.assertIn("cleanup_failed", [r["event"] for r in self.records()])

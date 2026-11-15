@@ -86,7 +86,7 @@ func execute(args []string, getenv func(string) string, stdout, stderr io.Writer
 	}
 	wr := *workRoot
 	if wr == "" {
-		root, err := runroot.WorkRoot(os.Getenv)
+		root, err := runroot.WorkRoot(getenv)
 		if err != nil {
 			fmt.Fprintf(stderr, "run-copy: %v\n", err)
 			return exitUsage

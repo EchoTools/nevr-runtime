@@ -139,7 +139,24 @@ target_include_directories(ovrplatformloader PRIVATE
   ${CMAKE_BINARY_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/breakpad/src)
 
-target_link_libraries(ovrplatformloader PRIVATE zstd::libzstd nevr::plugin_sdk nevr_quest_got_hook nevr_quest_config nlohmann_json::nlohmann_json nevr_quest_prompt_board nevr_quest_data_wiring nevr_quest_invite_join nevr_quest_cdn nevr_quest_combat nevr_quest_data_net nevr_quest_data nevr_quest_atomic_write nevr_quest_symcache breakpad_client log dl)
+# The update start (piece 15): the shared start decision, its POSIX edge and the names it reads (core/update), with the shim's edges and
+# the load that follows the decision (shim/update_start.cpp). Its own library: the runtime target takes the shim's link libraries but
+# not its sources, so it links the same archive members the shim does and no object twice. The engine is built with exceptions: the start catches its
+# own failures (update_start.h). Never a load-time initializer: tools/check_quest_static_init.sh runs on the shim.
+add_library(nevr_quest_update_start STATIC
+  ../shim/update_start.cpp
+  "${NEVR_REPO_ROOT}/src/core/update/engine_start.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/names.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/fs_posix.cpp")
+set_source_files_properties(
+  ../shim/update_start.cpp
+  "${NEVR_REPO_ROOT}/src/core/update/engine_start.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/names.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/fs_posix.cpp"
+  PROPERTIES COMPILE_OPTIONS -fexceptions)
+target_link_libraries(nevr_quest_update_start PUBLIC nlohmann_json::nlohmann_json nevr_quest_data)
+
+target_link_libraries(ovrplatformloader PRIVATE zstd::libzstd nevr::plugin_sdk nevr_quest_got_hook nevr_quest_config nlohmann_json::nlohmann_json nevr_quest_prompt_board nevr_quest_data_wiring nevr_quest_invite_join nevr_quest_cdn nevr_quest_combat nevr_quest_data_net nevr_quest_data nevr_quest_atomic_write nevr_quest_symcache nevr_quest_update_start breakpad_client log dl)
 # The custom-map channel (docs/adr/0048): its core, the map sets, route B's map scripts and the production start (src/quest/cdn/maps.cmake).
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cdn/maps.cmake")
 
@@ -247,11 +264,66 @@ get_target_property(NEVR_QUEST_RUNTIME_LIBRARIES ovrplatformloader LINK_LIBRARIE
 get_target_property(NEVR_QUEST_RUNTIME_INCLUDES ovrplatformloader INCLUDE_DIRECTORIES)
 get_target_property(NEVR_QUEST_RUNTIME_OPTIONS ovrplatformloader COMPILE_OPTIONS)
 
+# The core install method (installer/, ADR 0023) for the Quest runtime (docs/adr/0024-pc-self-update.md, section 3): the same Rust
+# sources as the PC runtime, built as a staticlib for aarch64-linux-android from the committed Cargo.lock (--locked) and linked into
+# libnevr-runtime.so. NEVR_UPDATE_CORE is ON, OFF or AUTO, as in src/runtime/CMakeLists.txt: AUTO links it when cargo is found, OFF
+# builds the runtime without it (every check then ends in core_open_failed), ON makes a missing cargo an error. The C compiler and the
+# archiver are this configuration's own (the NDK's CMAKE_C_COMPILER and CMAKE_AR), so no machine path is named here. The libraries
+# rustc names for the target (`cargo rustc --print native-static-libs`) are the INTERFACE list below.
+set(NEVR_UPDATE_CORE AUTO CACHE STRING "Link the Rust core install method into libnevr-runtime.so for Quest self-update: ON, OFF or AUTO (on when cargo is found)")
+set_property(CACHE NEVR_UPDATE_CORE PROPERTY STRINGS AUTO ON OFF)
+set(NEVR_UPDATE_CORE_QUEST_LINKED OFF)
+if(NOT NEVR_UPDATE_CORE STREQUAL "OFF")
+  find_program(NEVR_CARGO cargo HINTS "$ENV{CARGO_HOME}/bin" "$ENV{HOME}/.cargo/bin")
+  if(NEVR_CARGO)
+    set(NEVR_UPDATE_CORE_QUEST_LINKED ON)
+  elseif(NEVR_UPDATE_CORE STREQUAL "ON")
+    message(FATAL_ERROR "NEVR_UPDATE_CORE=ON: libnevr-runtime.so links the Rust core install method (ADR 0024) and cargo was not found. "
+                        "Install a Rust toolchain with the aarch64-linux-android target.")
+  else()
+    message(WARNING "cargo was not found: libnevr-runtime.so is built WITHOUT the core install method and will never update itself "
+                    "(ADR 0024). Install a Rust toolchain, or pass -DNEVR_UPDATE_CORE=OFF to silence this.")
+  endif()
+endif()
+if(NEVR_UPDATE_CORE_QUEST_LINKED)
+  # Cargo links with the NDK's per-API clang wrapper (aarch64-linux-android<api>-clang): the bare clang in CMAKE_C_COMPILER carries its
+  # target only in CMake's flags, which cargo does not pass, so the link cannot find the API's libraries (-llog).
+  string(REGEX MATCH "[0-9]+$" NEVR_QUEST_API_LEVEL "${ANDROID_PLATFORM}")
+  if(NEVR_QUEST_API_LEVEL STREQUAL "")
+    message(FATAL_ERROR "ANDROID_PLATFORM (${ANDROID_PLATFORM}) names no API level: the core's linker wrapper cannot be found")
+  endif()
+  get_filename_component(NEVR_QUEST_NDK_BIN "${CMAKE_C_COMPILER}" DIRECTORY)
+  set(NEVR_QUEST_CARGO_CC "${NEVR_QUEST_NDK_BIN}/aarch64-linux-android${NEVR_QUEST_API_LEVEL}-clang")
+  set(NEVR_QUEST_INSTALL_DIR "${CMAKE_BINARY_DIR}/installer-lib")
+  set(NEVR_QUEST_INSTALL_LIB "${NEVR_QUEST_INSTALL_DIR}/aarch64-linux-android/release/libnevr_install.a")
+  file(GLOB_RECURSE NEVR_QUEST_INSTALL_SOURCES CONFIGURE_DEPENDS "${NEVR_REPO_ROOT}/installer/src/*.rs")
+  add_custom_command(
+    OUTPUT "${NEVR_QUEST_INSTALL_LIB}"
+    COMMAND ${CMAKE_COMMAND} -E env
+            "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${NEVR_QUEST_CARGO_CC}"
+            "CC_aarch64_linux_android=${NEVR_QUEST_CARGO_CC}"
+            "AR_aarch64_linux_android=${CMAKE_AR}"
+            "${NEVR_CARGO}" build --locked --release --target aarch64-linux-android --lib
+            --manifest-path "${NEVR_REPO_ROOT}/installer/Cargo.toml" --target-dir "${NEVR_QUEST_INSTALL_DIR}"
+    DEPENDS ${NEVR_QUEST_INSTALL_SOURCES} "${NEVR_REPO_ROOT}/installer/Cargo.toml" "${NEVR_REPO_ROOT}/installer/Cargo.lock"
+            "${NEVR_REPO_ROOT}/installer/pinned-keys.txt"
+    COMMENT "Building the core install method (installer/) for libnevr-runtime.so"
+    VERBATIM)
+  add_custom_target(nevr_quest_install_core DEPENDS "${NEVR_QUEST_INSTALL_LIB}")
+  add_library(nevr_quest_install STATIC IMPORTED GLOBAL)
+  set_target_properties(nevr_quest_install PROPERTIES
+    IMPORTED_LOCATION "${NEVR_QUEST_INSTALL_LIB}"
+    INTERFACE_INCLUDE_DIRECTORIES "${NEVR_REPO_ROOT}"
+    INTERFACE_LINK_LIBRARIES "dl;log;unwind;m;c")
+  add_dependencies(nevr_quest_install nevr_quest_install_core)
+endif()
+
 add_library(nevr_quest_runtime SHARED
   ${NEVR_QUEST_RUNTIME_SOURCES}
   ../runtime/runtime_entry.cpp
   ../runtime/update_wiring.cpp
   # The update worker's engine (core/update, the same sources the PC runtime compiles) and the POSIX edge it runs on.
+  "${NEVR_REPO_ROOT}/src/core/update/core_ffi.cpp"
   "${NEVR_REPO_ROOT}/src/core/update/policy.cpp"
   "${NEVR_REPO_ROOT}/src/core/update/names.cpp"
   "${NEVR_REPO_ROOT}/src/core/update/engine_check.cpp"
@@ -263,6 +335,7 @@ set_target_properties(nevr_quest_runtime PROPERTIES OUTPUT_NAME nevr-runtime)
 # the PC's sources, written with try/catch (a thread of ours must never end the game's process), so those files are built with exceptions.
 set_source_files_properties(
   ../runtime/update_wiring.cpp
+  "${NEVR_REPO_ROOT}/src/core/update/core_ffi.cpp"
   "${NEVR_REPO_ROOT}/src/core/update/policy.cpp"
   "${NEVR_REPO_ROOT}/src/core/update/names.cpp"
   "${NEVR_REPO_ROOT}/src/core/update/engine_check.cpp"
@@ -270,6 +343,10 @@ set_source_files_properties(
   "${NEVR_REPO_ROOT}/src/core/update/fs_posix.cpp"
   PROPERTIES COMPILE_OPTIONS -fexceptions)
 target_compile_definitions(nevr_quest_runtime PRIVATE NEVR_QUEST_RUNTIME_LIBRARY=1)
+if(NEVR_UPDATE_CORE_QUEST_LINKED)
+  target_link_libraries(nevr_quest_runtime PRIVATE nevr_quest_install)
+  target_compile_definitions(nevr_quest_runtime PRIVATE NEVR_UPDATE_CORE_LINKED=1)
+endif()
 target_include_directories(nevr_quest_runtime PRIVATE ${NEVR_QUEST_RUNTIME_INCLUDES})
 target_compile_options(nevr_quest_runtime PRIVATE ${NEVR_QUEST_RUNTIME_OPTIONS})
 target_link_libraries(nevr_quest_runtime PRIVATE ${NEVR_QUEST_RUNTIME_LIBRARIES} nevr_quest_integration)

@@ -76,4 +76,23 @@ std::string MemberPath(const Member& member) {
   return std::string(kPluginPrefix) + member.plugin + kPluginSuffix;
 }
 
+const char* RuntimeMemberFor(std::string_view platform) noexcept {
+  return platform == std::string_view(kQuestPlatform) ? kQuestRuntimeMember : kRuntimeMember;
+}
+
+bool ParseMemberOf(std::string_view runtime_file, std::string_view path, Member* out) noexcept {
+  if (out == nullptr) return false;
+  if (path == runtime_file) {
+    out->runtime = true;
+    out->plugin.clear();
+    return true;
+  }
+  if (runtime_file == std::string_view(kQuestRuntimeMember)) return false;
+  return ParseMember(path, out) && !out->runtime;
+}
+
+std::string MemberPathOf(std::string_view runtime_file, const Member& member) {
+  return member.runtime ? std::string(runtime_file) : MemberPath(member);
+}
+
 }  // namespace nevr_update_names

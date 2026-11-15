@@ -51,9 +51,12 @@ bool IsKnown(const std::string& key, const char* const* known, std::size_t count
 }
 
 constexpr const char* kTopKeys[] = {"schema", "schema_version", "labels", "empty"};
-constexpr const char* kLabelKeys[] = {"entries"};
+constexpr const char* kLabelKeys[] = {"entries", "empty"};
 constexpr const char* kEntryKeys[] = {"platform", "type", "name", "format", "sha256", "size", "bytes", "align", "stock_size"};
 constexpr const char* kEmptyKeys[] = {"type", "name", "align"};
+constexpr const char* kLabelEmptyKeys[] = {"platform", "type", "name", "align"};
+// Two holders of one (type, name) on one platform are a duplicate: a key held twice is held by neither.
+constexpr std::size_t kDuplicateHolders = 2;
 
 ParseResult Fail(ParseStatus status, const std::string& label = std::string(), std::size_t index = 0) {
   ParseResult r;
@@ -120,16 +123,25 @@ ParseStatus ReadEntry(const json& v, Raw* raw, std::uint32_t* unknown) {
   return ParseStatus::kOk;
 }
 
-// One record of the `empty` list.
-ParseStatus ReadEmpty(const json& v, EmptyRecord* e, std::uint64_t* align, std::uint32_t* unknown) {
+// One record of an `empty` list. In a label's own list (`inLabel`) the record names its platform, which it must; a top-level record
+// names none.
+ParseStatus ReadEmpty(const json& v, bool inLabel, EmptyRecord* e, std::uint64_t* align, std::uint32_t* unknown) {
   if (!v.is_object()) return ParseStatus::kBadField;
+  const char* const* known = inLabel ? kLabelEmptyKeys : kEmptyKeys;
+  const std::size_t knownCount = inLabel ? sizeof(kLabelEmptyKeys) / sizeof(kLabelEmptyKeys[0]) : sizeof(kEmptyKeys) / sizeof(kEmptyKeys[0]);
   for (auto it = v.begin(); it != v.end(); ++it) {
-    if (!IsKnown(it.key(), kEmptyKeys, sizeof(kEmptyKeys) / sizeof(kEmptyKeys[0]))) ++*unknown;
+    if (!IsKnown(it.key(), known, knownCount)) ++*unknown;
   }
+  const auto platform = v.find("platform");
   const auto type = v.find("type");
   const auto name = v.find("name");
   const auto alignIt = v.find("align");
-  if (type == v.end() || name == v.end() || alignIt == v.end()) return ParseStatus::kMissingField;
+  if ((inLabel && platform == v.end()) || type == v.end() || name == v.end() || alignIt == v.end()) return ParseStatus::kMissingField;
+  if (inLabel) {
+    const std::string* platformText = StringOf(*platform);
+    if (platformText == nullptr || !IsPlatformName(*platformText)) return ParseStatus::kBadField;
+    e->platform = *platformText;
+  }
   const std::string* typeText = StringOf(*type);
   const std::string* nameText = StringOf(*name);
   const json::number_unsigned_t* alignValue = UnsignedOf(*alignIt);
@@ -137,6 +149,15 @@ ParseStatus ReadEmpty(const json& v, EmptyRecord* e, std::uint64_t* align, std::
   if (!ParseHex64(*typeText, &e->type) || !ParseHex64(*nameText, &e->name)) return ParseStatus::kBadField;
   *align = *alignValue;
   return ParseStatus::kOk;
+}
+
+// The rule a record of 0 bytes breaks by what it states: only its alignment (it has no frame and no stored size).
+Rule CheckEmpty(std::uint64_t align, const Limits& limits) {
+  RecordFields fields;
+  fields.size = 1;
+  fields.bytes = 1;
+  fields.align = align;
+  return CheckRecord(fields, limits);
 }
 
 }  // namespace
@@ -193,10 +214,14 @@ ParseResult ParseManifest(std::string_view text, const Limits& limits, Manifest*
     std::string label;
     std::size_t index;
   };
+  struct EmptyCandidate {
+    EmptyRecord record;
+    std::string label;  // the refusal's label: the label whose list holds the record, or "empty" for a top-level one
+    std::size_t index = 0;
+  };
   std::vector<Candidate> candidates;
+  std::vector<EmptyCandidate> empties;
   std::uint64_t seen_total = 0;
-  KeySet keys;
-  std::set<std::tuple<std::string, std::uint64_t, std::uint64_t>> duplicated;
   for (auto lit = labels->begin(); lit != labels->end(); ++lit) {
     const std::string& label = lit.key();
     if (!IsLabelName(label)) return Fail(ParseStatus::kBadField);
@@ -226,71 +251,89 @@ ParseResult ParseManifest(std::string_view text, const Limits& limits, Manifest*
         m.refused.push_back({label, index, raw.entry.type, raw.entry.name, rule});
       } else {
         raw.entry.align = static_cast<std::uint32_t>(raw.align);
-        if (keys.Add(raw.entry.platform, raw.entry.type, raw.entry.name)) {
-          duplicated.insert(std::make_tuple(raw.entry.platform, raw.entry.type, raw.entry.name));
-        }
         candidates.push_back({std::move(raw.entry), label, index});
       }
       ++index;
     }
+    // The label's own list of records of 0 bytes: each names its platform, and belongs to this label.
+    const auto labelEmpty = body.find("empty");
+    if (labelEmpty == body.end()) continue;
+    if (!labelEmpty->is_array()) return Fail(ParseStatus::kBadField, label);
+    std::size_t emptyIndex = 0;
+    for (const json& item : *labelEmpty) {
+      if (seen_total >= limits.max_entries) return Fail(ParseStatus::kTooMany, label, emptyIndex);
+      ++seen_total;
+      EmptyRecord rec;
+      rec.label = label;
+      std::uint64_t align = 0;
+      const ParseStatus status = ReadEmpty(item, true, &rec, &align, &m.unknown_fields);
+      if (status != ParseStatus::kOk) return Fail(status, label, emptyIndex);
+      const Rule rule = CheckEmpty(align, limits);
+      if (rule != Rule::kNone) {
+        m.refused.push_back({label, emptyIndex, rec.type, rec.name, rule});
+      } else {
+        rec.align = static_cast<std::uint32_t>(align);
+        empties.push_back({rec, label, emptyIndex});
+      }
+      ++emptyIndex;
+    }
   }
 
-  // The records of 0 bytes: the same rules for what they state (alignment), and a key of their own to share with nobody.
-  struct EmptyCandidate {
-    EmptyRecord record;
-    std::size_t index;
-  };
-  std::vector<EmptyCandidate> empties;
+  // The top-level list, the older shape. It belongs to the one label of a manifest that has exactly one; with two or more labels (or
+  // none) no label is named, so each record is refused.
   const auto emptyList = doc.find("empty");
   if (emptyList != doc.end()) {
     if (!emptyList->is_array()) return Fail(ParseStatus::kBadField, "empty");
     std::size_t index = 0;
-    KeySet emptyKeys;
-    std::set<std::pair<std::uint64_t, std::uint64_t>> emptyDuplicated;
     for (const json& item : *emptyList) {
       if (seen_total >= limits.max_entries) return Fail(ParseStatus::kTooMany, "empty", index);
       ++seen_total;
       EmptyRecord rec;
       std::uint64_t align = 0;
-      const ParseStatus status = ReadEmpty(item, &rec, &align, &m.unknown_fields);
+      const ParseStatus status = ReadEmpty(item, false, &rec, &align, &m.unknown_fields);
       if (status != ParseStatus::kOk) return Fail(status, "empty", index);
-      RecordFields fields;
-      fields.size = 1;   // a record of 0 bytes has no frame and no stored size: only its alignment is judged here
-      fields.bytes = 1;
-      fields.align = align;
-      const Rule rule = CheckRecord(fields, limits);
+      const Rule rule = CheckEmpty(align, limits);
       if (rule != Rule::kNone) {
         m.refused.push_back({"empty", index, rec.type, rec.name, rule});
+      } else if (m.labels.size() != 1) {
+        m.refused.push_back({"empty", index, rec.type, rec.name, Rule::kUnscopedEmpty});
       } else {
+        rec.label = m.labels[0];
         rec.align = static_cast<std::uint32_t>(align);
-        if (emptyKeys.Add("", rec.type, rec.name)) emptyDuplicated.insert({rec.type, rec.name});
-        empties.push_back({rec, index});
+        empties.push_back({rec, "empty", index});
       }
       ++index;
     }
-    // Pass 2 for the empty list, against itself and against the entries (a manifest is one platform's set).
-    std::set<std::pair<std::uint64_t, std::uint64_t>> entryKeys;
-    for (const Candidate& c : candidates) entryKeys.insert({c.entry.type, c.entry.name});
-    std::set<std::pair<std::uint64_t, std::uint64_t>> emptyKeySet;
-    for (const EmptyCandidate& e : empties) emptyKeySet.insert({e.record.type, e.record.name});
-    for (const Candidate& c : candidates) {
-      if (emptyKeySet.count({c.entry.type, c.entry.name}) != 0) {
-        duplicated.insert(std::make_tuple(c.entry.platform, c.entry.type, c.entry.name));
-      }
-    }
-    for (const EmptyCandidate& e : empties) {
-      const bool dup = emptyDuplicated.count({e.record.type, e.record.name}) != 0 || entryKeys.count({e.record.type, e.record.name}) != 0;
-      if (dup) {
-        m.refused.push_back({"empty", e.index, e.record.type, e.record.name, Rule::kDuplicateKey});
-      } else {
-        m.empties.push_back(e.record);
-      }
-    }
   }
 
-  // Pass 2: a key held twice is held by neither: both entries are refused.
+  // Pass 2: a key held twice is held by neither. A holder is an entry or a record of 0 bytes, under its (type, name). Two holders of
+  // one key conflict when they name the same platform, or when either names none: a top-level record belongs to every platform of
+  // its label, so it conflicts with every holder of its key.
+  using Key = std::pair<std::uint64_t, std::uint64_t>;
+  std::map<Key, std::map<std::string, std::size_t>> holders;
+  for (const Candidate& c : candidates) ++holders[Key(c.entry.type, c.entry.name)][c.entry.platform];
+  for (const EmptyCandidate& e : empties) ++holders[Key(e.record.type, e.record.name)][e.record.platform];
+  const auto conflicts = [&holders](const std::string& platform, const Key& key) {
+    const std::map<std::string, std::size_t>& byPlatform = holders.find(key)->second;
+    if (platform.empty()) {
+      std::size_t total = 0;
+      for (const auto& kv : byPlatform) total += kv.second;
+      return total >= kDuplicateHolders;
+    }
+    const auto same = byPlatform.find(platform);
+    const auto any = byPlatform.find(std::string());
+    const std::size_t count = (same != byPlatform.end() ? same->second : 0) + (any != byPlatform.end() ? any->second : 0);
+    return count >= kDuplicateHolders;
+  };
+  for (EmptyCandidate& e : empties) {
+    if (conflicts(e.record.platform, Key(e.record.type, e.record.name))) {
+      m.refused.push_back({e.label, e.index, e.record.type, e.record.name, Rule::kDuplicateKey});
+    } else {
+      m.empties.push_back(e.record);
+    }
+  }
   for (Candidate& c : candidates) {
-    if (duplicated.count(std::make_tuple(c.entry.platform, c.entry.type, c.entry.name)) != 0) {
+    if (conflicts(c.entry.platform, Key(c.entry.type, c.entry.name))) {
       m.refused.push_back({c.label, c.index, c.entry.type, c.entry.name, Rule::kDuplicateKey});
     } else {
       m.entries.push_back(std::move(c.entry));

@@ -46,6 +46,7 @@
 
 #include "core/update/engine_check.h"
 #include "core/update/fs.h"
+#include "core/update/names.h"
 #include "core/update/policy.h"
 #include "core/update/worker.h"
 
@@ -133,8 +134,8 @@ class Root {
   // Win32: a fresh folder under NEVR_TEST_RUN_ROOT (run_root.h), which the test never removes.
   explicit Root(const char* suffix = "") {
 #if defined(_WIN32)
-    std::wstring label = L"nevr-update-test";
-    for (const char* p = suffix; *p != '\0'; ++p) label += static_cast<wchar_t>(*p);
+    // The suffix is UTF-8 (a test names a folder for a player, "-Zo\xC3\xAB"): converted whole, never a wide unit per byte.
+    const std::wstring label = L"nevr-update-test" + WideOf(suffix);
     const std::wstring dir = nevr_test::NewDir(label.c_str());
     if (dir.empty()) std::abort();
     RootToUtf8(dir.c_str(), &path_);
@@ -269,7 +270,7 @@ struct Lines {
 struct FakeCore {
   bool open_ok = true;
   bool manifest_ok = true;
-  std::string manifest_error = "could not fetch the manifest";
+  std::string manifest_error = "FAIL step 1: could not fetch the manifest";
   bool stage_ok = true;
   std::string stage_error = "the download was cut off";
   std::string action = "staged";
@@ -278,6 +279,9 @@ struct FakeCore {
   std::string runtime_bytes = "NEW-RUNTIME";
   bool discard_ok = true;
   bool with_plugin = false;  // the release also lists plugins/a.dll
+  /// The runtime's member in the result: nevr-runtime.dll (the PC's windows-zip) or libnevr-runtime.so (the Quest's quest-runtime
+  /// profile, installer/src/stage.rs QUEST_PROFILE).
+  std::string runtime_member = "nevr-runtime.dll";
   int open_calls = 0, manifest_calls = 0, stage_calls = 0, end_calls = 0, close_calls = 0, discard_calls = 0;
   std::string discard_version, discard_sha, discard_reason;
   std::string open_config, current_json, end_state, end_reason;
@@ -307,8 +311,8 @@ struct FakeCore {
       }
       json files = json::array();
       if (action == "staged") {
-        root->Write("update\\staging\\" + version + "\\nevr-runtime.dll", runtime_bytes);
-        files.push_back({{"path", "nevr-runtime.dll"}, {"size", runtime_bytes.size()}, {"sha256", kNewSha}});
+        root->Write("update\\staging\\" + version + "\\" + runtime_member, runtime_bytes);
+        files.push_back({{"path", runtime_member}, {"size", runtime_bytes.size()}, {"sha256", kNewSha}});
         if (with_plugin) {
           root->Write("update\\staging\\" + version + "\\plugins\\a.dll", kPluginBytes);
           files.push_back({{"path", "plugins/a.dll"}, {"size", sizeof(kPluginBytes) - 1}, {"sha256", kOldSha}});
@@ -344,7 +348,7 @@ CheckEnv MakeEnv(const Root& root, FakeCore& core, Lines& lines) {
   env.runtime_sha256 = kOldSha;
   env.core = core.Make();
   env.fs = &TestFs();
-  env.verify = [](const std::string& path) {
+  env.verify = [](const std::string& path, const ExpectedFile&) {
     const std::string text = ReadAllFile(path);
     VerifyOutcome v;
     v.ok = text.find("BAD") == std::string::npos;
@@ -390,6 +394,137 @@ TEST(UpdatePolicy, DecideNamesTheFirstReasonInTheLogsOrder) {
   EXPECT_STREQ(DisabledWord(Disabled::kFlag), "flag");
   EXPECT_STREQ(DisabledWord(Disabled::kConfig), "config");
   EXPECT_STREQ(DisabledWord(Disabled::kHostCannotSwap), "host_cannot_swap");
+}
+
+// The development update source (policy.h, ResolveSource): the one decision of base and pins.
+namespace {
+constexpr char kTestPinKey[] = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";  // 56 base64 characters
+constexpr char kTestPins[] = "test-key RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+}  // namespace
+
+TEST(UpdateSource, AReleaseBuildIgnoresBothKeysAndSaysSo) {
+  const SourceResolution none = ResolveSource(false, std::nullopt, std::nullopt);
+  EXPECT_EQ(none.verdict, SourceVerdict::kNone);
+  const SourceResolution base = ResolveSource(false, std::string("https://example.test/u"), std::nullopt);
+  EXPECT_EQ(base.verdict, SourceVerdict::kIgnoredRelease);
+  EXPECT_EQ(base.key, "update.base");
+  EXPECT_EQ(base.reason, "release_build");
+  EXPECT_TRUE(base.use.base.empty()) << "a release build carries nothing to the core";
+  const SourceResolution pins = ResolveSource(false, std::nullopt, std::string(kTestPins));
+  EXPECT_EQ(pins.verdict, SourceVerdict::kIgnoredRelease);
+  EXPECT_EQ(pins.key, "update.pins");
+  EXPECT_TRUE(pins.use.pins.empty());
+  EXPECT_STREQ(SourceVerdictWord(SourceVerdict::kIgnoredRelease), "ignored");
+}
+
+TEST(UpdateSource, ADevBuildUsesAValidBaseAndNormalizesIt) {
+  const SourceResolution https = ResolveSource(true, std::string("https://example.test/nevr/"), std::nullopt);
+  EXPECT_EQ(https.verdict, SourceVerdict::kUsed);
+  EXPECT_EQ(https.use.base, "https://example.test/nevr") << "the core joins \"<base>/<name>\": no trailing slash";
+  EXPECT_TRUE(https.use.pins.empty());
+  EXPECT_FALSE(https.pins_given);
+  const SourceResolution http = ResolveSource(true, std::string("http://127.0.0.1:8080"), std::nullopt);
+  EXPECT_EQ(http.verdict, SourceVerdict::kUsed) << "adb reverse serves plain http, in a dev build";
+  EXPECT_EQ(http.use.base, "http://127.0.0.1:8080");
+  EXPECT_STREQ(SourceVerdictWord(SourceVerdict::kUsed), "used");
+}
+
+TEST(UpdateSource, ADevBuildRefusesABaseThatIsNotUsable) {
+  const std::pair<const char*, const char*> bad[] = {
+      {"", "empty"},
+      {"ftp://example.test/u", "not_http_or_https"},
+      {"file:///sdcard/u", "not_http_or_https"},
+      {"example.test/u", "not_http_or_https"},
+      {"https://exa mple.test/u", "control_character"},
+      {"https://example.test/u\n", "control_character"},
+      {"https://example.test/\x01", "control_character"},
+      {"https://user:pw@example.test/u", "credentials_query_or_fragment"},
+      {"https://example.test/u?x=1", "credentials_query_or_fragment"},
+      {"https://example.test/u#f", "credentials_query_or_fragment"},
+      {"https://", "no_host"},
+      {"https:///u", "no_host"},
+  };
+  for (const auto& [text, reason] : bad) {
+    const SourceResolution r = ResolveSource(true, std::string(text), std::nullopt);
+    EXPECT_EQ(r.verdict, SourceVerdict::kRejected) << text;
+    EXPECT_EQ(r.reason, reason) << text;
+    EXPECT_EQ(r.key, "update.base") << text;
+    EXPECT_TRUE(r.use.base.empty()) << text;
+  }
+  const SourceResolution tooLong = ResolveSource(true, "https://example.test/" + std::string(kMaxSourceBaseBytes, 'a'), std::nullopt);
+  EXPECT_EQ(tooLong.reason, "too_long");
+  EXPECT_STREQ(SourceVerdictWord(SourceVerdict::kRejected), "rejected");
+}
+
+TEST(UpdateSource, PinsNeedABaseAndAreCheckedLineByLine) {
+  const SourceResolution used = ResolveSource(true, std::string("https://example.test/u"), std::string("# a comment\n\n") + kTestPins + "\n");
+  EXPECT_EQ(used.verdict, SourceVerdict::kUsed);
+  EXPECT_EQ(used.pins_count, 1u);
+  EXPECT_TRUE(used.pins_given);
+  EXPECT_EQ(used.use.pins, std::string("# a comment\n\n") + kTestPins + "\n") << "the core parses the text; it is passed as given";
+  EXPECT_EQ(ResolveSource(true, std::nullopt, std::string(kTestPins)).reason, "pins_without_base");
+  const std::pair<const char*, const char*> bad[] = {
+      {"", "empty"},
+      {"# only a comment\n", "no_keys"},
+      {"label-only\n", "malformed_line"},
+      {"label notbase64key\n", "malformed_key"},
+      {"label RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO\n", "malformed_key"},
+      {"label RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3\t\n", "control_character"},
+  };
+  for (const auto& [text, reason] : bad) {
+    const SourceResolution r = ResolveSource(true, std::string("https://example.test/u"), std::string(text));
+    EXPECT_EQ(r.verdict, SourceVerdict::kRejected) << text;
+    EXPECT_EQ(r.reason, reason) << text;
+    EXPECT_EQ(r.key, "update.pins") << text;
+    EXPECT_TRUE(r.use.base.empty()) << "one bad part uses neither: " << text;
+  }
+  EXPECT_EQ(std::string(kTestPinKey).size(), kPinKeyBase64Chars);
+}
+
+TEST(UpdateSource, ADevBuildWithASourceMayUpdateAndOneWithoutStaysDisabled) {
+  Switches s;
+  s.host_can_swap = true;
+  s.dev_build = true;
+  EXPECT_EQ(Decide(s), Disabled::kDevBuild) << "a dev build with no base stays disabled, with the existing reason";
+  s.dev_source_override = true;
+  EXPECT_EQ(Decide(s), Disabled::kNone);
+  s.flag_no_update = true;
+  EXPECT_EQ(Decide(s), Disabled::kFlag) << "the override lifts only the dev_build reason; the other switches still apply";
+  s.flag_no_update = false;
+  s.no_root = true;
+  EXPECT_EQ(Decide(s), Disabled::kNoRoot);
+  Switches release;
+  release.host_can_swap = true;
+  EXPECT_EQ(Decide(release), Disabled::kNone) << "a release build is decided as before";
+}
+
+TEST(UpdateSource, BaseAndPinsReachTheCoreOnlyWhenTheCheckEnvHoldsThem) {
+  Lines lines;
+  FakeCore core;
+  Root root;
+  CheckEnv env = MakeEnv(root, core, lines);
+  RunCheck(env);
+  ASSERT_EQ(core.open_calls, 1);
+  const json plain = json::parse(core.open_config);
+  EXPECT_FALSE(plain.contains("base")) << core.open_config;
+  EXPECT_FALSE(plain.contains("pins")) << core.open_config;
+  EXPECT_EQ(lines.Find("update check", {"source_override"}), "") << lines.Dump();
+
+  SourceOverride source;
+  source.base = "http://127.0.0.1:8080";
+  source.pins = kTestPins;
+  env.source = source;
+  RunCheck(env);
+  const json with = json::parse(core.open_config);
+  EXPECT_EQ(with.value("base", ""), "http://127.0.0.1:8080") << core.open_config;
+  EXPECT_EQ(with.value("pins", ""), kTestPins) << core.open_config;
+  EXPECT_NE(lines.Find("update check", {"source_override=true"}), "") << lines.Dump();
+
+  env.source->pins.clear();
+  RunCheck(env);
+  const json baseOnly = json::parse(core.open_config);
+  EXPECT_TRUE(baseOnly.contains("base"));
+  EXPECT_FALSE(baseOnly.contains("pins")) << "no pins given: the core keeps its built-in keys";
 }
 
 TEST(UpdatePolicy, ChannelIsTheConfigsThenTheInstallersThenTheCores) {
@@ -455,6 +590,26 @@ TEST(UpdatePolicy, AStageResultOutsideTheHostsVocabularyIsNeverPublished) {
       << "none and blocked carry no files";
 }
 
+// The Quest's result (installer/src/stage.rs QUEST_PROFILE) read with the Quest's runtime file: one member, libnevr-runtime.so, counted
+// as the one runtime. The same text read as a PC result is refused, and a Quest result that lists the runtime twice is refused.
+TEST(UpdatePolicy, AQuestStageResultIsReadWithTheQuestsMemberSet) {
+  const std::size_t size = std::string("NEW-RUNTIME").size();
+  const std::string quest = json{{"action", "staged"}, {"version", "6.18.0"}, {"direction", "upgrade"}, {"reason", ""},
+                                 {"files", json::array({{{"path", "libnevr-runtime.so"}, {"size", size}, {"sha256", kNewSha}}})}}
+                                .dump();
+  StageResult r;
+  std::string err;
+  ASSERT_TRUE(ParseStageResult(quest, &r, &err, nevr_update_names::kQuestRuntimeMember)) << err;
+  ASSERT_EQ(r.files.size(), 1u);
+  EXPECT_EQ(r.files[0].path, "libnevr-runtime.so");
+  EXPECT_FALSE(ParseStageResult(quest, &r, &err)) << "the PC's member set does not hold the .so";
+  json twice = json::parse(quest);
+  twice["files"].push_back(twice["files"][0]);
+  EXPECT_FALSE(ParseStageResult(twice.dump(), &r, &err, nevr_update_names::kQuestRuntimeMember)) << "the runtime is listed once";
+  EXPECT_STREQ(nevr_update_names::RuntimeMemberFor("quest"), "libnevr-runtime.so");
+  EXPECT_STREQ(nevr_update_names::RuntimeMemberFor("pc"), "nevr-runtime.dll");
+}
+
 TEST(UpdatePolicy, StagedJsonIsTheSpellingTheHostReads) {
   StageResult r;
   r.action = "staged";
@@ -515,16 +670,24 @@ TEST(UpdateCheck, EachStagedFileIsVerifiedAtItsPathInTheReleasesFolder) {
   core.with_plugin = true;
   CheckEnv env = MakeEnv(root, core, lines);
   std::vector<std::string> seen;
+  std::vector<ExpectedFile> expected_seen;
   const auto inner = env.verify;
-  env.verify = [&seen, inner](const std::string& path) {
+  env.verify = [&seen, &expected_seen, inner](const std::string& path, const ExpectedFile& expected) {
     seen.push_back(path);
-    return inner(path);
+    expected_seen.push_back(expected);
+    return inner(path, expected);
   };
   const CheckOutcome out = RunCheck(env);
   EXPECT_EQ(out.action, CheckAction::kStaged) << lines.Dump();
   ASSERT_EQ(seen.size(), kStagedFilesWithAPlugin);
   EXPECT_EQ(seen[0], root.File("update\\staging\\5.99.0\\nevr-runtime.dll"));
   EXPECT_EQ(seen[1], root.File("update\\staging\\5.99.0\\plugins\\a.dll")) << "a plugin's member path has a separator of its own";
+  // The verifier is given the entry the stage result listed for each file (the Quest verifier checks the bytes against it).
+  ASSERT_EQ(expected_seen.size(), kStagedFilesWithAPlugin);
+  EXPECT_EQ(expected_seen[0].size, std::string("NEW-RUNTIME").size());
+  EXPECT_EQ(expected_seen[0].sha256, kNewSha);
+  EXPECT_EQ(expected_seen[1].size, sizeof(kPluginBytes) - 1);
+  EXPECT_EQ(expected_seen[1].sha256, kOldSha);
 }
 
 namespace {
@@ -588,9 +751,9 @@ TEST(UpdateCheck, TheCheckAsksTheFsForEachOperationInTheOrderOfTheAdr) {
   RecordingFs fs(root.path());
   env.fs = &fs;
   const auto inner = env.verify;
-  env.verify = [&fs, inner](const std::string& path) {
+  env.verify = [&fs, inner](const std::string& path, const ExpectedFile& expected) {
     fs.calls.push_back("verify");
-    return inner(path);
+    return inner(path, expected);
   };
   const CheckOutcome out = RunCheck(env);
   EXPECT_EQ(out.action, CheckAction::kStaged) << lines.Dump();
@@ -625,9 +788,9 @@ TEST(UpdateCheck, ALinkAtUpdateStagingOrTheReleasesFolderBlocksTheCheck) {
     env.fs = &fs;
     int verified = 0;
     const auto inner = env.verify;
-    env.verify = [&verified, inner](const std::string& path) {
+    env.verify = [&verified, inner](const std::string& path, const ExpectedFile& expected) {
       ++verified;
-      return inner(path);
+      return inner(path, expected);
     };
     const CheckOutcome out = RunCheck(env);
     EXPECT_EQ(out.action, CheckAction::kBlocked) << c.link << "\n" << lines.Dump();
@@ -702,6 +865,78 @@ TEST(UpdateCheck, AVerifiedReleaseIsPublishedLastAndEveryDecisionIsALine) {
   // Nothing outside update\ and the core's own folders is written.
   for (const std::string& p : root.List()) {
     EXPECT_EQ(p.rfind("update", 0), 0u) << p << " is outside update\\";
+  }
+}
+
+// The Quest's stage (installer/src/stage.rs QUEST_PROFILE: one member, libnevr-runtime.so) with the platform word "quest": the result
+// is accepted, its one runtime is verified where the core staged it, and staged.json names it, as the Quest start reads it
+// (core/update/engine_start.cpp, StartContext::runtime_file).
+TEST(UpdateCheck, AQuestStageOfTheQuestRuntimeIsVerifiedAtItsPathAndPublished) {
+  Root root;
+  Lines lines;
+  FakeCore core;
+  core.runtime_member = "libnevr-runtime.so";
+  CheckEnv env = MakeEnv(root, core, lines);
+  env.platform = "quest";
+  std::vector<std::string> seen;
+  const auto inner = env.verify;
+  env.verify = [&seen, inner](const std::string& path, const ExpectedFile& expected) {
+    seen.push_back(path);
+    return inner(path, expected);
+  };
+  const CheckOutcome out = RunCheck(env);
+
+  EXPECT_EQ(out.action, CheckAction::kStaged) << lines.Dump();
+  EXPECT_EQ(out.reason, "") << lines.Dump();
+  ASSERT_EQ(seen.size(), 1u) << lines.Dump();
+  EXPECT_EQ(seen[0], root.File("update\\staging\\5.99.0\\libnevr-runtime.so"));
+  EXPECT_NE(lines.Find("update verify", {"path=libnevr-runtime.so", "version=5.99.0", "ok=true"}), "") << lines.Dump();
+  EXPECT_NE(lines.Find("update published", {"version=5.99.0", "files=1"}), "") << lines.Dump();
+  ASSERT_TRUE(root.Exists("update\\staged.json"));
+  const json staged = json::parse(root.Read("update\\staged.json"));
+  ASSERT_EQ(staged["files"].size(), 1u);
+  EXPECT_EQ(staged["files"][0]["path"], "libnevr-runtime.so");
+  EXPECT_EQ(staged["files"][0]["sha256"], kNewSha);
+}
+
+// A Quest release the verifier refuses is discarded by its runtime's sha256: the .so's, never an empty one.
+TEST(UpdateCheck, AQuestRuntimeTheVerifierRefusesIsDiscardedByItsOwnSha) {
+  Root root;
+  Lines lines;
+  FakeCore core;
+  core.runtime_member = "libnevr-runtime.so";
+  core.runtime_bytes = "BAD-RUNTIME";
+  CheckEnv env = MakeEnv(root, core, lines);
+  env.platform = "quest";
+  const CheckOutcome out = RunCheck(env);
+
+  EXPECT_EQ(out.reason, "verify_failed") << lines.Dump();
+  EXPECT_EQ(core.discard_calls, 1) << lines.Dump();
+  EXPECT_EQ(core.discard_sha, kNewSha);
+  EXPECT_FALSE(root.Exists("update\\staged.json"));
+}
+
+// The member set is the platform's (ADR 0024 section 4.9; the start's rule, core/update/engine_start.cpp ParseFileMember): a PC
+// result naming the Quest runtime, and a Quest result naming the PC runtime or a plugin, are bad results and publish nothing.
+TEST(UpdateCheck, EachPlatformAcceptsOnlyItsOwnRuntimeMember) {
+  struct Case {
+    const char* platform;
+    const char* member;
+    bool plugin;
+  };
+  for (const Case c : {Case{"pc", "libnevr-runtime.so", false}, Case{"quest", "nevr-runtime.dll", false},
+                       Case{"quest", "libnevr-runtime.so", true}}) {
+    Root root;
+    Lines lines;
+    FakeCore core;
+    core.runtime_member = c.member;
+    core.with_plugin = c.plugin;
+    CheckEnv env = MakeEnv(root, core, lines);
+    env.platform = c.platform;
+    const CheckOutcome out = RunCheck(env);
+    EXPECT_EQ(out.action, CheckAction::kFailed) << c.platform << " " << c.member << " plugin=" << c.plugin << "\n" << lines.Dump();
+    EXPECT_EQ(out.reason, "bad_result") << c.platform << " " << c.member << " plugin=" << c.plugin;
+    EXPECT_FALSE(root.Exists("update\\staged.json")) << c.platform << " " << c.member;
   }
 }
 
@@ -792,6 +1027,46 @@ TEST(UpdateCheck, AnUnreachableManifestIsNetworkAndABadOneIsManifestCheck) {
   }
 }
 
+// The core displays every error as "FAIL step N: ..." (installer/src/error.rs); step 1 is the fetch, so only the step number tells a
+// connection that failed (network) from a manifest that failed a check (manifest_check). #2751
+TEST(UpdateCheck, TheCoresStepNumberDecidesNetworkOrManifestCheck) {
+  struct Case {
+    const char* text;
+    const char* reason;
+  };
+  const Case cases[] = {
+      {"FAIL step 1: connection refused", "network"},
+      {"FAIL step 1: manifest.json: timed out; the manifest stored by an earlier run cannot be used: it is expired", "network"},
+      {"FAIL step 2: signature does not verify", "manifest_check"},
+      {"FAIL step 3: schema_version is not 1", "manifest_check"},
+      {"FAIL step 4: manifest_version is below the floor", "manifest_check"},
+      {"FAIL step 5: the manifest has expired", "manifest_check"},
+      {"FAIL step 6: state.json: access denied", "manifest_check"},
+      {"FAIL step 10: not the fetch", "manifest_check"},
+      {"FAIL step 0: before any step", "manifest_check"},
+      {"FAIL step 1", "manifest_check"},
+      {"FAIL step 1x: junk", "manifest_check"},
+      {"FAIL step : junk", "manifest_check"},
+      {"FAIL step 99999999999999999999: overflow", "manifest_check"},
+      {"signature said FAIL step 1: inside", "manifest_check"},
+      {"XXXXXXXXXX1: the prefix is as long as FAIL step ", "manifest_check"},
+      {"FAIL step 4294967297: wraps to 1 in 32 bits", "manifest_check"},
+      {"internal error (panic)", "manifest_check"},
+      {"", "manifest_check"},
+  };
+  for (const Case& c : cases) {
+    Root root;
+    Lines lines;
+    FakeCore core;
+    core.manifest_ok = false;
+    core.manifest_error = c.text;
+    CheckEnv env = MakeEnv(root, core, lines);
+    EXPECT_EQ(RunCheck(env).reason, c.reason) << "core text: \"" << c.text << "\"";
+    EXPECT_EQ(lines.Dump().find(c.text[0] != '\0' ? c.text : "\x01"), std::string::npos)
+        << "the core's own text is not a log field (logging Rule 4)";
+  }
+}
+
 TEST(UpdateCheck, NoneAndBlockedFromTheCoreAreLoggedAndPublishNothing) {
   for (const char* action : {"none", "blocked"}) {
     Root root;
@@ -848,9 +1123,9 @@ TEST(UpdateCheck, AReleaseThatTurnsLateWhileItIsBeingVerifiedIsRemovedToo) {
   auto clock = std::make_shared<std::uint64_t>(1000);
   env.now_ms = [clock] { return *clock; };
   const auto verify = env.verify;
-  env.verify = [clock, verify](const std::string& path) {
+  env.verify = [clock, verify](const std::string& path, const ExpectedFile& expected) {
     *clock += kCheckBudgetMs + 1000;  // the verification itself runs past the budget
-    return verify(path);
+    return verify(path, expected);
   };
   const CheckOutcome out = RunCheck(env);
   EXPECT_EQ(out.reason, "timeout");
@@ -1090,12 +1365,12 @@ TEST(UpdateEdgePc, APathThatDoesNotConvertIsNotAVerdictAndTheWideVerifierIsNotRu
     ran = true;
     return VerifyOutcome{true, false, "accepted"};
   });
-  const VerifyOutcome out = verify(std::string("C:\\x\xFF"));  // not UTF-8
+  const VerifyOutcome out = verify(std::string("C:\\x\xFF"), ExpectedFile{});  // not UTF-8
   EXPECT_FALSE(out.ok);
   EXPECT_FALSE(out.refused) << "a path that does not convert is not a refusal: nothing is discarded for it";
   EXPECT_EQ(out.reason, "path_unconvertible");
   EXPECT_FALSE(ran);
-  EXPECT_TRUE(verify(std::string("C:\\ok")).ok) << "a path that converts reaches the wide verifier";
+  EXPECT_TRUE(verify(std::string("C:\\ok"), ExpectedFile{}).ok) << "a path that converts reaches the wide verifier";
   EXPECT_TRUE(ran);
 }
 
@@ -1128,7 +1403,7 @@ struct WorkerFixture {
       return true;
     };
     deps.core = core.Make();
-    deps.verify = [](const std::string&) { return VerifyOutcome{true, false, "accepted"}; };
+    deps.verify = [](const std::string&, const ExpectedFile&) { return VerifyOutcome{true, false, "accepted"}; };
     deps.log = lines.Fn();
     deps.now_ms = [this] { return clock.load(); };
     deps.fs = &TestFs();

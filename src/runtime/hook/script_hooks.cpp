@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include <map>
+#include <utility>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -34,6 +35,7 @@ std::mutex g_mu;
 std::vector<Hook> g_rows;
 std::vector<Slot> g_slots;
 std::map<void*, Module> g_modules;
+std::vector<std::pair<std::uint64_t, FreeListener>> g_free_listeners;
 
 // Whether `p` lies in the game executable's image: where the engine callbacks a script calls through are.
 bool InGameImage(const void* p) {
@@ -226,6 +228,9 @@ void OnUnloading(std::uint64_t script, void* base) {
         static_cast<unsigned long long>(script), base, it->second.refs);
     return;
   }
+  for (const auto& [listened, listener] : g_free_listeners) {
+    if (listened == script) listener(script);
+  }
   const std::size_t n = it->second.targets.size();
   const std::size_t k = it->second.swapped.size();
   PutBack(it->second);
@@ -239,6 +244,11 @@ void OnUnloading(std::uint64_t script, void* base) {
     Log(EchoVR::LogLevel::Debug, "[NEVR.SCRIPT] script freed script=%016llx base=%p hooks=0",
         static_cast<unsigned long long>(script), base);
   }
+}
+
+void AddFreeListener(std::uint64_t script, FreeListener listener) {
+  std::lock_guard<std::mutex> lock(g_mu);
+  g_free_listeners.emplace_back(script, listener);
 }
 
 void* LoadedBase(std::uint64_t script) {
@@ -266,6 +276,7 @@ void ResetForTest() {
   g_rows.clear();
   g_slots.clear();
   g_modules.clear();
+  g_free_listeners.clear();
 }
 
 }  // namespace nevr_script_hooks

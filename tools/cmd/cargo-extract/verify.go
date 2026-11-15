@@ -87,11 +87,14 @@ func verify(ctx context.Context, out, root string, log *slog.Logger) (*verifySum
 		return nil, fmt.Errorf("manifest.json: the platform %q is not one this tool knows", platform)
 	}
 	data := filepath.Join(root, "rad15", folder)
+	if len(doc.Empty) != 0 {
+		return nil, fmt.Errorf("manifest.json: the top-level empty list holds %d records; they belong under their label", len(doc.Empty))
+	}
 	ids := make([]string, len(doc.Sets))
 	for i, s := range doc.Sets {
 		ids[i] = s.ID
 	}
-	log.Info("start", "out", out, "data", data, "platform", platform, "sets", ids, "entries", len(label.Entries), "empty", len(doc.Empty))
+	log.Info("start", "out", out, "data", data, "platform", platform, "sets", ids, "entries", len(label.Entries), "empty", len(label.Empty))
 
 	sets, _, err := openSets(data, ids, log)
 	if err != nil {
@@ -108,7 +111,7 @@ func verify(ctx context.Context, out, root string, log *slog.Logger) (*verifySum
 	}
 	defer dec.Close()
 
-	sum := &verifySummary{Platform: platform, Sets: len(sets), Entries: len(label.Entries), EmptyRecords: len(doc.Empty)}
+	sum := &verifySummary{Platform: platform, Sets: len(sets), Entries: len(label.Entries), EmptyRecords: len(label.Empty)}
 	where := map[uint64]map[uint64][2]int{} // type -> name -> (set, resource index)
 	for si, s := range sets {
 		for ri, r := range s.Manifest.Resources {
@@ -154,8 +157,8 @@ func verify(ctx context.Context, out, root string, log *slog.Logger) (*verifySum
 		}
 		items = append(items, checkItem{set: at[0], res: at[1], entry: e})
 	}
-	for i := range doc.Empty {
-		e := &doc.Empty[i]
+	for i := range label.Empty {
+		e := &label.Empty[i]
 		_, _, at, err := locate(e.Type, e.Name)
 		if err != nil {
 			return nil, err

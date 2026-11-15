@@ -187,6 +187,29 @@ void OfferNetgun(unsigned char* data, const Delivery& d, nevr_netgun_bullets::Re
                        {"rows_before", r.entriesBefore}, {"rows_after", r.entriesAfter}});
 }
 
+// Cat's weapon values merged into one delivered mp_weapon_settings, and the probe values read back from the merged bytes.
+struct Balanced {
+  nevr_combat::balance::Result result = nevr_combat::balance::Result::kNotAResource;
+  std::string bytes;  // the merged resource when result is kApplied
+  std::size_t changed = 0;
+  std::string damage, head, refire, vent;  // the probe values of `bytes` (balance::ValueText); "-1" each when nothing was merged
+};
+
+// The merge and its probe (core/combat_balance/balance_merge.h, shared with the PC). Runs before any game code (the handler
+// calls the game's allocator only after it returns) and calls none: it parses and builds JSON, so it allocates and carries a
+// personality (outside_game_call.h).
+NEVR_OUTSIDE_GAME_CALL Balanced MergeBalance(const unsigned char* resource, std::size_t size) noexcept {
+  Balanced b;
+  b.result = nevr_combat::balance::Apply(resource, size, nevr_combat::balance::kCatWeaponSettings, &b.bytes, &b.changed);
+  const nevr_combat::balance::Probe p =
+      nevr_combat::balance::ReadProbe(reinterpret_cast<const std::uint8_t*>(b.bytes.data()), b.bytes.size());
+  b.damage = nevr_combat::balance::ValueText(p.magnumDamage);
+  b.head = nevr_combat::balance::ValueText(p.magnumHead);
+  b.refire = nevr_combat::balance::ValueText(p.magnumRefire);
+  b.vent = nevr_combat::balance::ValueText(p.smgVent);
+  return b;
+}
+
 // Cat's EchoCombat weapon values merged into the stock mp_weapon_settings (the PC does the same in runtime/combat/combat.cpp
 // BalanceTransform; the merge is core/combat_balance/balance_merge.h, shared). Only in the combat variants. The merged resource is
 // served through the allocator check of the page; any doubt leaves the game's own values and says why. Nothing is cached: SwapIn
@@ -200,33 +223,24 @@ void OfferBalance(unsigned char* data, const Delivery& d) noexcept {
                         {{"resource", "mp_weapon_settings"}, {"name", name}, {"reason", "not_a_combat_variant"}});
     return;
   }
-  std::string merged;
-  std::size_t changed = 0;
-  const nevr_combat::balance::Result r = nevr_combat::balance::Apply(
-      d.buffer, static_cast<std::size_t>(d.size), nevr_combat::balance::kCatWeaponSettings, &merged, &changed);
-  if (r != nevr_combat::balance::Result::kApplied) {
-    sentinel::LogFields(r == nevr_combat::balance::Result::kUnchanged ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
+  const Balanced b = MergeBalance(d.buffer, static_cast<std::size_t>(d.size));
+  if (b.result != nevr_combat::balance::Result::kApplied) {
+    sentinel::LogFields(b.result == nevr_combat::balance::Result::kUnchanged ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
                         "combat_balance_skip",
                         {{"resource", "mp_weapon_settings"}, {"name", name}, {"bytes", d.size},
-                         {"reason", nevr_combat::balance::ResultName(r)}});
+                         {"reason", nevr_combat::balance::ResultName(b.result)}});
     return;
   }
-  const Swap swap = SwapIn(data, reinterpret_cast<const unsigned char*>(merged.data()), merged.size(), ReleaseAllocator());
+  const Swap swap = SwapIn(data, reinterpret_cast<const unsigned char*>(b.bytes.data()), b.bytes.size(), ReleaseAllocator());
   if (swap != Swap::Swapped) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "combat_balance_skip",
                         {{"resource", "mp_weapon_settings"}, {"name", name}, {"bytes", d.size}, {"reason", SwapName(swap)}});
     return;
   }
-  const nevr_combat::balance::Probe p =
-      nevr_combat::balance::ReadProbe(reinterpret_cast<const std::uint8_t*>(merged.data()), merged.size());
-  const std::string damage = nevr_combat::balance::ValueText(p.magnumDamage);
-  const std::string head = nevr_combat::balance::ValueText(p.magnumHead);
-  const std::string refire = nevr_combat::balance::ValueText(p.magnumRefire);
-  const std::string vent = nevr_combat::balance::ValueText(p.smgVent);
   sentinel::LogFields(sentinel::LogLevel::kInfo, "combat_balance_applied",
-                      {{"resource", "mp_weapon_settings"}, {"name", name}, {"values", changed}, {"bytes_before", d.size},
-                       {"bytes_after", merged.size()}, {"magnum_damage", damage.c_str()}, {"magnum_head", head.c_str()},
-                       {"magnum_refire", refire.c_str()}, {"smg_vent", vent.c_str()}});
+                      {{"resource", "mp_weapon_settings"}, {"name", name}, {"values", b.changed}, {"bytes_before", d.size},
+                       {"bytes_after", b.bytes.size()}, {"magnum_damage", b.damage.c_str()}, {"magnum_head", b.head.c_str()},
+                       {"magnum_refire", b.refire.c_str()}, {"smg_vent", b.vent.c_str()}});
 }
 
 // The main-menu level's transform table (#1679): the four buttons stand where the actors' transforms put them, so a pinned

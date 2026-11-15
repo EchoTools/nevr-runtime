@@ -1,6 +1,7 @@
 """The draft checks (tools/release_check_draft.sh) and the audience section and player line of the release body
 (tools/release_audience_section.py, which tools/package_release.py imports)."""
 
+import os
 import pathlib
 import subprocess
 import sys
@@ -24,6 +25,13 @@ class DraftCheck(unittest.TestCase):
         self.assertIn("set -euo pipefail", self.text)
         self.assertNotIn("|| true", self.text)
 
+    def test_the_names_have_one_home_the_asset_name_list(self) -> None:
+        self.assertIn('release_asset_names.sh"', self.text)
+        self.assertIn('release_asset_names "$version"', self.text)
+        self.assertIn('zip=$(release_windows_zip_name "$version")', self.text)
+        for literal in ("quest-runtime.so", "quest-libovrplatformloader.so", "-windows.zip"):
+            self.assertNotIn(literal, self.text)
+
     def test_it_runs_each_check_the_doc_names(self) -> None:
         for needle in (
             "gh release view",
@@ -40,6 +48,33 @@ class DraftCheck(unittest.TestCase):
     def test_the_script_parses(self) -> None:
         result = subprocess.run(["bash", "-n", str(CHECK)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def check_names(self, names: list) -> subprocess.CompletedProcess:
+        """Runs the script with a `gh` that lists `names` for `release view` and fails every other call, so the run
+        stops at the first step after the names (the download): only the names step is judged."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "names.txt").write_text("".join(f"{name}\n" for name in names), encoding="utf-8")
+            gh = root / "gh"
+            gh.write_text(f'#!/usr/bin/env bash\nif [ "$1" = release ] && [ "$2" = view ]; then cat "{root}/names.txt"; '
+                          f'exit 0; fi\nexit 1\n', encoding="utf-8")
+            gh.chmod(0o755)
+            env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}")
+            return subprocess.run(["bash", str(CHECK), "v5.5.0"], capture_output=True, text=True, env=env, cwd=tmp)
+
+    def test_a_draft_with_the_three_release_names_passes_the_names_check(self) -> None:
+        names = ["nevr-runtime-v5.5.0-windows.zip", "nevr-runtime-v5.5.0-quest-libovrplatformloader.so",
+                 "nevr-runtime-v5.5.0-quest-runtime.so"]
+        result = self.check_names(names)
+        self.assertIn("== the draft carries exactly the three names", result.stdout)
+        self.assertNotIn("release_check_draft: FAILED: assets are", result.stderr)
+
+    def test_a_draft_with_the_old_two_names_fails_the_names_check(self) -> None:
+        names = ["nevr-runtime-v5.5.0-windows.zip", "nevr-runtime-v5.5.0-quest-libovrplatformloader.so"]
+        result = self.check_names(names)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("release_check_draft: FAILED: assets are", result.stderr)
+        self.assertIn("nevr-runtime-v5.5.0-quest-runtime.so", result.stderr)
 
 
 class AudienceSection(unittest.TestCase):

@@ -73,7 +73,7 @@ time, under the owner's go.
 
 ## Assets
 
-Two files for the GitHub release. The list is `release_asset_names` in `tools/release_asset_names.sh`; the guard, the draft
+Three files for the GitHub release. The list is `release_asset_names` in `tools/release_asset_names.sh`; the guard, the draft
 attach, the workflow and `tools/tests/test_release_assets.py` all read or check that one list, so the names below cannot
 drift from the build.
 
@@ -81,6 +81,7 @@ drift from the build.
 |---|---|---|
 | `nevr-runtime-vX.Y.Z-windows.zip` | players on Windows and people running a dedicated server | `BugSplat64.dll` (the host), `nevr-runtime.dll` (the runtime), `echovr_server.exe`, `install-nevr-runtime.exe` (the core installer; all stripped, debug info split off), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt` (the install steps and the dedicated-server steps), `SIGNING.txt`, `SHA256SUMS` (the files inside the zip: `install.ps1` checks `install-nevr-runtime.exe` against it, and the core checks both DLLs against the signed manifest). The zip holds one more copy of the installer under an older name ("The installer's old name"). The zip has no `plugins/` entry: a zip holds no empty directory. |
 | `nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so` | Quest packagers | the Quest sentinel library, a loose ELF (attested; not Authenticode) |
+| `nevr-runtime-vX.Y.Z-quest-runtime.so` | the Quest's own update (the core installer, kind `quest-runtime`) | the Quest runtime library `libnevr-runtime.so` under the release's name, a loose ELF, not stripped (attested; not Authenticode) |
 
 There is no top-level `SHA256SUMS` and no `RELEASE-NOTES.md` asset. The **release body** is short: a header, one line on what
 is new for players, and one line per file. `python3 tools/package_release.py notes` renders it from
@@ -88,6 +89,12 @@ is new for players, and one line per file. `python3 tools/package_release.py not
 the signature and the attestation carry integrity.
 
 Not release assets: the `.tar.zst` archives and the `.dbg` symbol files (workflow artifacts, 7 and 90 days), and any Quest APK.
+
+**A draft built before the runtime asset (two files, no `nevr-runtime-vX.Y.Z-quest-runtime.so`).** Such a draft is "not
+built" to the guard (`tools/release_already_built.sh` lists the three names and reports the missing one as `false`), so a
+run started on its `published` event rebuilds and re-uploads over the files already signed. Do not publish a draft built
+before this change. Delete the draft (`gh release delete vX.Y.Z --yes`, while it is still a draft) and dispatch the build
+again on the tag, so the draft carries all three names before the signer runs.
 
 **The signed Windows zip lives on the GitHub release.** Quest APKs are published outside GitHub.
 
@@ -180,7 +187,7 @@ gh release edit vX.Y.Z --notes-file "$N"
 gh release view vX.Y.Z --json body --jq .body
 ```
 
-`notes` refuses unless `$S` holds exactly the two assets. It takes the version and the commit from the `BugSplat64.dll` and
+`notes` refuses unless `$S` holds exactly the release's assets (the three names in the table above). It takes the version and the commit from the `BugSplat64.dll` and
 `nevr-runtime.dll` inside the zip (they must agree), so the body cannot describe another build.
 
 The player line is the authors' `release-headlines/` files, or the fixed "Fixes and internal changes." The commits never write

@@ -4,6 +4,7 @@
 //
 // Built and run by `just test-quest-data`.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -11,6 +12,9 @@
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
+#include "cdn/cdn_manifest.h"
 #include "cdn/cdn_store.h"
 #include "quest/tests/cdn_fake_env.h"
 #include "quest/tests/test_check.h"
@@ -21,10 +25,28 @@ namespace nc = nevr_cdn;
 using cdn_test::FakeEnv;
 using cdn_test::MakeFrame;
 using cdn_test::Sha256Of;
+using json = nlohmann::ordered_json;
 
 constexpr const char* kDir = "/cache";
 constexpr std::uint64_t kArchive = 0x2a41cf1c1d9e5d32ULL;
 constexpr std::uint64_t kOther = 0x1234567890abcdefULL;
+// The label the combat data is published under, its record type, and the number of records of 0 bytes in its list (the staging
+// combat manifest's `empty` list, 275 records, all of one type).
+constexpr const char* kCombatLabel = "combat_content";
+constexpr std::uint64_t kCombatType = 0x7b9a4c9fd03f37ebULL;
+constexpr std::uint64_t kCombatEmptyRecords = 275;
+constexpr std::uint64_t kCombatFirstName = 0x1000;
+// The fixture of the mount tests: an object's decompressed and stored sizes, its alignment, the name each label's object carries, the
+// records the three labels mount on Windows (each one object), and the user an empty probe starts from.
+constexpr std::uint64_t kObjectBytes = 300;
+constexpr std::uint64_t kStoredBytes = 120;
+constexpr std::uint32_t kObjectAlign = 16;
+constexpr std::uint64_t kLobbyName = 1;
+constexpr std::uint64_t kCombatName = 2;
+constexpr std::uint64_t kArtName = 3;
+constexpr std::size_t kMountedNamesOnWindows = 3;
+constexpr std::uint32_t kUnsetUser = 99;
+constexpr const char* kWindowsName = "windows-x86_64";
 
 nc::Limits TestLimits(std::uint64_t store_file_bytes = nc::kFormatMaxStoreBytes, std::uint64_t max_files = 8) {
   nc::Limits l;
@@ -215,6 +237,47 @@ void OnlyOneWriterIsLiveAtATime() {
   QCHECK(w2 == nullptr && std::string(why) == "writer_live");
   w.reset();
   QCHECK(store->Begin(100, &why) != nullptr);
+}
+
+// EndWrites closes the append handle so a mount can open the file (the PC's share modes, cdn_fake_env.h windows_sharing); while a
+// Writer is live it leaves the handle open, so that object still completes; while a mount holds the file, the next Begin
+// uses the next file.
+void EndWritesLetsTheFileBeOpenedAndSparesALiveWriter() {
+  FakeEnv env;
+  env.windows_sharing = true;
+  std::unique_ptr<nc::Store> store = Open(env, TestLimits());
+  const std::string frame = MakeFrame(300, 120, 'a');
+  const char* why = "";
+  std::unique_ptr<nc::Store::Writer> w = store->Begin(frame.size(), &why);
+  QCHECK(w != nullptr);
+  store->EndWrites();
+  QCHECK(w->Write(frame.data(), frame.size()) && w->Commit(Sha256Of(frame), 300));
+  std::int64_t handle = 0;
+  std::uint64_t size = 0;
+  QCHECK(!env.OpenBlob(nc::StoreFilePath(kDir, 0), &handle, &size));  // the append handle is still open
+  store->EndWrites();
+  QCHECK(env.OpenBlob(nc::StoreFilePath(kDir, 0), &handle, &size) && size == frame.size());
+  // A mount holds file 0: the next object goes into file 1, and the one after it follows it there.
+  const std::string sb = Put(*store, MakeFrame(301, 127, 'b'), 301);
+  QCHECK(!sb.empty() && store->Find(sb)->file == 1 && store->Find(sb)->offset == 0);
+  env.CloseBlob(handle);
+  const std::string sc = Put(*store, MakeFrame(302, 133, 'c'), 302);
+  QCHECK(!sc.empty() && store->Find(sc)->file == 1 && store->Find(sc)->offset == 127);
+}
+
+// With the last file it may use held by a mount, there is no next file to go to: the object is refused as open_failed.
+void AHeldStoreFileAtTheFileLimitIsRefused() {
+  FakeEnv env;
+  env.windows_sharing = true;
+  std::unique_ptr<nc::Store> store = Open(env, TestLimits(nc::kFormatMaxStoreBytes, 1));
+  QCHECK(!Put(*store, MakeFrame(300, 120, 'a'), 300).empty());
+  store->EndWrites();
+  std::int64_t handle = 0;
+  std::uint64_t size = 0;
+  QCHECK(env.OpenBlob(nc::StoreFilePath(kDir, 0), &handle, &size));
+  const char* reason = "";
+  QCHECK(Put(*store, MakeFrame(301, 127, 'b'), 301, &reason).empty() && std::string(reason) == "open_failed");
+  env.CloseBlob(handle);
 }
 
 void AFullDiskFailsTheWriteAndTheBytesAreGivenBack() {
@@ -443,6 +506,7 @@ void ARecordOfZeroBytesPointsAtARealChunkWithSizeZero() {
   m.labels = {"game"};
   m.entries = {MakeEntry("game", kArchive, 1, a, 300)};
   nc::EmptyRecord e;
+  e.label = "game";
   e.type = kOther;
   e.name = 50;
   e.align = 4;
@@ -462,12 +526,110 @@ void EmptyRecordsWithNoObjectToBorrowAChunkFromAreRefused() {
   nc::Manifest m;
   m.labels = {"game"};
   nc::EmptyRecord e;
+  e.label = "game";
   e.type = kOther;
   e.name = 50;
   e.align = 4;
   m.empties = {e};
   const nc::Mounted mounted = nc::Mount(env, *store, m, nc::kAndroidArm64, nc::Policy());
   QCHECK(mounted.shadow == nullptr && mounted.refused == 1 && mounted.records == 0);
+}
+
+// A manifest text: lobby_posters with one entry of blob `a`, and combat_content with one entry of blob `b`, both on Windows. The
+// combat records of 0 bytes go under the combat label (`scoped`) or in the top-level list (the legacy shape).
+json WinEntry(std::uint64_t type, std::uint64_t name, const std::string& frame, std::uint64_t bytes) {
+  return json{{"platform", kWindowsName}, {"type", nc::FormatHex64(type)}, {"name", nc::FormatHex64(name)},
+              {"format", nc::kFormatZstdFrame}, {"sha256", Sha256Of(frame)}, {"size", frame.size()}, {"bytes", bytes}, {"align", kObjectAlign}};
+}
+
+std::string CombatDoc(const std::string& a, const std::string& b, bool scoped) {
+  json combatEmpty = json::array();
+  json topEmpty = json::array();
+  for (std::uint64_t i = 1; i <= kCombatEmptyRecords; ++i) {
+    json rec{{"type", nc::FormatHex64(kCombatType)}, {"name", nc::FormatHex64(kCombatFirstName + i)}, {"align", kObjectAlign}};
+    if (scoped) {
+      rec["platform"] = kWindowsName;
+      combatEmpty.push_back(rec);
+    } else {
+      topEmpty.push_back(rec);
+    }
+  }
+  json labels = json::object();
+  labels["lobby_posters"] = json{{"entries", json::array({WinEntry(kArchive, kLobbyName, a, kObjectBytes)})}};
+  // A label that sorts before combat_content, so combat's index in the mounted labels is not 0 (the test would miss `user = 0`).
+  labels["art_base"] = json{{"entries", json::array({WinEntry(kArchive, kArtName, a, kObjectBytes)})}};
+  json combat{{"entries", json::array({WinEntry(kArchive, kCombatName, b, kObjectBytes)})}};
+  if (scoped) combat["empty"] = combatEmpty;
+  labels[kCombatLabel] = combat;
+  json doc{{"schema", nc::kSchema}, {"schema_version", nc::kSchemaVersion}, {"labels", labels}};
+  if (!scoped) doc["empty"] = topEmpty;
+  return doc.dump();
+}
+
+void EmptyRecordsOfALabelThatIsOffDoNotMount() {
+  FakeEnv env;
+  std::unique_ptr<nc::Store> store = Open(env, TestLimits());
+  const std::string a = MakeFrame(kObjectBytes, kStoredBytes, 'a');
+  const std::string b = MakeFrame(kObjectBytes, kStoredBytes, 'b');
+  Put(*store, a, kObjectBytes);
+  Put(*store, b, kObjectBytes);
+  nc::Manifest m;
+  QCHECK(nc::ParseManifest(CombatDoc(a, b, false), TestLimits(), &m).status == nc::ParseStatus::kOk);
+  nc::Policy policy;
+  policy.overrides[kCombatLabel] = nc::LabelState::kOff;
+  const nc::Mounted mounted = nc::Mount(env, *store, m, nc::kWindowsX64, policy);
+  QCHECK(mounted.empty_records == 0 && mounted.records == 1);
+  QCHECK(mounted.refused == 0);  // an off label is skipped, not refused: its records are not a fault of the set
+  QCHECK(mounted.shadow != nullptr);
+  nevr_shadow::Found f;
+  for (std::uint64_t i = 1; mounted.shadow != nullptr && i <= kCombatEmptyRecords; ++i) {
+    QCHECK(!mounted.shadow->Find(kCombatType, kCombatFirstName + i, &f));
+  }
+}
+
+void LabelScopedEmptiesMountWithTheirLabelOnTheirPlatform() {
+  FakeEnv env;
+  std::unique_ptr<nc::Store> store = Open(env, TestLimits());
+  const std::string a = MakeFrame(kObjectBytes, kStoredBytes, 'a');
+  const std::string b = MakeFrame(kObjectBytes, kStoredBytes, 'b');
+  Put(*store, a, kObjectBytes);
+  Put(*store, b, kObjectBytes);
+  nc::Manifest m;
+  QCHECK(nc::ParseManifest(CombatDoc(a, b, true), TestLimits(), &m).status == nc::ParseStatus::kOk);
+  QCHECK(m.empties.size() == kCombatEmptyRecords);
+  nc::Policy on;
+  on.overrides[kCombatLabel] = nc::LabelState::kOn;
+  on.overrides["art_base"] = nc::LabelState::kOn;
+  {
+    const nc::Mounted mounted = nc::Mount(env, *store, m, nc::kWindowsX64, on);
+    QCHECK(mounted.empty_records == kCombatEmptyRecords && mounted.records == kCombatEmptyRecords + kMountedNamesOnWindows);
+    const auto combat = std::find(mounted.labels.begin(), mounted.labels.end(), kCombatLabel);
+    QCHECK(combat != mounted.labels.end());
+    if (mounted.shadow == nullptr || combat == mounted.labels.end()) return;
+    const std::uint32_t combatIndex = static_cast<std::uint32_t>(combat - mounted.labels.begin());
+    nevr_shadow::Found real;
+    std::uint32_t user = kUnsetUser;
+    QCHECK(combatIndex == 1);
+    QCHECK(mounted.shadow->Find(kArchive, kCombatName, &real, &user) && user == combatIndex);
+    for (std::uint64_t i = 1; i <= kCombatEmptyRecords; ++i) {
+      nevr_shadow::Found empty;
+      std::uint32_t emptyUser = kUnsetUser;
+      QCHECK(mounted.shadow->Find(kCombatType, kCombatFirstName + i, &empty, &emptyUser));
+      QCHECK(empty.size == 0 && empty.chunk == real.chunk && emptyUser == combatIndex);
+    }
+  }
+  {
+    nc::Policy off;
+    off.overrides[kCombatLabel] = nc::LabelState::kOff;
+    const nc::Mounted mounted = nc::Mount(env, *store, m, nc::kWindowsX64, off);
+    QCHECK(mounted.empty_records == 0 && mounted.records == 1);
+    QCHECK(mounted.refused == 0);  // skipped as off, not refused as having no object to name
+  }
+  {
+    // Another platform: the combat entries and their records are not this platform's, so nothing mounts.
+    const nc::Mounted mounted = nc::Mount(env, *store, m, nc::kAndroidArm64, on);
+    QCHECK(mounted.empty_records == 0 && mounted.records == 0 && mounted.shadow == nullptr && mounted.refused == 0);
+  }
 }
 
 void NothingToMountGivesANullShadowAndHoldsNoFile() {
@@ -510,6 +672,8 @@ int main() {
   AnObjectLargerThanAStoreFileIsRefusedByName();
   AnAbortedObjectLeavesTheFileAsItWas();
   OnlyOneWriterIsLiveAtATime();
+  EndWritesLetsTheFileBeOpenedAndSparesALiveWriter();
+  AHeldStoreFileAtTheFileLimitIsRefused();
   AFullDiskFailsTheWriteAndTheBytesAreGivenBack();
   ATornIndexRecordIsCutOffAtTheNextBoot();
   ARecordWithABadCrcEndsTheIndexThere();
@@ -525,6 +689,8 @@ int main() {
   ALabelThatIsOffAndAnotherPlatformsEntryAreNotMounted();
   ARecordOfZeroBytesPointsAtARealChunkWithSizeZero();
   EmptyRecordsWithNoObjectToBorrowAChunkFromAreRefused();
+  EmptyRecordsOfALabelThatIsOffDoNotMount();
+  LabelScopedEmptiesMountWithTheirLabelOnTheirPlatform();
   NothingToMountGivesANullShadowAndHoldsNoFile();
   AStoreFileThatCannotBeOpenedFailsItsNamesAndLeaksNothing();
   TheHexFormIsTheManifestsForm();

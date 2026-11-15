@@ -96,7 +96,8 @@ bool RegisterCounters() noexcept;
 // Arms the handler and installs the thunk in libr15.so, and resolves the overlay's game functions (one WARN line per symbol
 // that does not resolve to its pinned address; the overlay is then off and the slot still installs). One line
 // {"event":"resource_request_install",...} says what happened, the libr15 load base the logged call sites are relative to,
-// the overlay ("ready" or the refusing symbol), whether the lines are written and that the counters were registered. True
+// the overlay ("ready" or the refusing symbol), whether the lines are written, that the counters were registered and
+// `cdn_pin_error` (0, or the error that refused the CDN resolver a per-thread pin key: nevr_cdn::Resolver::pin_error). True
 // only when the slot holds the thunk. `logRequests` is nevr_build::kIsDev. Same as InstallCounted(true, logRequests): the
 // caller has registered the counters (RegisterCounters).
 bool Install(bool logRequests) noexcept;

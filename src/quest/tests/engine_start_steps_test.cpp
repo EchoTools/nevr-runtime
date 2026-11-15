@@ -406,4 +406,16 @@ TEST(EngineStartSteps, ASwapRemovesTheOlderPreviousGenerationAndKeepsTheOneItMov
   EXPECT_EQ(Read(root / "update" / "previous" / "1.0.0" / kRuntime), kV1);
 }
 
+// R1's classes (engine_start.h): an entry-only failure is put back in the same start only where no runtime code ran before the
+// entry (the Quest edge, CodeBeforeEntry false). PC's answer (true) keeps its own behaviour, and an initialize failure always
+// stops with the mark.
+TEST(EngineStartSteps, AnEntryOnlyFailureIsPutBackInTheSameStartOnlyWhenNoCodeRanBeforeTheEntry) {
+  EXPECT_EQ(engine::ClassifyPendingFailure(engine::LoadClass::kEntryOnly, true), engine::PendingFailure::kMapped);
+  EXPECT_EQ(engine::ClassifyPendingFailure(engine::LoadClass::kEntryOnly, false), engine::PendingFailure::kNeverRan);
+  EXPECT_EQ(engine::ClassifyPendingFailure(engine::LoadClass::kInitFailed, false), engine::PendingFailure::kMapped);
+  EXPECT_EQ(engine::ClassifyPendingFailure(engine::LoadClass::kInitFailed, true), engine::PendingFailure::kMapped);
+  EXPECT_EQ(engine::ClassifyPendingFailure(engine::LoadClass::kNeverRan, false), engine::PendingFailure::kNeverRan);
+  EXPECT_EQ(engine::ClassifyPendingFailure(engine::LoadClass::kLoaded, false), engine::PendingFailure::kNone);
+}
+
 }  // namespace

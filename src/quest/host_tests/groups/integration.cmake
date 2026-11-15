@@ -144,3 +144,8 @@ nevr_ht_so(runtime_fx_init_fail GROUP integration OUTPUT_NAME nevr_fixture_init_
 nevr_ht_test(runtime_load_test GROUP integration NOEXC DL TIMEOUT 120 ARGS "${CMAKE_BINARY_DIR}/integration"
   DEPENDS runtime_fx_ok runtime_fx_no_entry runtime_fx_null_descriptor runtime_fx_bad_major runtime_fx_init_fail
   SRC src/quest/tests/runtime_load_test.cpp src/quest/shim/runtime_load.cpp)
+# piece 15: the update start on real files (update_start_test.cpp). Built with exceptions: the engine it runs catches its own failures.
+nevr_ht_test(update_start_test GROUP integration DL TIMEOUT 300 ARGS "${CMAKE_BINARY_DIR}/integration"
+  DEPENDS runtime_fx_ok runtime_fx_null_descriptor runtime_fx_init_fail
+  SRC src/quest/tests/update_start_test.cpp src/quest/shim/update_start.cpp src/quest/shim/runtime_load.cpp
+      src/core/update/engine_start.cpp src/core/update/names.cpp src/core/update/fs_posix.cpp src/quest/data/sha256.cpp)

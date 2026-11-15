@@ -32,6 +32,7 @@ constexpr std::uint64_t kFirstFrameMs = 1000;
 constexpr std::uint64_t kPastTheMarkMs = 12000;  // more than kConfirmAfterMs after the first frame
 constexpr std::uint32_t kWaitMs = 10000;
 constexpr std::uint32_t kStopMs = 2000;
+constexpr char kTestPins[] = "test-key RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
 
 // The lines the worker's threads write: under one mutex, because the worker logs from two threads (worker.h, Deps::log).
 struct Lines {
@@ -105,7 +106,7 @@ uw::Inputs BaseInputs(const nevr_update::UpdateFs* fs, const std::string& root, 
     return true;
   };
   in.core = FakeCore();
-  in.verify = [](const std::string&) { return nevr_update::VerifyOutcome{true, false, "accepted"}; };
+  in.verify = [](const std::string&, const nevr_update::ExpectedFile&) { return nevr_update::VerifyOutcome{true, false, "accepted"}; };
   in.log = lines->Fn();
   in.now_ms = [] { return std::uint64_t{0}; };
   return in;
@@ -145,6 +146,31 @@ void TheInputsReachTheWorkersSwitches(const nevr_update::UpdateFs* fs, const std
     const nevr_update::Deps deps = uw::BuildDeps(std::move(in));
     QCHECK(nevr_update::Decide(deps.switches) == Disabled::kNone);
     QCHECK(deps.config_channel.has_value() && *deps.config_channel == "beta");
+  }
+  {  // the development source: a dev build with a valid base may update, from that base and those pins
+    uw::Inputs in = BaseInputs(fs, root, &lines);
+    in.dev_build = true;
+    in.config_base = "http://127.0.0.1:8080/";
+    in.config_pins = kTestPins;
+    const nevr_update::Deps deps = uw::BuildDeps(std::move(in));
+    QCHECK(nevr_update::Decide(deps.switches) == Disabled::kNone);
+    QCHECK(deps.source.has_value() && deps.source->base == "http://127.0.0.1:8080" && deps.source->pins == kTestPins);
+  }
+  {  // a dev build without a base stays disabled; a rejected base is no base
+    uw::Inputs in = BaseInputs(fs, root, &lines);
+    in.dev_build = true;
+    in.config_base = "ftp://example.test/";
+    const nevr_update::Deps deps = uw::BuildDeps(std::move(in));
+    QCHECK(nevr_update::Decide(deps.switches) == Disabled::kDevBuild);
+    QCHECK(!deps.source.has_value());
+  }
+  {  // a release build ignores both keys: nothing reaches the core's config
+    uw::Inputs in = BaseInputs(fs, root, &lines);
+    in.config_base = "https://example.test/";
+    in.config_pins = kTestPins;
+    const nevr_update::Deps deps = uw::BuildDeps(std::move(in));
+    QCHECK(nevr_update::Decide(deps.switches) == Disabled::kNone);
+    QCHECK(!deps.source.has_value());
   }
   {
     uw::Inputs in = BaseInputs(fs, root, &lines);
@@ -195,6 +221,79 @@ void TheFrameCallReachesTheConfirmation(const nevr_update::UpdateFs* fs, const s
   result.worker->Stop(kStopMs);
 }
 
+// Start says what it decided about the update source, once, at Warning, with the host and never a credential; and a release build
+// with a key still starts its worker on the release source.
+void TheSourceDecisionIsLogged(const nevr_update::UpdateFs* fs, const std::string& root) {
+  {  // release: ignored, said
+    Lines lines;
+    FakeRegistry registry;
+    uw::Inputs in = BaseInputs(fs, root, &lines);
+    in.config_base = "https://example.test/u";
+    in.config_pins = kTestPins;
+    auto opened = std::make_shared<std::string>();
+    auto openedMu = std::make_shared<std::mutex>();
+    in.core.open = [opened, openedMu](const std::string& config, std::string*) {
+      std::lock_guard<std::mutex> lock(*openedMu);
+      *opened = config;
+      return true;
+    };
+    const uw::StartResult result = uw::Start(std::move(in), registry.Fn());
+    QCHECK(result.decision == Disabled::kNone);
+    QCHECK(result.worker != nullptr && result.worker->WaitCheckDone(kWaitMs));
+    {
+      std::lock_guard<std::mutex> lock(*openedMu);
+      QCHECK(!opened->empty() && opened->find("\"base\"") == std::string::npos && opened->find("\"pins\"") == std::string::npos);
+    }
+    QCHECK(lines.Has("update source outcome=ignored source=config key=update.base reason=release_build"));
+    QCHECK(!lines.Has("outcome=used"));
+    if (result.worker != nullptr) result.worker->Stop(kStopMs);
+  }
+  {  // dev with a base: used, said, host and port only
+    Lines lines;
+    FakeRegistry registry;
+    uw::Inputs in = BaseInputs(fs, root, &lines);
+    in.dev_build = true;
+    in.config_base = "http://127.0.0.1:8080/nevr/secret-path";
+    in.config_pins = kTestPins;
+    auto opened = std::make_shared<std::string>();
+    auto openedMu = std::make_shared<std::mutex>();
+    in.core.open = [opened, openedMu](const std::string& config, std::string*) {
+      std::lock_guard<std::mutex> lock(*openedMu);
+      *opened = config;
+      return true;
+    };
+    const uw::StartResult result = uw::Start(std::move(in), registry.Fn());
+    QCHECK(result.decision == Disabled::kNone);
+    QCHECK(result.worker != nullptr && result.worker->WaitCheckDone(kWaitMs));  // the check ran against the override
+    {
+      std::lock_guard<std::mutex> lock(*openedMu);
+      QCHECK(opened->find("\"base\":\"http://127.0.0.1:8080/nevr/secret-path\"") != std::string::npos);
+      QCHECK(opened->find("\"pins\":") != std::string::npos);
+    }
+    QCHECK(lines.Has("update source outcome=used source=config base_host=127.0.0.1:8080 pins=1 consequence=\"the update source is overridden"));
+    QCHECK(!lines.Has("secret-path"));
+    if (result.worker != nullptr) result.worker->Stop(kStopMs);
+  }
+  {  // dev with a bad base: rejected, said, still disabled for the old reason
+    Lines lines;
+    FakeRegistry registry;
+    uw::Inputs in = BaseInputs(fs, root, &lines);
+    in.dev_build = true;
+    in.config_base = "ftp://example.test/";
+    const uw::StartResult result = uw::Start(std::move(in), registry.Fn());
+    QCHECK(result.decision == Disabled::kDevBuild);
+    QCHECK(lines.Has("update source outcome=rejected source=config key=update.base reason=not_http_or_https consequence=\"no update source override; this development build does not update\""));
+    if (result.worker != nullptr) result.worker->Stop(kStopMs);
+  }
+  {  // neither key: no source line at all
+    Lines lines;
+    FakeRegistry registry;
+    const uw::StartResult result = uw::Start(BaseInputs(fs, root, &lines), registry.Fn());
+    QCHECK(!lines.Has("update source"));
+    if (result.worker != nullptr) result.worker->Stop(kStopMs);
+  }
+}
+
 // A registry that refuses leaves the worker running and says the confirmation cannot fire.
 void ARefusedFrameCallIsSaid(const nevr_update::UpdateFs* fs, const std::string& root) {
   Lines lines;
@@ -243,6 +342,46 @@ void TheRunningRuntimeIsTheFileTheCodeIsIn() {
   QCHECK(e2 == "no_version");
 }
 
+// The Quest verifier (VerifyStagedQuestFile): the staged file must be the bytes its stage result entry lists, by size and sha256; a link
+// or a directory where the file must be is a verdict; a file that cannot be opened is not.
+void TheStagedFileIsCheckedAgainstItsEntry(const std::string& root) {
+  const std::string dir = root + "/verify";
+  std::filesystem::create_directories(dir);
+  const std::string bytes = "staged runtime bytes";
+  const std::string path = dir + "/libnevr-runtime.so";
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << bytes;
+  }
+  const nevr_update::ExpectedFile entry{bytes.size(), nevr_quest::data::Sha256Hex(bytes.data(), bytes.size())};
+
+  const nevr_update::VerifyOutcome accepted = uw::VerifyStagedQuestFile(path, entry);
+  QCHECK(accepted.ok && !accepted.refused && accepted.reason == "accepted");
+
+  nevr_update::ExpectedFile wrong_size = entry;
+  wrong_size.size += 1;
+  const nevr_update::VerifyOutcome size = uw::VerifyStagedQuestFile(path, wrong_size);
+  QCHECK(!size.ok && size.refused && size.reason == "size_mismatch");
+
+  nevr_update::ExpectedFile wrong_hash = entry;
+  wrong_hash.sha256[0] = wrong_hash.sha256[0] == '0' ? '1' : '0';
+  const nevr_update::VerifyOutcome hash = uw::VerifyStagedQuestFile(path, wrong_hash);
+  QCHECK(!hash.ok && hash.refused && hash.reason == "sha256_mismatch");
+
+  const std::string link = dir + "/linked.so";
+  std::error_code ec;
+  std::filesystem::remove(link, ec);
+  std::filesystem::create_symlink(path, link);
+  const nevr_update::VerifyOutcome linked = uw::VerifyStagedQuestFile(link, entry);
+  QCHECK(!linked.ok && linked.refused && linked.reason == "link");
+
+  const nevr_update::VerifyOutcome folder = uw::VerifyStagedQuestFile(dir, entry);
+  QCHECK(!folder.ok && folder.refused && folder.reason == "not_a_regular_file");
+
+  const nevr_update::VerifyOutcome missing = uw::VerifyStagedQuestFile(dir + "/missing.so", entry);
+  QCHECK(!missing.ok && !missing.refused && missing.reason == "open_failed");
+}
+
 }  // namespace
 
 int main() {
@@ -252,8 +391,10 @@ int main() {
   WithoutACoreNothingStarts(fs.get(), root);
   TheFrameCallReachesTheConfirmation(fs.get(), root);
   ARefusedFrameCallIsSaid(fs.get(), root);
+  TheSourceDecisionIsLogged(fs.get(), root);
   TheFrameCallRefusesAnUnusableContext();
   TheRunningRuntimeIsTheFileTheCodeIsIn();
+  TheStagedFileIsCheckedAgainstItsEntry(root);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "update_wiring_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

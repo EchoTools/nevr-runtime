@@ -10,6 +10,7 @@
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/mapping_perms.h"
+#include "quest/sentinel/outside_game_call.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/patch/new_unlocks_clear_rules.h"
 
@@ -57,7 +58,10 @@ bool UpdateInFlight(std::uintptr_t user) noexcept {
 // The account the line is about: the social layer's id of the local user, the one the lobby records carry (0 until it is known).
 std::uint64_t LocalUserId() noexcept { return nevr_social_party::Global().Snapshot().selfId; }
 
-void LogEnd(const char* event, const char* msg, std::uint64_t count) noexcept {
+// One end record of a held clear. Runs outside any game call (outside_game_call.h): ClearHandler calls it after the game's clear has
+// returned, and the frame work's poll between game calls. It calls no game code, and nothing leaves it by exception (noexcept). It
+// reads the social layer's snapshot, which locks and copies (a personality frame), so it carries the annotation.
+NEVR_OUTSIDE_GAME_CALL void LogEnd(const char* event, const char* msg, std::uint64_t count) noexcept {
   sentinel::LogFields(sentinel::LogLevel::kInfo, event, {{"msg", msg}, {"user_id", LocalUserId()}, {"count", count}});
 }
 

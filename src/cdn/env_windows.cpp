@@ -15,6 +15,7 @@
 #include <bcrypt.h>
 #include <curl/curl.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -35,6 +36,41 @@ namespace {
 // Windows fixes the number of handles one process may hold at 2^24 (Microsoft, "Pushing the Limits of Windows: Handles"). No call reads
 // it back, so it is the one device fact here that is a constant; the store takes its descriptor share from it.
 constexpr std::uint64_t kWindowsProcessHandleLimit = 16777216;
+
+// Wine answers GetProcessHandleCount with success and 0 (wine-11.21: `fixme:process:NtQueryInformationProcess ProcessHandleCount
+// stub`). A running process always holds handles, so a 0 is no count. ADR 0032: the workaround tests that condition, and only
+// then counts this process's entries in the system's handle table (NtQuerySystemInformation, SystemExtendedHandleInformation),
+// which Wine implements (wine-11.21: 12 for a test process whose GetProcessHandleCount said 0). Windows never takes this path.
+// The layout is the documented SYSTEM_HANDLE_INFORMATION_EX of the NT API, which winternl.h does not declare.
+constexpr std::uint32_t kSystemExtendedHandleInformation = 64;
+constexpr std::int32_t kStatusInfoLengthMismatch = static_cast<std::int32_t>(0xC0000004U);
+constexpr int kHandleTableAttempts = 4;  // the table grows between the size query and the read; each retry takes the new size
+struct HandleEntryEx {
+  PVOID object;
+  ULONG_PTR unique_process_id;
+  ULONG_PTR handle_value;
+  ULONG granted_access;
+  USHORT creator_back_trace_index;
+  USHORT object_type_index;
+  ULONG handle_attributes;
+  ULONG reserved;
+};
+struct HandleInformationEx {
+  ULONG_PTR number_of_handles;
+  ULONG_PTR reserved;
+  HandleEntryEx handles[1];
+};
+
+// NtQuerySystemInformation from ntdll, as a HandleTableQuery; null, with GetLastError in *error, when ntdll or the export is missing.
+HandleTableQuery SystemHandleTableQuery(std::uint32_t* error) {
+  const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+  const auto query = ntdll == nullptr ? nullptr
+                                      : reinterpret_cast<HandleTableQuery>(
+                                            reinterpret_cast<void*>(GetProcAddress(ntdll, "NtQuerySystemInformation")));
+  if (query == nullptr) *error = GetLastError();
+  return query;
+}
+
 
 constexpr const char* kTempSuffix = ".tmp";
 constexpr const char* kDefaultLogTag = "[NEVR.CDN]";
@@ -387,6 +423,77 @@ std::unique_ptr<AppendFile> WindowsEnv::OpenAppend(const std::string& path) {
   return std::make_unique<WindowsAppend>(file.release());
 }
 
+bool CountProcessHandles(HandleTableQuery query, std::uint64_t pid, std::uint64_t* count, std::int32_t* status) {
+  *status = 0;
+  if (query == nullptr) return false;
+  std::uint32_t needed = 0;
+  *status = query(kSystemExtendedHandleInformation, nullptr, 0, &needed);
+  std::vector<unsigned char> table;
+  for (int attempt = 0; attempt < kHandleTableAttempts && *status == kStatusInfoLengthMismatch; ++attempt) {
+    // Wine answers the size query (no buffer) with 0 needed; a buffer that holds the header gets the real size back.
+    if (needed < sizeof(HandleInformationEx)) needed = sizeof(HandleInformationEx);
+    table.assign(needed, 0);
+    *status = query(kSystemExtendedHandleInformation, table.data(), static_cast<std::uint32_t>(table.size()), &needed);
+  }
+  if (*status != 0 || table.size() < sizeof(HandleInformationEx)) return false;
+  const auto* info = reinterpret_cast<const HandleInformationEx*>(table.data());
+  const std::size_t room = (table.size() - offsetof(HandleInformationEx, handles)) / sizeof(HandleEntryEx);
+  const std::size_t entries = info->number_of_handles < room ? static_cast<std::size_t>(info->number_of_handles) : room;
+  std::uint64_t mine = 0;
+  for (std::size_t i = 0; i < entries; ++i) {
+    if (info->handles[i].unique_process_id == pid) ++mine;
+  }
+  *count = mine;
+  return mine != 0;
+}
+
+HandleFact OpenHandleFact(bool platform_ok, std::uint64_t platform_count, std::uint32_t platform_error,
+                          HandleTableQueryResolver table_query, std::uint64_t pid) {
+  HandleFact fact;
+  if (!platform_ok) {  // the platform gave no count: no fact (reason platform_count_failed), nothing to work around
+    fact.error = platform_error;
+    return fact;
+  }
+  if (platform_count != 0) {
+    fact.have = true;
+    fact.open = platform_count;
+    fact.reason = "handle_count_nonzero";
+    return fact;
+  }
+  fact.zero_count = true;  // Wine's stub: a running process always holds handles
+  const HandleTableQuery query = table_query == nullptr ? nullptr : table_query(&fact.error);
+  if (query == nullptr) {
+    fact.reason = "no_handle_table";
+    return fact;
+  }
+  fact.have = CountProcessHandles(query, pid, &fact.open, &fact.status);
+  fact.reason = fact.have ? "handle_count_zero" : (fact.status != 0 ? "table_unreadable" : "no_entry_of_process");
+  return fact;
+}
+
+void ApplyHandleFact(const HandleFact& fact, DeviceFacts* out) {
+  if (!fact.have) return;  // no count: the descriptor fact stays absent, and the limits that need it say so
+  out->have_fds = true;
+  out->fd_soft_limit = kWindowsProcessHandleLimit;
+  out->fds_open = fact.open;
+}
+
+void HandleDecisionRecord(const HandleFact& fact, EventLevel* level, std::vector<Field>* fields) {
+  if (fact.have) {
+    *level = EventLevel::kInfo;
+    *fields = {{"source", fact.zero_count ? "system_handle_table" : "platform"},
+               {"reason", fact.reason},
+               {"fds_open", fact.open},
+               {"consequence", "the stores' descriptor share is the handle limit less this count"}};
+    return;
+  }
+  *level = EventLevel::kWarn;
+  *fields = {{"source", "none"}, {"reason", fact.reason}};
+  if (fact.status != 0) fields->emplace_back("status", static_cast<std::uint32_t>(fact.status));  // a failed read of the table
+  if (fact.error != 0) fields->emplace_back("error", fact.error);  // a failed platform call, or no query for the table
+  fields->emplace_back("consequence", "no open-handle fact: the limits that need it are not made");
+}
+
 bool WindowsEnv::QueryDevice(const std::string& dir, DeviceFacts* out) {
   *out = DeviceFacts();
   std::wstring wide;
@@ -402,11 +509,16 @@ bool WindowsEnv::QueryDevice(const std::string& dir, DeviceFacts* out) {
     out->memory_available = memory.ullAvailPhys;
   }
   DWORD handles = 0;
-  if (GetProcessHandleCount(GetCurrentProcess(), &handles) != FALSE) {
-    out->have_fds = true;
-    out->fd_soft_limit = kWindowsProcessHandleLimit;
-    out->fds_open = handles;
+  const bool platform_ok = GetProcessHandleCount(GetCurrentProcess(), &handles) != FALSE;
+  const std::uint32_t platform_error = platform_ok ? 0 : GetLastError();
+  const HandleFact fact = OpenHandleFact(platform_ok, handles, platform_error, &SystemHandleTableQuery, GetCurrentProcessId());
+  if (!handle_count_logged_.exchange(true)) {
+    EventLevel level = EventLevel::kInfo;
+    std::vector<Field> fields;
+    HandleDecisionRecord(fact, &level, &fields);
+    Event(level, kHandleDecisionEvent, fields);
   }
+  ApplyHandleFact(fact, out);
   return out->have_free || out->have_memory || out->have_fds;
 }
 

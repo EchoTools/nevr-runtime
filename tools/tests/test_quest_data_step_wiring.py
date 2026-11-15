@@ -19,6 +19,17 @@ def read(name):
     return (SENTINEL / name).read_text()
 
 
+# The Quest runtime library's entry (src/quest/runtime/runtime_entry.cpp): the shim's constructor maps libnevr-runtime.so and calls
+# its Initialize on the constructor's own thread (sentinel/entry.cpp StartRuntime, shim/runtime_load.cpp), and Initialize runs the
+# constructor sequence.
+RUNTIME_ENTRY = ROOT / "src/quest/runtime/runtime_entry.cpp"
+
+
+def runtime_initialize():
+    text = re.sub(r"//[^\n]*", "", RUNTIME_ENTRY.read_text())
+    return extract_braced_function(text, "std::int32_t Initialize(const NevrQuestHostContext* host) noexcept {")
+
+
 class TheProductionEntryArmsTheStep(unittest.TestCase):
     def test_the_data_step_is_armed_before_the_permission_wait_hook_is_installed(self):
         body = extract_braced_function(read("entry.cpp"), "bool InstallPermissionWaitHook() noexcept {")
@@ -211,9 +222,16 @@ class TheStepOrder(unittest.TestCase):
 
     def test_the_ui_looper_is_taken_in_the_constructor_in_every_build(self):
         # #829: the floor message's presenter needs the UI looper in a release build too, so the capture is unconditional.
+        # The capture is in the runtime's Initialize, which the shim's constructor calls on its own thread (StartRuntime), before
+        # the constructor sequence.
         ctor = extract_braced_function(read("entry.cpp"), "static void nevr_sentinel_ctor() {")
-        self.assertIn("nevr_quest::toast::CaptureUiLooper();", ctor)
-        self.assertNotIn("kIsDev) nevr_quest::toast::CaptureUiLooper", ctor)
+        self.assertIn("StartRuntime(", ctor)
+        start = extract_braced_function(read("entry.cpp"), "void StartRuntime(std::uint32_t variant) {")
+        self.assertIn("nevr_quest::update_start::Start(", start)
+        init = runtime_initialize()
+        self.assertIn("nevr_quest::toast::CaptureUiLooper();", init)
+        self.assertNotIn("kIsDev) nevr_quest::toast::CaptureUiLooper", init)
+        self.assertLess(init.index("nevr_quest::toast::CaptureUiLooper();"), init.index("RunSentinelConstructor()"))
 
     def test_the_looper_callback_makes_the_toast_on_the_calling_thread_and_never_the_main_looper_overload(self):
         text = re.sub(r"//[^\n]*", "", read("toast_presenter.cpp"))
@@ -268,14 +286,23 @@ class TheConstructorBeginNamesTheBuild(unittest.TestCase):
             self.ctor())
 
     def test_the_variant_is_read_beside_the_library_and_handed_on_before_the_first_line(self):
+        # The shim reads the stamp, writes the begin record and hands the variant to the runtime (StartRuntime); the runtime's
+        # Initialize gives it to the combat gate before the constructor sequence's first line.
         ctor = self.ctor()
         read_stamp = ctor.index("nevr_quest::build_variant::ReadOwnStamp()")
-        set_variant = ctor.index("nevr_quest::combat::SetVariant(variant.variant)")
         begin = ctor.index("LogConstructorBegin(")
+        start = ctor.index("StartRuntime(static_cast<std::uint32_t>(variant.variant))")
         self.assertLess(ctor.index("sentinel::Arm();"), read_stamp)  # a crash in the read leaves a report
-        self.assertLess(read_stamp, set_variant)
-        self.assertLess(set_variant, begin)
-        self.assertLess(begin, ctor.index("RunSentinelConstructor()"))
+        self.assertLess(read_stamp, begin)
+        self.assertLess(begin, start)
+        # The value is carried, not only the order: StartRuntime puts the stamp's variant in the host context, and Initialize
+        # reads the gate's variant from that field.
+        start_body = strip_comments(extract_braced_function(read("entry.cpp"), "void StartRuntime(std::uint32_t variant) {"))
+        self.assertIn("host.variant = variant;", start_body)
+        init = re.sub(r"\s+", " ", runtime_initialize())
+        derived = init.index("const auto variant = static_cast<nevr_quest::build_variant::Variant>(host->variant);")
+        self.assertLess(derived, init.index("nevr_quest::combat::SetVariant(variant)"))
+        self.assertLess(init.index("nevr_quest::combat::SetVariant(variant)"), init.index("RunSentinelConstructor()"))
 
     def test_the_crash_report_is_given_the_build_line_before_the_first_line(self):
         # ADR 0040 rule 2: a crash report carries the version, the kind and the variant (core/crash_report.h SetBuild).
@@ -347,6 +374,7 @@ class TheGlueOffsetsAreAssertedAgainstTheNdkHeaders(unittest.TestCase):
         "kActivityVm": "0x8",
         "kActivityEnv": "0x10",
         "kActivityClazz": "0x18",
+        "kActivityInternalDataPath": "0x20",
     }
 
     def test_every_constant_has_its_value_and_a_static_assert(self):

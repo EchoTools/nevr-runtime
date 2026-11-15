@@ -70,7 +70,10 @@
 #include "runtime/combat/write_gate.h"  // nEVR port
 #include "runtime/combat/equip_cell.h"  // nEVR port (#600): the cell the script guards read
 #include "runtime/combat/rules_state.h"  // nEVR port (#600): the RULES mailbox fields, in one place
+#include "runtime/combat/match_control_rules.h"  // nEVR port (#2242): the 'G' word, a client's 'G' / 'R' writes, the maps, shared with the Quest
 #include "runtime/combat/match_type.h"  // nEVR port (#2289)
+#include "runtime/combat/payload_speed_rules.h"  // nEVR port (#2242): PAYLOAD SPEED, the payload PAUSE rule, the third row's text
+#include "runtime/combat/veilnet_gate.h"  // nEVR port (#2242): the send gate, the destination recency, the hello tries
 #include "runtime/compat/server_features.h"  // nEVR port (#2333): what the current server states
 #include "runtime/lifecycle/arena_round_time.h"  // nEVR port (#2289): the stored session game type
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
@@ -81,6 +84,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <intrin.h>                   // _ReturnAddress: the flag hook checks its caller (#2242)
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -301,12 +305,18 @@ void PickServer() {
     ReleaseSRWLockExclusive(&g_lock);
 }
 
+// nEVR port (#2242, EchoCombat 2.0.6): when the game last sent to each destination (nevr_combat::gate::Recent). ServerDest gives the
+// picked server only while the game still sends there, so a server the game has left gets nothing from VeilNet.
+nevr_combat::gate::SentTo<SOCKET> g_sent_to;     // under g_lock
+void NoteSent(SOCKET s, uint32_t addr, uint16_t port) { g_sent_to.Note(s, addr, port, GetTickCount64()); }
+bool SentRecently(const ecr::BasicDest<SOCKET> &d) { return g_sent_to.SentRecently(d, GetTickCount64()); }
 // nEVR port (#2358): ecr::BasicState::SawSend, keyed by socket, address and port.
 void SawSend(SOCKET s, const sockaddr *to) {
     if (!to || to->sa_family != AF_INET) return;
     const sockaddr_in *a = reinterpret_cast<const sockaddr_in *>(to);
     AcquireSRWLockExclusive(&g_lock);
     g_ec.SawSend(s, a->sin_addr.s_addr, a->sin_port);
+    NoteSent(s, a->sin_addr.s_addr, a->sin_port);
     ReleaseSRWLockExclusive(&g_lock);
 }
 
@@ -361,7 +371,7 @@ void FinalCapped() {
 bool ServerDest(Dest &out) {
     ecr::BasicDest<SOCKET> d{};
     AcquireSRWLockShared(&g_lock);
-    bool ok = g_ec.Server(&d);
+    bool ok = g_ec.Server(&d) && SentRecently(d);
     ReleaseSRWLockShared(&g_lock);
     if (ok) {
         out.sock = d.sock;
@@ -375,7 +385,11 @@ bool ServerDest(Dest &out) {
 
 void SendToServer(uint8_t type, uint32_t id) {
     Dest d;
-    if (ServerDest(d)) Send(d.sock, d.addr, type, id);
+    if (!ServerDest(d)) return;
+    // Only the hello goes to a server that has not answered one (#2242, EchoCombat 2.0.6): everything else waits for the
+    // server to state that it runs EchoCombat (nevr_server_features, #2333).
+    if (!nevr_combat::gate::SendAllowed(type, ::nevr_server_features::Client().Current().echoCombat)) return;
+    Send(d.sock, d.addr, type, id);
 }
 
 // --- server: the clients it relays to -----------------------------------------------
@@ -462,13 +476,13 @@ float *g_rules_total = nullptr;
 //: then the RULES page 2 state (tools/fix_rules_pages.py): +10 page shown, +11 LOADOUTS shown (0 ALL, 1 CLASSIC, 2 NEW),
 //: +12 requests, +13 the value asked for.
 constexpr uint32_t RULES_BELOW_PAGE_END = 0x140;
-constexpr uint32_t CLASSIC_SHOWN = 0x11, CLASSIC_REQUESTS = 0x12, CLASSIC_WANT = 0x13;
+constexpr uint32_t CLASSIC_SHOWN = nevr_combat::rules::kClassicShown, CLASSIC_REQUESTS = 0x12, CLASSIC_WANT = 0x13;
 constexpr uint32_t STATION_CELLS = nevr_combat::rules::kStationCells;  // +14..+16: equipment station cells shown per gear type
 constexpr uint64_t CLASSIC_ITEMS = 4;           // each gear list's stock items come first
 uint8_t *g_rules = nullptr;                     // the RULES mailbox
 volatile LONG g_classic = 0;                    // server: LOADOUTS (LOADOUT_*)
 volatile LONG g_chassis = 0;                    // server: SERIES-10 ONLY
-constexpr uint32_t CHASSIS_SHOWN = 0x2C;        // mailbox +2C: SERIES-10 ONLY shown (client)
+constexpr uint32_t CHASSIS_SHOWN = nevr_combat::rules::kChassisShown;   // mailbox +2C: SERIES-10 ONLY shown (client)
 constexpr uint32_t WANT_CHASSIS = 0x80;         // in +13 (the value asked for): a SERIES-10 ONLY ask, bit 0 the value
 //: RULES page 2 row 3, POINT RATE: a multiplier on how fast a held capture point's points rise
 //: (tools/fix_point_rate.py scales the capture-point script's time step by mailbox +2D / 4).
@@ -504,27 +518,19 @@ char g_page_text[4][PAGE_TEXT];
 //: was dropped 2026-11-05: its bytes +32 / +33 and 'G' bits 6 / 24-25 stay unused)
 //: (0..3 at +32; asked as 10h | 1 up / 10h down, sent as 10h | target << 8). +33 = the server is
 //: driving the payload to the chosen checkpoint right now.
-constexpr uint32_t PAYLOAD_MAP = 0x30, PSPEED_SHOWN = 0x31, CHECKPOINT_SHOWN = 0x32, SKIP_SHOWN = 0x33;
+constexpr uint32_t PAYLOAD_MAP = nevr_combat::rules::kPayloadMap, PSPEED_SHOWN = nevr_combat::rules::kPspeedShown,
+                   CHECKPOINT_SHOWN = nevr_combat::rules::kCheckpointShown, SKIP_SHOWN = nevr_combat::rules::kSkipShown;
 constexpr uint32_t WANT_CHECKPOINT = 0x10;
 volatile LONG g_pspeed = 4;                     // server: PAYLOAD SPEED in quarters (4 = x1)
 volatile LONG g_payload_map = 0;                // server: the payload update ran in the last second
 volatile LONG g_skipping = 0;                   // server: driving the payload to the checkpoint
 volatile LONG g_pause_queued = 0;               // server: PAUSE asked, waiting for a checkpoint
-constexpr uint32_t PAUSE_QUEUED_SHOWN = 0x34;   // mailbox +34: that, on clients (TEAM READY label)
+constexpr uint32_t PAUSE_QUEUED_SHOWN = nevr_combat::rules::kPauseQueuedShown;   // mailbox +34: that, on clients (TEAM READY label)
 uint32_t g_payload_flags = 0;                   // server: the payload's flags last seen (2 autodrive)
 volatile ULONGLONG g_payload_seen = 0;         // when the payload update last ran
 volatile LONG g_payload_moved = 0;              // server: it moved since this round's start
 volatile LONG g_checkpoint_hits = 0;            // server: checkpoints reached (script events) so far
 LONG g_pause_queue_base = 0;                    // server: the hits when a PAUSE was queued
-
-// "1.0" / "2.5" / "0.75" from quarters (0 = 4).
-void QuarterText(char *num, size_t n, uint8_t q) {
-    if (!q) q = 4;
-    if (q % 4 == 0 && q / 4 >= 3) sprintf_s(num, n, "%d", q / 4);
-    else if (q % 4 == 0) sprintf_s(num, n, "%d.0", q / 4);
-    else if (q % 2 == 0) sprintf_s(num, n, "%d.5", q / 4);
-    else sprintf_s(num, n, "%d.%02d", q / 4, q % 4 * 25);
-}
 
 void PageText(int row, const char *text) {
     char t[PAGE_TEXT];
@@ -543,18 +549,10 @@ void PageTexts() {
     PageText(0, t);
     sprintf_s(t, "SERIES-10 ONLY: %s", c ? "ON" : "OFF");
     PageText(1, t);
-    char num[16];
-    if (g_rules && g_rules[PAYLOAD_MAP]) {
-        QuarterText(num, sizeof(num), g_rules[PSPEED_SHOWN]);
-        sprintf_s(t, "PAYLOAD SPEED: %sx", num);
-        PageText(2, t);
-        g_page_text[3][0] = 0;
-    } else {
-        QuarterText(num, sizeof(num), q);
-        sprintf_s(t, "POINT RATE: %sx", num);
-        PageText(2, t);
-        g_page_text[3][0] = 0;
-    }
+    // the third row: PAYLOAD SPEED on a payload map, POINT RATE elsewhere (runtime/combat/payload_speed_rules.h)
+    nevr_combat::payload_speed::RowText(t, sizeof(t), g_rules && g_rules[PAYLOAD_MAP], g_rules ? g_rules[PSPEED_SHOWN] : 0, q);
+    PageText(2, t);
+    g_page_text[3][0] = 0;
     if (g_rules) *(char *volatile *)(g_rules + RATE_TEXT) = g_page_text[0];
 }
 void RateText(uint8_t) { PageTexts(); }
@@ -590,28 +588,6 @@ constexpr uint64_t EVT_ALIGNMENT_CHANGED = 0x48f6befc619771a8ull;  // delegate_o
 ULONGLONG g_live_since = 0;
 constexpr uint32_t WANT_PAUSE = 0x20;           // in +13: a PAUSE ask, bit 0 the value
 
-// --- END MATCH (private matches) ------------------------------------------------------------
-// A client asks with F8 (its Echo window in front): 'C' WANT_END. The server, in a private match
-// only (nEVR port (#2289): from SessionGameType(), combat/match_type.h), until the game's
-// nevt_game_over goes out (or END_GIVE_UP_MS):
-//   * blue captures the point as if a blue player stood on it (game thread, EndMatchCapture): each
-//     capture volume not owned by blue gets what the engine's capture tick writes when a capture
-//     completes (+44 owner = 0 blue, +46 capturing = none, progress 0, +40 |= 4 replicate) and
-//     delegate_OnPossessionChanged (what FUN_140ccfb20 raises), so the point script charges blue;
-//   * blue's capture-point points = 9999 (tick thread, the point script's data found in this
-//     process by its "capturepoint" symbol at +100h; +F0 orange, +F8 blue, +FC points to win):
-//     the script's win check, which only runs for the charging team, gives blue the round;
-//   * RULES POINT UNLOCK 1 s / CAPTURE TIME 0 (T = 60: InstantCapture makes the capture 1 ms), so a
-//     real player on the point captures it at once too.
-// Two rounds: the match is over. RULES are put back after.
-// (Tried first, and failed: raising nevt_cbt_round_win_blue only moved the game mode on a round
-// with nobody winning; 999 points for both teams alone needed somebody charging.)
-constexpr uint32_t WANT_END = 0x10000000;
-constexpr uint64_t EVT_GAME_OVER = 0xe2d5eb48e0d8a7c4ull;        // nevt_game_over
-constexpr uint64_t SYM_CAPTUREPOINT = 0xeedeff1586bd8846ull;     // "capturepoint"
-constexpr ULONGLONG END_EVERY_MS = 300, END_GIVE_UP_MS = 180000, END_RESCAN_MS = 2000;
-constexpr float END_POINTS = 9999.0f;
-constexpr float END_TOTAL = 60.0f;               // unlock 1 s, capture 0 (instant)
 // nEVR port (#2289): the match type comes from the session game type the runtime stores (combat/match_type.h), not from
 // the game's session log line, which echovr.exe logs and this module does not watch. The last privacy logged, so each
 // change is one line: -1 none logged yet, else a MatchPrivacy value.
@@ -620,27 +596,10 @@ nevr_combat::MatchPrivacy SessionPrivacy() {
     const std::optional<std::string> type = nevr_arena_round_time::SessionGameType();
     const nevr_combat::MatchPrivacy privacy = nevr_combat::PrivacyOf(type);
     if (InterlockedExchange(&g_privacy_logged, (LONG)privacy) != (LONG)privacy)
-        Log("session game type %s: %s (MAP SWITCH and END MATCH %s)", type ? type->c_str() : "none",
+        Log("session game type %s: %s (MAP SWITCH %s)", type ? type->c_str() : "none",
             nevr_combat::PrivacyText(privacy), privacy == nevr_combat::MatchPrivacy::kPrivate ? "allowed" : "refused");
     return privacy;
 }
-volatile ULONGLONG g_end_until = 0, g_end_next = 0, g_end_scanned = 0;
-volatile LONG g_end_written = 0;                 // times the points were written
-uint8_t *g_end_point = nullptr;                  // the point script's data (cached)
-bool g_end_saved = false;                        // the RULES value to put back
-float g_end_old_total = 0.0f;
-float *g_rules_total_ptr();
-void EndMatchRestore(const char *why) {
-    if (g_end_saved)
-        if (float *t = g_rules_total_ptr()) *(volatile float *)t = g_end_old_total;
-    g_end_saved = false;
-    g_end_until = 0;
-    Log("END MATCH: %s (points written %ld time(s)); RULES put back", why, (long)g_end_written);
-}
-void GameOverSeen(uint64_t event) {
-    if (event == EVT_GAME_OVER && g_end_until) EndMatchRestore("game over");
-}
-
 // --- MAP SWITCH (post-match terminal, private matches) --------------------------------------
 // The post-match podium's four map buttons (tools/fix_map_terminal.py) send mapswitch_<map> when
 // pressed (the podium ignores them). A client hears its own press (script events reach the inner
@@ -652,12 +611,13 @@ void GameOverSeen(uint64_t event) {
 // engine moves them to "server loading" (the transition screen), unloads their levels and loads
 // the owner JSON's level when the server is in game again.
 constexpr uint32_t WANT_MAP = 0x20000000;        // | map index 0..3
-constexpr int MAP_COUNT = 4;
+constexpr uint32_t WANT_KIND_MASK = 0xF0000000;  // the top nibble of a 'C' ask names the ask (WANT_MAP)
+constexpr int MAP_COUNT = nevr_combat::match_control::kMapCount;   // nEVR port (#2242): shared with the Quest
 constexpr uint64_t EVT_MAPSWITCH[MAP_COUNT] = {
     0xc60e17c86d1f3df0ull, 0x63093755a2c24ebeull, 0x3d77042c79604528ull, 0xc60e17cb751921edull};   // mapswitch_<map>
 constexpr uint64_t LEVEL_SYM[MAP_COUNT] = {
     0x43e2da7914642604ull, 0x42670f2bed45703cull, 0xdf5ca7b7dfa383d4ull, 0x43e2da7a0c623a19ull};   // mpl_combat_<map>
-const char *const kMapNames[MAP_COUNT] = {"DYSON", "COMBUSTION", "FISSION", "SURGE"};   // SURGE = mpl_combat_gauss
+const char *const *const kMapNames = nevr_combat::match_control::kMapNames;   // nEVR port (#2242): shared with the Quest
 // The map buttons' button actors (fix_map_terminal.py: symbol64("mapswitch_<map>_0")). Once a
 // switch is under way every client greys them (the podium's own way: evt_btn_disable to the
 // button actor, which its prp_itt_screen_button_logic script handles), so nobody presses again.
@@ -776,46 +736,28 @@ void MapSwitchEvent(uint64_t event) {
     }
 }
 
-// The capture point script's data: "capturepoint" at +100h, plausible points at +F0 / +F8 / +FC.
-bool LooksLikePoint(const uint8_t *d) {
-    EC_TRY {
-        if (*(const uint64_t *)(d + 0x100) != SYM_CAPTUREPOINT) return false;
-        float o = *(const float *)(d + 0xF0), b = *(const float *)(d + 0xF8), r = *(const float *)(d + 0xFC);
-        return o >= 0 && o <= 100000 && b >= 0 && b <= 100000 && r >= 10 && r <= 1000;
-    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-uint8_t *FindPointData() {
-    MEMORY_BASIC_INFORMATION mbi;
-    uint8_t *addr = nullptr;
-    while (VirtualQuery(addr, &mbi, sizeof(mbi)) == sizeof(mbi)) {
-        uint8_t *base = (uint8_t *)mbi.BaseAddress;
-        size_t size = mbi.RegionSize;
-        if (mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE && (mbi.Protect == PAGE_READWRITE)) {
-            EC_TRY {
-                for (size_t o = 0x100; o + 8 <= size; o += 8)
-                    if (*(const uint64_t *)(base + o) == SYM_CAPTUREPOINT && LooksLikePoint(base + o - 0x100))
-                        return base + o - 0x100;
-            } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-            }
-        }
-        addr = base + size;
-        if (addr < base) break;
-    }
-    return nullptr;
-}
-
 // What the server's 'G' carries: LOADOUTS in bits 0-1, SERIES-10 ONLY in bit 2, PAUSE state in
 // bits 3-4, payload map bit 5, driving to the checkpoint bit 6, POINT RATE (quarters) in bits
 // 8-15, PAYLOAD SPEED (quarters) in bits 16-23.
+// nEVR port (#2242): the word is runtime/combat/match_control_rules.h's, which the Quest's client decodes too.
 uint32_t RulesWord() {
-    return (uint32_t)g_classic | ((uint32_t)g_chassis & 1) << 2 | ((uint32_t)g_paused & 3) << 3 |
-           ((uint32_t)g_payload_map & 1) << 5 | ((uint32_t)g_skipping & 1) << 6 | ((uint32_t)g_pause_queued & 1) << 7 |
-           ((uint32_t)g_rate & 0xff) << 8 | ((uint32_t)g_pspeed & 0xff) << 16;
+    nevr_combat::match_control::RulesWord r;
+    r.loadout = static_cast<uint8_t>(g_classic);
+    r.chassis = (g_chassis & 1) != 0;
+    r.paused = static_cast<nevr_combat::rules::Pause>(g_paused & nevr_combat::match_control::kPauseMask);
+    r.payloadMap = g_payload_map != 0;
+    r.skipping = (g_skipping & 1) != 0;
+    r.pauseQueued = (g_pause_queued & 1) != 0;
+    r.pointRate = static_cast<uint8_t>(g_rate);
+    r.payloadSpeed = static_cast<uint8_t>(g_pspeed);
+    return nevr_combat::match_control::Pack(r);
 }
-enum : uint32_t { LOADOUT_ALL = 0, LOADOUT_CLASSIC = 1, LOADOUT_NEW = 2 };
-const char *LoadoutName(uint32_t m) { return m == LOADOUT_CLASSIC ? "CLASSIC" : m == LOADOUT_NEW ? "NEW" : "ALL"; }
+enum : uint32_t {
+    LOADOUT_ALL = nevr_combat::match_control::kLoadoutAll,
+    LOADOUT_CLASSIC = nevr_combat::match_control::kLoadoutClassic,
+    LOADOUT_NEW = nevr_combat::match_control::kLoadoutNew
+};
+const char *LoadoutName(uint32_t m) { return nevr_combat::match_control::LoadoutName(m); }
 
 // LOADOUTS in force here: the server's own rule, or on a client what its server said.
 uint32_t LoadoutMode() {
@@ -835,10 +777,39 @@ void InstantCapture() {
         *(volatile float *)g_capture_time = 0.001f;
 }
 
+// Server: a new lobby session starts with the default RULES (#2242, EchoCombat 2.0.3). They live in the RULES mailbox and
+// VeilNet's own state, both kept for the life of the server process, so without this a match took the last private match's
+// POINT UNLOCK / CAPTURE TIME etc. The clients get the defaults with the next hello answers ('R' and 'G', every 2 s).
+// A map switch keeps them: its session start is the engine's, not a new session.
+void ResetRules() {
+    if (g_rules) {
+        EC_TRY {
+            nevr_combat::rules::ApplyDefaults(g_rules);
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    g_classic = LOADOUT_ALL;
+    g_chassis = 0;
+    g_rate = nevr_combat::rules::kRateDefault;
+    g_pspeed = nevr_combat::rules::kRateDefault;
+    g_paused = PAUSE_OFF;
+    g_pause_queued = 0;
+    g_resume_at = 0;
+    Log("new session: RULES back to the defaults");
+}
+
+// The session store's count, read on each datagram the server takes: a new session (another kLobbySessionCreate or a legacy
+// session start, arena_round_time.h) resets the RULES once. The first session the process sees is not one (NewSessionSeen).
+void NoticeNewSession() {
+    static uint64_t seen = 0;
+    if (nevr_combat::rules::NewSessionSeen(seen, nevr_arena_round_time::SessionGeneration())) ResetRules();
+}
+
 void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
     char buf[48];
     if (g_server) {
         Remember(s, from);
+        NoticeNewSession();
         if (p.type == 'C' && !g_match_control) return;   // nEVR port: match control off (combat.match_control)
         if (p.type == 'H') {
             // nEVR port (#2333): the 'A' ("this server has EchoCombat") stays for clients of older builds only: the Quest combat
@@ -846,28 +817,34 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
             // build reads no 'A' and follows the server's lobby settings (server_features.h). It reaches a client once the sendto /
             // recvfrom hooks see the game's datagrams (#2334), and goes when no 6.17.0-era client remains.
             Send(s, from, 'A', g_medigun_on_server ? kAnswerMedigun : 0);
-            uint32_t total = g_rules_total ? *(volatile uint32_t *)g_rules_total : 0;
-            if (total) Send(s, from, 'R', total);                            // its RULES unlock / capture time
+            // its RULES unlock / capture time, 0 too: a new session's reset has to reach the clients (#2242)
+            if (g_rules_total) Send(s, from, 'R', *(volatile uint32_t *)g_rules_total);
             Send(s, from, 'G', RulesWord());                                 // its LOADOUTS / SERIES-10 ONLY
         }
+        // RULES and PAUSE asks count in a private match only (#2242, EchoCombat 2.0.3); the map buttons check their own
+        // privacy (below), so their ask is not refused here.
+        const nevr_combat::MatchPrivacy privacy = p.type == 'C' ? SessionPrivacy() : nevr_combat::MatchPrivacy::kUnknown;
+        const bool rule_ask = privacy == nevr_combat::MatchPrivacy::kPrivate;
+        if (p.type == 'C' && !rule_ask && (p.id & WANT_KIND_MASK) != WANT_MAP)
+            Log("RULES ask %08x from %s: refused (%s)", p.id, Addr(from, buf, sizeof(buf)), nevr_combat::PrivacyText(privacy));
         uint8_t asked_rate = (uint8_t)(p.id >> 8);   // a podium asks for a POINT RATE (the value itself)
         // on a payload map the row is PAYLOAD SPEED: the same asks (and steps) set that instead
         volatile LONG &rate_rule = g_payload_map ? g_pspeed : g_rate;
-        if (p.type == 'C' && (p.id & (WANT_CHASSIS | WANT_RATE)) == WANT_RATE &&
+        if (rule_ask && (p.id & (WANT_CHASSIS | WANT_RATE)) == WANT_RATE &&
             memchr(kRateSteps, asked_rate, sizeof(kRateSteps)) && asked_rate != (uint8_t)rate_rule) {
             rate_rule = asked_rate;
             if (g_rules) g_rules[g_payload_map ? PSPEED_SHOWN : RATE_SHOWN] = asked_rate;
             sockaddr_in nobody = {};
             int r = Relay(nobody, 'G', RulesWord());
-            Log("%s %d/4 (asked by %s): told %d client(s)", g_payload_map ? "PAYLOAD SPEED" : "POINT RATE",
+            Log("%s %d/4 (asked by %s): told %d client(s)", g_payload_map ? nevr_combat::payload_speed::kPayloadRowLabel : nevr_combat::payload_speed::kRateRowLabel,
                 (int)asked_rate, Addr(from, buf, sizeof(buf)), r);
         }
-        if (p.type == 'C' && (p.id & (WANT_CHASSIS | WANT_RATE | WANT_PAUSE)) == WANT_PAUSE) {   // PAUSE / UNPAUSE
+        if (rule_ask && (p.id & (WANT_CHASSIS | WANT_RATE | WANT_PAUSE)) == WANT_PAUSE) {   // PAUSE / UNPAUSE
             // PAUSE from running or resuming; UNPAUSE only from paused, and it starts the countdown
             LONG now = g_paused, want = (p.id & 1) ? PAUSE_ON : now == PAUSE_ON ? PAUSE_RESUMING : now;
             // payload maps: a pause only happens while the payload is held (before the attackers
             // start, or in a checkpoint's buffer); otherwise it waits for the next checkpoint
-            if (want == PAUSE_ON && now == PAUSE_OFF && g_payload_map && g_payload_moved && !(g_payload_flags & 1)) {
+            if (want == PAUSE_ON && now == PAUSE_OFF && nevr_combat::payload_speed::PauseWaitsForCheckpoint(g_payload_map != 0, g_payload_moved != 0, g_payload_flags)) {
                 g_pause_queue_base = g_checkpoint_hits;
                 if (!InterlockedExchange(&g_pause_queued, 1)) {
                     sockaddr_in nobody = {};
@@ -887,7 +864,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
                     Addr(from, buf, sizeof(buf)), r);
             }
         }
-        if (p.type == 'C' && (p.id & 0xF0000000) == WANT_MAP && (p.id & 0xF) < MAP_COUNT) {   // a map button
+        if (p.type == 'C' && (p.id & WANT_KIND_MASK) == WANT_MAP && (p.id & 0xF) < MAP_COUNT) {   // a map button
             int k = (int)(p.id & 0xF);
             const nevr_combat::MatchPrivacy privacy = SessionPrivacy();   // nEVR port (#2289)
             if (privacy != nevr_combat::MatchPrivacy::kPrivate) {
@@ -898,19 +875,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
                 Log("MAP SWITCH to %s asked by %s", kMapNames[k], Addr(from, buf, sizeof(buf)));
             }
         }
-        if (p.type == 'C' && p.id == WANT_END) {                             // F8: END MATCH
-            const nevr_combat::MatchPrivacy privacy = SessionPrivacy();   // nEVR port (#2289)
-            if (privacy != nevr_combat::MatchPrivacy::kPrivate) {
-                Log("END MATCH asked by %s: refused (%s)", Addr(from, buf, sizeof(buf)), nevr_combat::PrivacyText(privacy));
-            } else if (!g_end_until) {
-                ULONGLONG now = GetTickCount64();
-                g_end_written = 0;
-                g_end_next = now;
-                g_end_until = now + END_GIVE_UP_MS;
-                Log("END MATCH asked by %s", Addr(from, buf, sizeof(buf)));
-            }
-        }
-        if (p.type == 'C' && (p.id & WANT_CHASSIS)) {                        // a podium asks for SERIES-10 ONLY
+        if (rule_ask && (p.id & WANT_CHASSIS)) {                        // a podium asks for SERIES-10 ONLY
             LONG want = (LONG)(p.id & 1);
             if (InterlockedExchange(&g_chassis, want) != want) {
                 if (g_rules) g_rules[CHASSIS_SHOWN] = (uint8_t)want;
@@ -919,7 +884,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
                 Log("SERIES-10 ONLY %s (asked by %s): told %d client(s)", want ? "on" : "off", Addr(from, buf, sizeof(buf)), n);
             }
         }
-        if (p.type == 'C' && p.id <= LOADOUT_NEW) {                          // a podium asks for LOADOUTS
+        if (rule_ask && p.id <= LOADOUT_NEW) {                          // a podium asks for LOADOUTS
             LONG want = (LONG)p.id;
             if (InterlockedExchange(&g_classic, want) != want) {
                 if (g_rules) g_rules[CLASSIC_SHOWN] = (uint8_t)want;
@@ -940,7 +905,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
         }
     } else if (p.type == 'L') {   // nEVR port (#2333): an 'A' is no longer read (the server sends none)
         Dest d;
-        if (ServerDest(d) && Same(d.addr, from) && p.id < (uint32_t)MAP_COUNT && g_map_target != (LONG)p.id + 1) {
+        if (ServerDest(d) && Same(d.addr, from) && nevr_combat::match_control::MapIndexValid(p.id) && g_map_target != (LONG)p.id + 1) {
             g_map_target = (LONG)p.id + 1;
             g_map_target_since = GetTickCount64();
             g_map_grey = 1;
@@ -948,47 +913,26 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
         }
     } else if (p.type == 'R') {
         Dest d;
-        if (g_rules_total && ServerDest(d) && Same(d.addr, from) && *(volatile uint32_t *)g_rules_total != p.id) {
-            *(volatile uint32_t *)g_rules_total = p.id;
-            float t;
-            memcpy(&t, &p.id, 4);
-            Log("RULES from the server: point unlock %d s, capture time %d s", (int)t / 60, (int)t % 60);
+        // nEVR port (#2242): the write is match_control_rules.h's, shared with the Quest (g_rules_total is g_rules + 8)
+        if (g_rules_total && g_rules && ServerDest(d) && Same(d.addr, from) &&
+            nevr_combat::match_control::ApplyRoundTotal(g_rules, p.id)) {
+            const nevr_combat::match_control::RoundParts t = nevr_combat::match_control::Parts(p.id);
+            Log("RULES from the server: point unlock %d min, capture time %d s", t.unlockMinutes, t.captureSeconds);
         }
     } else if (p.type == 'G') {
         Dest d;
-        uint8_t m = (p.id & 3) <= LOADOUT_NEW ? (uint8_t)(p.id & 3) : (uint8_t)LOADOUT_ALL;
-        uint8_t c = (uint8_t)(p.id >> 2 & 1);
-        uint8_t q = (uint8_t)(p.id >> 8);
         if (g_rules && ServerDest(d) && Same(d.addr, from)) {
-            if (g_rules[RATE_SHOWN] != q) {
-                g_rules[RATE_SHOWN] = q;
-                Log("POINT RATE from the server: %d/4", (int)q);
-            }
-            uint8_t pm = (uint8_t)(p.id >> 5 & 1), sk = (uint8_t)(p.id >> 6 & 1);
-            uint8_t ps = (uint8_t)(p.id >> 16), cp = (uint8_t)(p.id >> 24 & 3);
-            if (g_rules[PAYLOAD_MAP] != pm || g_rules[PSPEED_SHOWN] != ps || g_rules[CHECKPOINT_SHOWN] != cp) {
-                g_rules[PAYLOAD_MAP] = pm;
-                g_rules[PSPEED_SHOWN] = ps;
-                g_rules[CHECKPOINT_SHOWN] = cp;
-                Log("PAYLOAD from the server: %s map, speed %d/4, checkpoint used %d", pm ? "payload" : "other",
-                    (int)ps, (int)cp);
-            }
-            g_rules[SKIP_SHOWN] = sk;
-            g_rules[PAUSE_QUEUED_SHOWN] = (uint8_t)(p.id >> 7 & 1);
-            uint8_t z = (uint8_t)(p.id >> 3 & 3);
-            if (z > PAUSE_RESUMING) z = PAUSE_OFF;
-            if (g_rules[PAUSED_SHOWN] != z) {
-                g_rules[PAUSED_SHOWN] = z;
-                Log("PAUSE from the server: %s", z == PAUSE_ON ? "on" : z == PAUSE_RESUMING ? "resuming" : "off");
-            }
-            if (g_rules[CLASSIC_SHOWN] != m) {
-                g_rules[CLASSIC_SHOWN] = m;
-                Log("LOADOUTS from the server: %s", LoadoutName(m));
-            }
-            if (g_rules[CHASSIS_SHOWN] != c) {
-                g_rules[CHASSIS_SHOWN] = c;
-                Log("SERIES-10 ONLY from the server: %s", c ? "on" : "off");
-            }
+            // nEVR port (#2242): the decode and the mailbox writes are match_control_rules.h's, shared with the Quest
+            namespace mc = nevr_combat::match_control;
+            const mc::Applied a = mc::Apply(g_rules, p.id);
+            const mc::RulesWord w = mc::Decode(p.id);
+            if (a.rate) Log("POINT RATE from the server: %d/4", static_cast<int>(w.pointRate));
+            if (a.payload)
+                Log("PAYLOAD from the server: %s map, speed %d/4, checkpoint used %d", w.payloadMap ? "payload" : "other",
+                    static_cast<int>(w.payloadSpeed), static_cast<int>(w.checkpoint));
+            if (a.pause) Log("PAUSE from the server: %s", mc::PauseName(w.paused));
+            if (a.loadout) Log("LOADOUTS from the server: %s", LoadoutName(w.loadout));
+            if (a.chassis) Log("SERIES-10 ONLY from the server: %s", w.chassis ? "on" : "off");
             PageTexts();
         }
     } else {   // nEVR port (#2358): 'M', 'K' and the carried types through ecr::BasicState::Client, each once per id
@@ -1018,7 +962,6 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
 void ApplyClassic();
 void ApplyChassisRule();
 void ApplyPause();
-void EndMatchStep();
 void ApplyPayload();
 void RefreshStations();
 int WSAAPI Hooked_sendto(SOCKET s, const char *buf, int len, int flags, const sockaddr *to, int tolen) {
@@ -1094,12 +1037,10 @@ volatile uint64_t g_netgame;
 volatile ULONGLONG g_station_changed = 0;      // when a row last changed (0: none waiting)
 constexpr ULONGLONG STATION_SETTLE_MS = 400;    // one redraw, once the rows have stopped changing
 
-void GameOverSeen(uint64_t event);
 // nEVR port: DispatchEventToSession is the runtime's detour (patch/party_invite_gate.h); this observes it, then the game
 // handles the event, as HookedDispatch did before calling through.
 void ObserveDispatch(void *netgame, uint64_t event) {
     g_netgame = (uint64_t)netgame;
-    GameOverSeen(event);
 }
 
 // Each station grid cell holds one icon element per item (and a lock); the script only shows
@@ -1267,7 +1208,7 @@ constexpr uint64_t EVT_POSSESSION_CHANGED = 0xea580f491680c6e0ull;   // delegate
 
 // DispatchComponentEvent to call: VeilNet hooks it itself (HookedDCE), so its entry no longer
 // holds the stock bytes; then the trampoline to the real one. (Comparing the entry bytes alone
-// made END MATCH's capture and the PAUSE possession poke skip silently on a hooked game.)
+// made the PAUSE possession poke skip silently on a hooked game.)
 extern dispatch_component_fn g_real_dce;
 // On a client another plugin hooks it first (test: "no DispatchComponentEvent", grey buttons): then
 // VeilNet has no hook of its own; the entry is that plugin's jmp, and calling it goes through it.
@@ -1335,8 +1276,6 @@ void ForEachCapturePoint(bool reset_it, bool announce) {
 }
 void ResetCapturePoints() { ForEachCapturePoint(true, true); }
 
-float *g_rules_total_ptr() { return g_rules_total; }
-
 #ifdef ECHOCOMBAT_LOG
 // Logging build, server: each capture volume's state, once a second when it changed (the slow
 // CAPTURE TIME 0 report). Volume (50h bytes, dense, *(cs+100h)): +08 per-team {short claims,
@@ -1380,105 +1319,6 @@ void TraceCapture() {
 }
 #endif
 
-// END MATCH, on the server's game thread: blue captures every capture volume it does not own.
-void EndMatchCapture() {
-    static ULONGLONG next = 0, said = 0;
-    ULONGLONG now = GetTickCount64();
-    if (!g_server || !g_end_until || now < next) return;
-    next = now + 500;
-    uint64_t cs = g_capture_tick.cs;
-    bool ticking = CaptureTicking();
-    if (!cs || !ticking) {
-        if (now - said > 3000) { said = now; Log("END MATCH: no capture point ticking yet (cs %llx)", cs); }
-        return;
-    }
-    auto dispatch = DceFn();
-    if (!dispatch) {
-        if (now - said > 3000) { said = now; Log("END MATCH: DispatchComponentEvent not callable (unexpected build)"); }
-        return;
-    }
-    EC_TRY {
-        auto ref = *(component_ref_fn *)(*(uint64_t *)cs + 0x1D8);
-        uint16_t n = *(uint16_t *)(cs + 0xFC);
-        uint8_t *volumes = *(uint8_t **)(cs + 0x100);
-        uint16_t *dense_to_sparse = *(uint16_t **)(cs + 0xE0);
-        uint8_t *sparse = *(uint8_t **)(cs + 0xD0);
-        // Test: owner forced while the point was still locked (+40 bit 0, the unlock countdown)
-        // was never heard by the point script, and afterwards blue already owned it, so nothing
-        // could capture it. So: only an unlocked point, and blue's ownership is announced again
-        // every second while END MATCH runs.
-        static ULONGLONG announced = 0;
-        bool again = now - announced >= 1000;
-        for (uint16_t i = 0; i < n && i < 16 && volumes; ++i) {
-            uint8_t *vol = volumes + i * 0x50;
-            if (*(uint16_t *)(vol + 0x40) & 1) continue;             // locked: not yet
-            bool blue = *(uint16_t *)(vol + 0x44) == 0;
-            if (blue && !again) continue;
-            uint16_t si = dense_to_sparse[i];
-            uint32_t handle = si | (uint32_t)*(uint16_t *)(sparse + si * 4 + 2) << 16;
-            if (blue) {
-                uint64_t a[2] = {}, b[2] = {};
-                uint64_t param = ref(cs, a, handle)[1];
-                uint64_t link = ref(cs, b, handle)[0];
-                dispatch(*(uint64_t *)(cs + 0x80), EVT_POSSESSION_CHANGED, link, param, 1);
-                announced = now;
-                continue;
-            }
-            if (uint8_t *teams = *(uint8_t **)(vol + 8)) {
-                *(float *)(teams + 4) = 0.0f;                        // both teams' capture progress
-                *(float *)(teams + 12) = 0.0f;
-            }
-            *(uint16_t *)(vol + 0x44) = 0;                          // owner: blue
-            *(uint16_t *)(vol + 0x46) = 0xffff;                     // nobody capturing
-            *(uint16_t *)(vol + 0x40) |= 4;                         // replicate it
-            uint64_t a[2] = {}, b[2] = {};
-            uint64_t param = ref(cs, a, handle)[1];
-            uint64_t link = ref(cs, b, handle)[0];
-            dispatch(*(uint64_t *)(cs + 0x80), EVT_POSSESSION_CHANGED, link, param, 1);
-            announced = now;
-            Log("END MATCH: blue captured capture point %u", i);
-        }
-    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-        Log("END MATCH: capture failed (cs %llx)", cs);
-    }
-}
-
-// END MATCH, on the server's tick thread (see WANT_END).
-void EndMatchStep() {
-    ULONGLONG now = GetTickCount64();
-    if (now >= g_end_until) { EndMatchRestore("no game over in time, gave up"); return; }
-    if (now < g_end_next) return;
-    g_end_next = now + END_EVERY_MS;
-    if (!g_end_saved) {
-        g_end_old_total = g_rules_total ? *(volatile float *)g_rules_total : 0.0f;
-        g_end_saved = true;
-    }
-    if (g_rules_total) *(volatile float *)g_rules_total = END_TOTAL;
-    if (!g_end_point || !LooksLikePoint(g_end_point)) {
-        g_end_point = nullptr;
-        if (now - g_end_scanned < END_RESCAN_MS) return;
-        g_end_scanned = now;
-        g_end_point = FindPointData();
-        Log(g_end_point ? "END MATCH: capture point data at %p" : "END MATCH: no capture point data found%s",
-            g_end_point ? (void *)g_end_point : (void *)"");
-        if (!g_end_point) return;
-    }
-    EC_TRY {
-        *(volatile float *)(g_end_point + 0xF8) = END_POINTS;
-        if (InterlockedIncrement(&g_end_written) % 20 == 1) Log("END MATCH: blue at 9999 points (%ld)", (long)g_end_written);
-        // The point's unlock countdown (+DCh = lock time - (now - start +F4h), worked out every
-        // frame by the script; T only sets the lock time a round starts with, so a round already
-        // running kept its 45 s): its start moves back by what is left, so it unlocks now.
-        float left = *(volatile float *)(g_end_point + 0xDC);
-        if (left > 0.2f && left < 1000.0f) {
-            *(volatile float *)(g_end_point + 0xF4) -= left;
-            Log("END MATCH: point unlock countdown %.1f s cut to 0", left);
-        }
-    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-        g_end_point = nullptr;
-    }
-}
-
 // While paused (or counting down to resume) nothing but VeilNet may lift the cease fire: in test a
 // gun came back during a pause once. Candidates: the game-mode script's own
 // nevt_to_server_disable_combat_cease_fire (state changes) and the capture point's
@@ -1515,7 +1355,6 @@ void CheckpointHit(const char *why, uint64_t event) {
 
 void MapSwitchEvent(uint64_t event);
 void WatchEvent(uint64_t space, uint64_t event, uint64_t link, uint64_t param) {
-    GameOverSeen(event);
     MapSwitchEvent(event);
 #ifdef ECHOCOMBAT_LOG
     // Two-player test: both teams readied and the match never left pre_match_wait_for_ready.
@@ -1584,7 +1423,6 @@ void __fastcall HookedDCE(uint64_t space, uint64_t event, uint64_t link, uint64_
 #ifdef ECHOCOMBAT_LOG
     WatchEvent(space, event, link, param);
 #else
-    GameOverSeen(event);
     MapSwitchEvent(event);
 #endif
     if ((event == EVT_CEASE_FIRE_OFF || event == EVT_LOCAL_CEASE_FIRE_OFF || event == EVT_LOCAL_CEASE_FIRE_TOGGLE) &&
@@ -1717,10 +1555,8 @@ void ApplyMapSwitch() {
     }
 }
 
-void EndMatchCapture();
 void ApplyPause() {
     ApplyMapSwitch();
-    EndMatchCapture();
     if (!g_rules) return;
     LONG paused = g_server ? g_paused : g_rules[PAUSED_SHOWN];
     if (g_server) CaptureTicking();                       // keeps "when the count last moved" current
@@ -2120,12 +1956,16 @@ void EnforceLocal(const char *why) {
 
 // nEVR port: the three slot setters are the runtime's detours (patch/equipment_refire.h, #2121); this is their filter: it
 // returns the item the setter is called with, where HookedSlot<I> called through with it.
+void PickTacMod(uint64_t sym);
 uint64_t FilterSlot(int I, void *component, uint32_t idx, uint64_t item) {
     const uint64_t sys = (uint64_t)component;
     const char *what = nullptr;
     uint64_t swap = ClassicSwap(I, item, &what);
-    if (sys == g_equip_cs && (idx & 0xffff) == (*(volatile uint32_t *)(sys + 0x130) & 0xffff))
-        g_asked[I] = swap ? item : 0;              // the local player's own pick
+    const bool local = sys == g_equip_cs && (idx & 0xffff) == (*(volatile uint32_t *)(sys + 0x130) & 0xffff);
+    if (local) g_asked[I] = swap ? item : 0;     // the local player's own pick
+    // nEVR (#2242, EchoCombat 2.0.8): the platform module's profile log line is no longer the only source of the tac mod pick, so the
+    // local tac mod slot's setter gives it too; the profile line is still read (SawLog).
+    if (I == 1 && local) PickTacMod(item);
     if (swap) Log("slot %d of component %u set to %016llx: %s", I, idx & 0xffff, item, what);
     return swap ? swap : item;
 }
@@ -2159,10 +1999,7 @@ void UpdateGearLists() {
     // nEVR port (#2333): the current server states EchoCombat in its lobby settings (server_features.h).
     bool answered = ::nevr_server_features::Client().Current().echoCombat;
     if (g_rules && !answered) {                                  // no EchoCombat server: ALL, off, 1.0x
-        g_rules[CLASSIC_SHOWN] = g_rules[CHASSIS_SHOWN] = 0;
-        g_rules[RATE_SHOWN] = g_rules[PAUSED_SHOWN] = 0;
-        g_rules[PAYLOAD_MAP] = g_rules[PSPEED_SHOWN] = g_rules[CHECKPOINT_SHOWN] = g_rules[SKIP_SHOWN] = 0;
-        g_rules[PAUSE_QUEUED_SHOWN] = 0;
+        nevr_combat::match_control::ClearServerRules(g_rules);   // nEVR port (#2242): shared with the Quest
         PageTexts();
     }
     TacModsFor(answered);
@@ -2227,18 +2064,65 @@ void KeepChassis(uint64_t cs, uint64_t player, uint64_t item, uint64_t slot, int
 
 volatile LONG g_chassis_replay = 0;              // ApplyChassisRule's own calls: not kept
 
+// --- SERIES-10 ONLY: the recursion guard and the server's standard chassis (#2242, EchoCombat 2.0.5 and 2.0.8) -------------------------
+// A server's net_standard_chassis rule makes the engine put the standard chassis (S11) on by itself, inside LoadAndApplyItem. Our S10
+// swap on top of that fed the two into each other until the stack ran out (EchoCombat 2.0.5, the game closed without a dump). Two
+// parts: the flag hook (HookedNetFlag) makes the one read the engine makes in LoadAndApplyItem answer 0 (its return address is
+// kLoadApplyFlagRetRva), so the engine does not swap and ours does; and a chassis call made from inside one of our own is never
+// swapped again (t_chassis_depth). The pure decision is nevr_combat::gate::SwapChassisWanted (veilnet_gate.h).
+using netflag_fn = int(__fastcall *)(uint64_t, uint64_t);
+thread_local int t_chassis_depth = 0;            // inside one of our chassis calls (this thread)
+netflag_fn g_real_net_flag = nullptr;            // the flag's trampoline, once hooked
+constexpr std::uintptr_t CS_NET_VARS = 0xB8;     // CR15NetCustomizationCS: the net game's variables, the first argument LoadAndApplyItem (0xD0D170) passes the flag reader, `MOV RCX,[R13+0xB8]`
+constexpr ULONGLONG STD_CHASSIS_LOOK_MS = 500;   // how often ApplyChassisRule reads the server's standard flag (twice a second, as EchoCombat 2.0.8)
+constexpr uint8_t CALL_REL32_OPCODE = 0xE8;      // `CALL rel32`
+constexpr std::ptrdiff_t CALL_REL32_LEN = 5;     // the opcode and its 4-byte displacement
+constexpr std::ptrdiff_t CALL_REL32_DISP = 4;    // the displacement, the last 4 bytes before the return address
+constexpr size_t HEX_PER_BYTE = 2;               // "%02x"
+
+int __fastcall HookedNetFlag(uint64_t netgame, uint64_t sym) {
+    const std::uintptr_t ret = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    if (nevr_combat::gate::FlagForcedZero(sym, ret,
+                                          reinterpret_cast<std::uintptr_t>(g_base + nevr_combat::gate::kLoadApplyFlagRetRva)))
+        return 0;                                // LoadAndApplyItem: no standard swap by the engine; ours makes it S10
+    return g_real_net_flag(netgame, sym);
+}
+
+// The server's standard rule for this player: the flag the net game reads (the symbol at 0x141CB3420), read through the hook's
+// trampoline. Deviation from EchoCombat 2.0.8, which reads the stock address unconditionally: when the flag's bytes or its call
+// site did not check, the flag is neither hooked nor read, this answers false, and the "step aside for the server's standard
+// rule" path never runs; the depth guard (t_chassis_depth) is then what keeps our swap from feeding the engine's.
+bool StandardChassisSet(uint64_t cs) {
+    if (!g_real_net_flag) return false;
+    EC_TRY {
+        uint64_t vars = *reinterpret_cast<const uint64_t *>(cs + CS_NET_VARS);
+        return vars && g_real_net_flag(vars, nevr_combat::gate::kStandardChassisFlag) != 0;
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool SwapChassis(uint64_t cs) {
+    if (t_chassis_depth) return false;           // one of ours: never again
+    return nevr_combat::gate::SwapChassisWanted(ChassisOn(), StandardChassisSet(cs), g_real_net_flag != nullptr, t_chassis_depth);
+}
+
 void __fastcall HookedLoadApply(uint64_t cs, uint64_t player, uint64_t item, uint64_t slot, int flag) {
     if (ChassisItem(item)) {
-        if (!g_chassis_replay) KeepChassis(cs, player, item, slot, flag);
-        if (ChassisOn()) item = SYM_CHASSIS_S10;
+        if (!g_chassis_replay && !t_chassis_depth) KeepChassis(cs, player, item, slot, flag);
+        if (SwapChassis(cs)) item = SYM_CHASSIS_S10;
     }
+    ++t_chassis_depth;
     g_real_load_apply(cs, player, item, slot, flag);
+    --t_chassis_depth;
 }
 
 void __fastcall HookedApplyItem(uint64_t cs, uint64_t player, uint64_t item, uint64_t slot, int flag) {
-    if (ChassisItem(item) && item != SYM_CHASSIS_S10 && ChassisOn() && g_real_load_apply) {
+    if (ChassisItem(item) && item != SYM_CHASSIS_S10 && g_real_load_apply && SwapChassis(cs)) {
         if (!g_chassis_replay) KeepChassis(cs, player, item, slot, flag);
+        ++t_chassis_depth;
         g_real_load_apply(cs, player, SYM_CHASSIS_S10, slot, flag);   // S10 may not be loaded yet
+        --t_chassis_depth;
         return;
     }
     g_real_apply_item(cs, player, item, slot, flag);
@@ -2247,17 +2131,26 @@ void __fastcall HookedApplyItem(uint64_t cs, uint64_t player, uint64_t item, uin
 // On the game's thread: the rule changed, so every chassis seen goes on again.
 void ApplyChassisRule() {
     LONG on = ChassisOn() ? 1 : 0;
+    static LONG std_seen = 0;                        // the server's standard flag, looked at twice a second
+    static ULONGLONG std_next = 0;
+    if (!on && g_real_net_flag && g_chassis_call_count && GetTickCount64() >= std_next) {
+        std_next = GetTickCount64() + STD_CHASSIS_LOOK_MS;
+        std_seen = StandardChassisSet(g_chassis_calls[0].cs) ? 1 : 0;
+    }
+    if (!on && g_real_net_flag) on = std_seen;
     if (on == g_chassis_applied || !g_real_load_apply) return;
     g_chassis_applied = on;
     int n = g_chassis_call_count, done = 0;
     g_chassis_replay = 1;
     for (int k = 0; k < n; ++k) {
         ChassisCall c = g_chassis_calls[k];
+        ++t_chassis_depth;
         EC_TRY {
             g_real_load_apply(c.cs, c.player, on ? SYM_CHASSIS_S10 : c.item, c.slot, c.flag);
             ++done;
         } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         }
+        --t_chassis_depth;
     }
     g_chassis_replay = 0;
     Log("SERIES-10 ONLY %s: %d of %d chassis put on again", on ? "on" : "off", done, n);
@@ -2270,9 +2163,44 @@ bool HookApplyItem() {
     g_real_load_apply = (applyitem_fn)(g_base + LOAD_APPLY_RVA);
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
+    // The flag hook (#2242): its bytes, and the call in LoadAndApplyItem that is the one its return address names, are checked first.
+    const uint8_t *ret = g_base + nevr_combat::gate::kLoadApplyFlagRetRva;
+    const uint8_t *flag_at = g_base + nevr_combat::gate::kNetFlagRva;
+    const bool head_ok = !memcmp(flag_at, nevr_combat::gate::kNetFlagHead, sizeof(nevr_combat::gate::kNetFlagHead));
+    const bool call_ok = ret[-CALL_REL32_LEN] == CALL_REL32_OPCODE &&
+                         ret + *reinterpret_cast<const int32_t *>(ret - CALL_REL32_DISP) == flag_at;
+    const bool flag_ok = head_ok && call_ok;
+    auto hex = [](const uint8_t *p, size_t n, char *out, size_t cap) {
+        for (size_t i = 0; i < n; ++i) snprintf(out + HEX_PER_BYTE * i, cap - HEX_PER_BYTE * i, "%02x", p[i]);
+    };
+    if (!head_ok) {
+        char expected[HEX_PER_BYTE * sizeof(nevr_combat::gate::kNetFlagHead) + 1] = {}, actual[sizeof(expected)] = {};
+        hex(nevr_combat::gate::kNetFlagHead, sizeof(nevr_combat::gate::kNetFlagHead), expected, sizeof(expected));
+        hex(flag_at, sizeof(nevr_combat::gate::kNetFlagHead), actual, sizeof(actual));
+        LogWarning("SERIES-10 ONLY: standard chassis flag hook not installed va=+0x%llx reason=bytes_mismatch expected=%s actual=%s "
+                   "(the server's standard-chassis rule is not read; the recursion guard alone keeps our swap from the engine's)",
+                   static_cast<unsigned long long>(nevr_combat::gate::kNetFlagRva), expected, actual);
+    } else if (!call_ok) {
+        const uint8_t *site = ret - CALL_REL32_LEN;
+        char actual[HEX_PER_BYTE * CALL_REL32_LEN + 1] = {};
+        hex(site, CALL_REL32_LEN, actual, sizeof(actual));
+        const uint8_t *target = ret + *reinterpret_cast<const int32_t *>(ret - CALL_REL32_DISP);
+        LogWarning("SERIES-10 ONLY: standard chassis flag hook not installed va=+0x%llx reason=call_site_mismatch call_site=+0x%llx "
+                   "expected_opcode=%02x expected_target=+0x%llx actual=%s actual_target=+0x%llx "
+                   "(the server's standard-chassis rule is not read; the recursion guard alone keeps our swap from the engine's)",
+                   static_cast<unsigned long long>(nevr_combat::gate::kNetFlagRva),
+                   static_cast<unsigned long long>(nevr_combat::gate::kLoadApplyFlagRetRva - CALL_REL32_LEN), CALL_REL32_OPCODE,
+                   static_cast<unsigned long long>(nevr_combat::gate::kNetFlagRva), actual,
+                   static_cast<unsigned long long>(target - g_base));
+    }
     DetourAttach(&(PVOID &)g_real_apply_item, (PVOID)HookedApplyItem);
     DetourAttach(&(PVOID &)g_real_load_apply, (PVOID)HookedLoadApply);
-    if (DetourTransactionCommit() != NO_ERROR) { g_real_apply_item = g_real_load_apply = nullptr; return false; }
+    // Set before the attach, so the commit rewrites it to the trampoline in place: no window where HookedNetFlag runs with it null.
+    if (flag_ok) {
+        g_real_net_flag = reinterpret_cast<netflag_fn>(g_base + nevr_combat::gate::kNetFlagRva);
+        DetourAttach(&(PVOID &)g_real_net_flag, (PVOID)HookedNetFlag);
+    }
+    if (DetourTransactionCommit() != NO_ERROR) { g_real_apply_item = g_real_load_apply = nullptr; g_real_net_flag = nullptr; return false; }
     return true;
 }
 
@@ -2336,6 +2264,13 @@ void HookSelectionLogs();
 // so the hook itself never logs; Tick writes the "selected:" line. One producer, one consumer.
 volatile LONG64 g_selected_pending = 0;
 
+// A tac mod put in the local player's slot (FilterSlot), or read from the profile log (SawLog): the selection the tac mod guard reads.
+void PickTacMod(uint64_t sym) {
+    if (!nevr_combat::gate::PickFromSlot(sym, ecr::Load64(g_page + ecr::kEquipSel))) return;
+    ecr::StoreSelected(g_page, sym);                                  // a new selection: re-runs allowed, then the symbol
+    InterlockedExchange64(&g_selected_pending, (LONG64)sym);         // Tick logs it
+}
+
 DWORD WINAPI Tick(LPVOID) {
     volatile LONG *uses = (volatile LONG *)(g_base + USE_COUNTER_RVA);
     volatile LONG *point_uses = (volatile LONG *)(g_base + POINT_COUNTER_RVA);
@@ -2358,7 +2293,6 @@ DWORD WINAPI Tick(LPVOID) {
     sockaddr_in logged_server = {};
     ULONGLONG next_hello = 0, next_pick = 0, next_hook = 0, next_tacmods = 0;
     uint8_t seen_classic_requests = g_rules ? g_rules[CLASSIC_REQUESTS] : 0;
-    bool f8_was = false;
     ULONGLONG next_privacy = 0;                          // nEVR port (#2289)
     while (!g_stop) {
         if (g_server && GetTickCount64() >= next_privacy) {   // nEVR port (#2289): once a second, so the match type's
@@ -2366,7 +2300,6 @@ DWORD WINAPI Tick(LPVOID) {
             SessionPrivacy();
         }
         Sleep(10);                                       // (5 ms: 200 wakeups a second, for checks that need far fewer)
-        if (g_server && g_end_until) EndMatchStep();     // server: F8 END MATCH
 #ifdef ECHOCOMBAT_LOG
         if (g_server) TraceCapture();
 #endif
@@ -2420,21 +2353,21 @@ DWORD WINAPI Tick(LPVOID) {
                 else if (want & WANT_CHASSIS) Log("RULES page 2: SERIES-10 ONLY %s asked of the server", want & 1 ? "on" : "off");
                 else Log("RULES page 2: LOADOUTS %s asked of the server", LoadoutName(want));
             }
-            bool f8 = g_match_control && (GetAsyncKeyState(VK_F8) & 0x8000) != 0;   // nEVR port: match control
-            if (f8 && !f8_was) {
-                DWORD pid = 0;
-                GetWindowThreadProcessId(GetForegroundWindow(), &pid);
-                if (pid == GetCurrentProcessId()) {
-                    SendToServer('C', WANT_END);
-                    SendToServer('C', WANT_END);                             // once more, against loss
-                    Log("END MATCH asked of the server (F8)");
-                }
-            }
-            f8_was = f8;
             if (now >= next_hello) {
                 next_hello = now + 2000;
-                SendToServer('H', 0);
+                // A server that never answers has no EchoCombat: after kHelloTries unanswered hellos it gets no more, until the game
+                // connects to another server or this one answers (#2242, EchoCombat 2.0.6).
+                static nevr_combat::gate::HelloTries hello;
                 Dest d;
+                const bool have = ServerDest(d);
+                const uint64_t key = have ? nevr_combat::gate::ServerKey(d.addr.sin_addr.s_addr, d.addr.sin_port) : 0;
+                const bool answered = ::nevr_server_features::Client().Current().echoCombat;
+                const nevr_combat::gate::Hello h = hello.Next(key, answered);
+                if (h != nevr_combat::gate::Hello::kNone) SendToServer('H', 0);
+                if (h == nevr_combat::gate::Hello::kSendAndGiveUp) {
+                    char buf[48];
+                    Log("server %s never answered: no EchoCombat there, no more hellos", Addr(d.addr, buf, sizeof(buf)));
+                }
                 if (ServerDest(d) && !Same(d.addr, logged_server)) {
                     logged_server = d.addr;
                     char buf[48];
@@ -2686,38 +2619,27 @@ void InstallCaptureTime() {
 //     checkpoint holds (PAUSED rising edge), round start (AUTODRIVE) / end (LOCKED);
 //   * that it ran at all says "payload map" (the server tells the clients).
 constexpr uint32_t PAYLOAD_SPEED_RVA = 0xD858ED;
+constexpr int64_t JMP_REL32_LEN = 5;                // e9 rel32: the displacement is from the end of the jump
 const uint8_t kPayloadSpeedSite[9] = {0xf3, 0x0f, 0x11, 0x1c, 0xd0, 0x45, 0x8b, 0x4e, 0x30};
 extern "C" float __fastcall PayloadSpeed(uint8_t *payload, uint8_t *mover, float speed) {
+    (void)mover;
     g_payload_seen = GetTickCount64();
     if (!g_rules) return speed;
-    uint32_t flags = *(volatile uint32_t *)(payload + 0x30);
+    namespace ps = nevr_combat::payload_speed;
+    uint32_t flags = *(volatile uint32_t *)(payload + ps::kFlagsOffset);
     bool paused_rule = g_rules[PAUSED_SHOWN] != PAUSE_OFF;
     if (g_server) {
         uint32_t was = g_payload_flags;
         g_payload_flags = flags;
-        if ((flags & 1) && !(was & 1)) CheckpointHit("held", flags);             // the script's checkpoint hold
-        if (flags & 8) {                                                         // locked: the round is over
-            g_payload_moved = 0;
-        }
-        // AUTODRIVE (2): the game drives the payload itself: placing it for a round, at every
-        // checkpoint, and after quickfinish_checkpoint_on_start (test 6: slowly to the next
-        // checkpoint, claims ignored). Only the first one after the round ended (LOCKED) or the
-        // map loaded is a round's start.
-        if (flags & 2) {
-            g_payload_moved = 0;                                                 // at the start / a checkpoint
-            if (paused_rule) return 0.0f;                                        // PAUSE holds it even then
-            return speed;
-        }
-        if (paused_rule) return 0.0f;                                            // PAUSE: the payload stands still
-        uint8_t q = (uint8_t)g_pspeed;
-        float out = q && q != 4 ? speed * q / 4.0f : speed;
-        if (out > 0.05f && !g_payload_moved) g_payload_moved = 1;               // forward only
-        return out;
+        if ((flags & ps::kFlagPaused) && !(was & ps::kFlagPaused)) CheckpointHit("held", flags);   // the script's checkpoint hold
+        // AUTODRIVE: the game drives the payload itself: placing it for a round, at every checkpoint, and after
+        // quickfinish_checkpoint_on_start (test 6: slowly to the next checkpoint, claims ignored). LOCKED: the round is over.
+        ps::Step step = ps::ServerStep(flags, paused_rule, (uint8_t)g_pspeed, speed);
+        if (step.moved == ps::Moved::kClear) g_payload_moved = 0;
+        else if (step.moved == ps::Moved::kSet) g_payload_moved = 1;
+        return step.speed;
     }
-    if (paused_rule) return 0.0f;                                                // PAUSE: it stands still here too
-    if (flags & 2) return speed;
-    uint8_t q = g_rules[PSPEED_SHOWN];
-    return q && q != 4 ? speed * q / 4.0f : speed;
+    return ps::ClientSpeed(flags, paused_rule, g_rules[PSPEED_SHOWN], speed);
 }
 
 // The stub is near echovr.exe so a 5-byte jmp reaches it.
@@ -2727,11 +2649,21 @@ uint8_t *AllocNear(uint8_t *base, size_t size) {
     return nullptr;
 }
 
-[[maybe_unused]] void InstallPayloadSpeed() {  // nEVR port: never called (payload speed is parked)
+void InstallPayloadSpeed() {
     uint8_t *site = g_base + PAYLOAD_SPEED_RVA;
-    if (memcmp(site, kPayloadSpeedSite, sizeof(kPayloadSpeedSite))) { Log("payload speed: unexpected echovr.exe build, not hooked"); return; }
+    if (memcmp(site, kPayloadSpeedSite, sizeof(kPayloadSpeedSite))) {
+        char expected[HEX_PER_BYTE * sizeof(kPayloadSpeedSite) + 1] = {}, actual[sizeof(expected)] = {};
+        for (size_t i = 0; i < sizeof(kPayloadSpeedSite); ++i) {
+            snprintf(expected + HEX_PER_BYTE * i, sizeof(expected) - HEX_PER_BYTE * i, "%02x", kPayloadSpeedSite[i]);
+            snprintf(actual + HEX_PER_BYTE * i, sizeof(actual) - HEX_PER_BYTE * i, "%02x", site[i]);
+        }
+        LogWarning("payload speed: hook not installed va=+0x%llx reason=bytes_mismatch expected=%s actual=%s (PAYLOAD SPEED and the "
+                   "payload PAUSE do nothing; unexpected echovr.exe build)",
+                   (unsigned long long)PAYLOAD_SPEED_RVA, expected, actual);
+        return;
+    }
     uint8_t *stub = AllocNear(g_base, 256);
-    if (!stub) { Log("payload speed: no memory near echovr.exe, not hooked"); return; }
+    if (!stub) { LogWarning("payload speed: hook not installed va=+0x%llx reason=no_memory_near_image", (unsigned long long)PAYLOAD_SPEED_RVA); return; }
     uint8_t code[] = {
         0x50, 0x51, 0x52, 0x41, 0x50, 0x41, 0x51, 0x41, 0x52, 0x41, 0x53,   // push rax rcx rdx r8 r9 r10 r11
         0x48, 0x83, 0xec, 0x78,                                             // sub rsp, 78h (aligned for the call)
@@ -2762,17 +2694,27 @@ uint8_t *AllocNear(uint8_t *base, size_t size) {
     while (!(code[at_fn] == 0x48 && code[at_fn + 1] == 0xb8)) ++at_fn;
     memcpy(code + at_fn + 2, &fn, 8);
     memcpy(code + sizeof(code) - 8, &back, 8);
-    memcpy(stub, code, sizeof(code));
-    int64_t rel = (int64_t)stub - (int64_t)(site + 5);
-    if (rel != (int32_t)rel) { Log("payload speed: stub out of reach, not hooked"); return; }
-    uint8_t jump[9] = {0xe9, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90};
+    int64_t rel = (int64_t)stub - (int64_t)(site + JMP_REL32_LEN);
+    if (rel != (int32_t)rel) {
+        LogWarning("payload speed: hook not installed va=+0x%llx reason=stub_out_of_reach", (unsigned long long)PAYLOAD_SPEED_RVA);
+        return;
+    }
+    uint8_t jump[sizeof(kPayloadSpeedSite)] = {0xe9, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90};
     int32_t r32 = (int32_t)rel;
     memcpy(jump + 1, &r32, 4);
-    DWORD old;
-    if (!VirtualProtect(site, sizeof(jump), PAGE_EXECUTE_READWRITE, &old)) return;
-    memcpy(site, jump, sizeof(jump));
-    VirtualProtect(site, sizeof(jump), old, &old);
-    FlushInstructionCache(GetCurrentProcess(), site, sizeof(jump));
+    memcpy(stub, code, sizeof(code));
+    // The patch and its stub pass the write gate, or nothing is written (write_gate.h).
+    if (!::nevr_combat::GateWrite(site, sizeof(jump), "VeilNet payload speed jump (UpdatePreTrackMover track mover speed)") ||
+        !::nevr_combat::GateWrite(stub, sizeof(code), "VeilNet payload speed stub")) {
+        LogWarning("payload speed: hook not installed va=+0x%llx reason=overlaps_runtime_range", (unsigned long long)PAYLOAD_SPEED_RVA);
+        return;
+    }
+    // Written through ProcessMemcpy, which records the range in the runtime's registry (write_ranges.h).
+    DWORD error = 0;
+    if (!ProcessMemcpy(site, jump, sizeof(jump), &error, "VeilNet payload speed jump")) {
+        LogWarning("payload speed: hook not installed va=+0x%llx reason=write_failed error=%lu", (unsigned long long)PAYLOAD_SPEED_RVA, error);
+        return;
+    }
     g_payload_patched = site;
     Log("payload speed: hooked (PAYLOAD SPEED, payload PAUSE)");
 }
@@ -2818,8 +2760,8 @@ bool Install(bool server) {
     g_base = (uint8_t *)GetModuleHandleW(nullptr);
     if (uint32_t mb = RulesMailboxRva(g_base)) g_rules = g_base + mb;
     RateText(g_rules ? g_rules[RATE_SHOWN] : 0);         // the POINT RATE row's text (1.0x until told)
-    // nEVR port: InstallPayloadSpeed() is never called: Cat parked the payload rule (unfinished). The capture time patch
-    // (match control) is written below, once the combat net's hooks are committed.
+    // nEVR port: the capture time patch and the payload speed hook (match control) are written below, once the combat net's
+    // hooks are committed.
     g_page = g_base + ecr::kPageRva;                 // nEVR port (#2358)
     g_shared = (Shared *)(g_base + TOKEN_RVA);
     g_point = (Shared *)(g_base + POINT_TOKEN_RVA);
@@ -2834,7 +2776,10 @@ bool Install(bool server) {
     LONG rc = DetourTransactionCommit();
     if (rc != NO_ERROR) { LogWarning("hooking sendto / recvfrom failed (%ld): UMBRAL VEIL stays local", rc); return false; }
     g_hooked = true;
-    if (g_match_control) InstallCaptureTime();         // nEVR port: RULES capture time and PAUSE are match control
+    if (g_match_control) {                              // nEVR port: RULES capture time, PAYLOAD SPEED and PAUSE are match control
+        InstallCaptureTime();
+        InstallPayloadSpeed();                          // 82ad7ba: Install calls it (plugin/veilnet.cpp:2863)
+    }
     Log(g_server ? "server: relaying UMBRAL VEIL over the game's own connection"
                  : "client: UMBRAL VEIL goes over the game's own connection");
     if (!g_server && g_match_control) Log(HookApplyItem() ? "SERIES-10 ONLY: LoadAndApplyItem / ApplyItem hooked"
@@ -2842,7 +2787,7 @@ bool Install(bool server) {
     g_dispatch_hooked = HookDispatch();                 // nEVR port: kept, so the feature line says whether it is in
     if (g_dispatch_hooked) Log("LOADOUTS / PAUSE: event dispatch hooked");
     else LogWarning("LOADOUTS / PAUSE: event dispatch not hooked (a SetAlpha head mismatch, or a runtime detour it rides is "
-                    "not in place; see the lines above): stations not redrawn, PAUSE, END MATCH and MAP SWITCH off");
+                    "not in place; see the lines above): stations not redrawn, PAUSE and MAP SWITCH off");
     if (g_match_control) {                              // nEVR port: LOADOUTS is match control
     g_slots_hooked = HookClassicSlots();
     Log(g_slots_hooked ? "LOADOUTS: equipment slot setters filtered (the runtime's hooks)"

@@ -1,6 +1,6 @@
 // match_type.h: whether the server's current session is a private match, for the combat module's match control (#2289).
 //
-// VeilNet's MAP SWITCH buttons and END MATCH (F8) act only in a private match. he_is_the_cat's plugin read the match type
+// VeilNet's MAP SWITCH buttons and its RULES and PAUSE asks act only in a private match. he_is_the_cat's plugin read the match type
 // from the game's own session line, `[NETLOBBY] Starting session (gametype <type>, ...`, which echovr.exe logs; the
 // module does not watch echovr.exe's logger (the runtime owns it), so on PC it never saw the line. The runtime already
 // stores the session's game type from the session messages the server receives (lifecycle/arena_round_time.h,

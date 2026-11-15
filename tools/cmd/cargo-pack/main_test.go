@@ -84,7 +84,7 @@ func TestPackWritesNamedFramesAndAManifestThatListsThem(t *testing.T) {
 	e2.StockSize = &stock
 	spec := writeSpec(t, []specEntry{entry("0x0000000000000001", "small.bin"), e2}, map[string][]byte{"small.bin": small, "large.bin": large})
 	out := t.TempDir()
-	sum, err := pack(spec, out, testWindow, quiet())
+	sum, err := packSpec(spec, out, testWindow)
 	if err != nil {
 		t.Fatalf("pack: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestPackWritesNamedFramesAndAManifestThatListsThem(t *testing.T) {
 }
 
 func TestPackRefusesBadInputAndWritesNothing(t *testing.T) {
-	files := map[string][]byte{"a.bin": body(smallBytes, seedA), "empty.bin": {}}
+	files := map[string][]byte{"a.bin": body(smallBytes, seedA)}
 	bad := entry("0x0000000000000003", "a.bin")
 	bad.Align = notPowerOfTwo
 	huge := entry("0x0000000000000007", "a.bin")
@@ -130,13 +130,12 @@ func TestPackRefusesBadInputAndWritesNothing(t *testing.T) {
 		"alignment": {bad},
 		"too large": {huge},
 		"duplicate": {dup, dup},
-		"empty":     {entry("0x0000000000000005", "empty.bin")},
 		"name":      {entry("0x5", "a.bin")},
 		"absolute":  {entry("0x0000000000000006", "/etc/hostname")},
 	}
 	for name, entries := range cases {
 		out := t.TempDir()
-		if _, err := pack(writeSpec(t, entries, files), out, testWindow, quiet()); err == nil {
+		if _, err := packSpec(writeSpec(t, entries, files), out, testWindow); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 		if left, _ := os.ReadDir(out); len(left) != 0 {
@@ -162,6 +161,9 @@ func TestEncodeFrameStatesTheSizeAndKeepsTheWindow(t *testing.T) {
 		if w > testWindow {
 			t.Errorf("%d bytes: the frame asks for a window of %d, above %d", n, w, testWindow)
 		}
+		if h.SingleSegment != (n <= testWindow) {
+			t.Errorf("%d bytes: single segment = %t, want %t", n, h.SingleSegment, n <= testWindow)
+		}
 		if h.HasCheckSum {
 			t.Errorf("%d bytes: frame carries a checksum", n)
 		}
@@ -176,7 +178,7 @@ func TestManifestUsesTheKeysTheClientParserReads(t *testing.T) {
 	e.StockSize = &stock
 	spec := writeSpec(t, []specEntry{e}, map[string][]byte{"small.bin": body(smallBytes, seedC)})
 	out := t.TempDir()
-	if _, err := pack(spec, out, testWindow, quiet()); err != nil {
+	if _, err := packSpec(spec, out, testWindow); err != nil {
 		t.Fatal(err)
 	}
 	mframe, err := os.ReadFile(filepath.Join(out, manifestName))
@@ -203,5 +205,93 @@ func TestManifestUsesTheKeysTheClientParserReads(t *testing.T) {
 	}
 	if got["format"] != "zstd-frame" || len(got) != entryKeyCount {
 		t.Errorf("entry = %v", got)
+	}
+}
+
+func packSpec(specPath, out string, window uint64) (*summary, error) {
+	recs, err := specRecords(specPath)
+	if err != nil {
+		return nil, err
+	}
+	return build(recs, out, window, quiet())
+}
+
+// emptyLabel is the part of a manifest this test reads: each label's entries and its empty records.
+type emptyLabel struct {
+	Entries []entryDoc `json:"entries"`
+	Empty   []emptyDoc `json:"empty"`
+}
+
+func readLabels(t *testing.T, out string) map[string]emptyLabel {
+	t.Helper()
+	mframe, err := os.ReadFile(filepath.Join(out, manifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Labels map[string]emptyLabel `json:"labels"`
+		Empty  json.RawMessage       `json:"empty"`
+	}
+	if err := json.Unmarshal(decode(t, mframe), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if string(doc.Empty) != "[]" {
+		t.Errorf("top-level empty = %s, want []", doc.Empty)
+	}
+	return doc.Labels
+}
+
+func countBlobs(t *testing.T, out string) int {
+	t.Helper()
+	left, err := os.ReadDir(filepath.Join(out, "blobs", "sha256"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(left)
+}
+
+func TestAFileOfZeroBytesInASpecIsAnEmptyRecordOfItsLabelAndPlatformWithNoBlob(t *testing.T) {
+	e := entry("0x0000000000000009", "empty.bin")
+	e.Label, e.Platform = "combat_content", "windows-x86_64"
+	out := t.TempDir()
+	// An empty record alone: the label has no entry and no object is written.
+	sum, err := packSpec(writeSpec(t, []specEntry{e}, map[string][]byte{"empty.bin": {}}), out, testWindow)
+	if err != nil {
+		t.Fatalf("pack: %v", err)
+	}
+	if len(sum.Objects) != 0 || sum.EmptyRecords != 1 || countBlobs(t, out) != 0 {
+		t.Errorf("objects %d, empty %d, blobs %d, want 0, 1, 0", len(sum.Objects), sum.EmptyRecords, countBlobs(t, out))
+	}
+	l := readLabels(t, out)["combat_content"]
+	want := emptyDoc{Platform: "windows-x86_64", Type: e.Type, Name: e.Name, Align: testAlign}
+	if len(l.Empty) != 1 || l.Empty[0] != want || len(l.Entries) != 0 {
+		t.Errorf("label = %+v, want one empty record %+v and no entry", l, want)
+	}
+}
+
+func TestEmptyAndNonEmptyEntriesOfASpecLandEachInTheirOwnLabel(t *testing.T) {
+	full := entry("0x0000000000000001", "full.bin")
+	hole := entry("0x0000000000000002", "empty.bin")
+	other := entry("0x0000000000000003", "empty.bin")
+	other.Label, other.Platform = "second_label", "windows-x86_64"
+	files := map[string][]byte{"full.bin": body(smallBytes, seedA), "empty.bin": {}}
+	out := t.TempDir()
+	sum, err := packSpec(writeSpec(t, []specEntry{full, hole, other}, files), out, testWindow)
+	if err != nil {
+		t.Fatalf("pack: %v", err)
+	}
+	if len(sum.Objects) != 1 || sum.EmptyRecords != 2 || countBlobs(t, out) != 1 {
+		t.Errorf("objects %d, empty %d, blobs %d, want 1, 2, 1", len(sum.Objects), sum.EmptyRecords, countBlobs(t, out))
+	}
+	labels := readLabels(t, out)
+	posters, second := labels["lobby_posters"], labels["second_label"]
+	if len(posters.Entries) != 1 || posters.Entries[0].Name != full.Name {
+		t.Errorf("lobby_posters entries = %+v, want the one non-empty file", posters.Entries)
+	}
+	if len(posters.Empty) != 1 || posters.Empty[0] != (emptyDoc{Platform: "android-arm64", Type: hole.Type, Name: hole.Name, Align: testAlign}) {
+		t.Errorf("lobby_posters empty = %+v, want the android-arm64 record named %s", posters.Empty, hole.Name)
+	}
+	if len(second.Entries) != 0 || len(second.Empty) != 1 || second.Empty[0].Platform != "windows-x86_64" || second.Empty[0].Name != other.Name {
+		t.Errorf("second_label = %+v, want only the windows-x86_64 empty record named %s", second, other.Name)
 	}
 }

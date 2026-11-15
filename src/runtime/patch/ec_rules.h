@@ -4,7 +4,8 @@
 // hide (its decision, the selection settle and its write). The hooks that feed it are runtime/combat/veilnet.cpp on PC (Hooked_recvfrom,
 // Hooked_sendto, Handle's client branch, Tick's use watcher, PickServer, SawLog, TacModsGuarded) and quest/combat/ec.cpp on Quest (the
 // recvfrom / sendto / WriteLogV handlers, Step); each keeps its own sockets, locks, clock, reads of the game, hooks and log lines. Not here:
-// PC's server half and its match-control branches ('L', 'R', 'G'), PC's LOADOUTS CLASSIC cap and StationView (which run between the
+// PC's server half and the match-control branches ('L', 'R', 'G': their word and a client's mailbox writes are
+// runtime/combat/match_control_rules.h, which both builds call), PC's LOADOUTS CLASSIC cap and StationView (which run between the
 // decision and the write), the Quest's gear gate, its words and its page layout past the EC rules' own words. The PC GTest
 // (runtime/tests/test_ec_rules.cpp) and the Quest host test (quest/tests/ec_test.cpp) both compile this one definition.
 //
@@ -234,16 +235,24 @@ inline int WatchUses(BasicState<Sock>& st, std::uint8_t* page, std::uint32_t see
 // tac mod is in it as "ability":"<name>". The seven names and their symbols are EchoCombat's.
 constexpr char kProfileFmt[] = "[NSUSER] sent profile update: %s";
 constexpr std::uint64_t kSymSmoke = 0xe32dc7c9d4804fb5ull, kSymPoint = 0xe32dc7cad6864aa4ull, kSymBuff = 0xc8c33e48386618b6ull;
+// The seven tac mods: the name a profile's "ability" carries, and the symbol. The one table both AbilitySymbol and KnownTacMod read.
+struct Ability {
+    const char* name;
+    std::uint64_t sym;
+};
+inline constexpr Ability kAbilities[] = {{"smoke", kSymSmoke}, {"point", kSymPoint}, {"buff", kSymBuff},
+                                         {"heal", 0xc8c33e4832761fbcull}, {"shield", 0x41d2d43513260b1aull},
+                                         {"sensor", 0x41d2d4381430080cull}, {"wraith", 0x41d2d02f1b2a1316ull}};
 inline std::uint64_t AbilitySymbol(const char* name, std::size_t n) {
-    static const struct {
-        const char* name;
-        std::uint64_t sym;
-    } k[] = {{"smoke", kSymSmoke}, {"point", kSymPoint}, {"buff", kSymBuff},
-             {"heal", 0xc8c33e4832761fbcull}, {"shield", 0x41d2d43513260b1aull}, {"sensor", 0x41d2d4381430080cull},
-             {"wraith", 0x41d2d02f1b2a1316ull}};
-    for (const auto& e : k)
+    for (const auto& e : kAbilities)
         if (std::strlen(e.name) == n && std::memcmp(e.name, name, n) == 0) return e.sym;
     return 0;
+}
+// Is `sym` one of the seven tac mods (a selection, or the item a tac mod slot is set to)? (#2242, EchoCombat 2.0.8.)
+inline bool KnownTacMod(std::uint64_t sym) {
+    for (const auto& e : kAbilities)
+        if (e.sym == sym) return true;
+    return false;
 }
 inline bool IsProfileFmt(const char* fmt) { return fmt && fmt[0] == '[' && fmt[1] == 'N' && std::strcmp(fmt, kProfileFmt) == 0; }
 // The symbol of the json's "ability", or 0. nameOut (may be null): the name as sent, cut to nameLen - 1, also when it is not one of the seven.

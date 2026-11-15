@@ -48,7 +48,7 @@ func TestTheHelloStaysTheRelaySubscription(t *testing.T) {
 	if !strings.Contains(src, "SendToServer('H', 0)") {
 		t.Error("the client no longer says hello: the server would relay to nobody")
 	}
-	if !regexp.MustCompile(`'A', g_medigun_on_server \? kAnswerMedigun : 0\);\s*uint32_t total`).MatchString(src) {
+	if !regexp.MustCompile(`'A', g_medigun_on_server \? kAnswerMedigun : 0\);\s*if \(g_rules_total\) Send\(s, from, 'R'`).MatchString(src) {
 		t.Error("the server's hello branch no longer sends the RULES and LOADOUTS words after the answer")
 	}
 }

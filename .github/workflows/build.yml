@@ -20,7 +20,7 @@ name: Build
 # hand-started workflows: echocombat-plugins.yml (the EchoCombat plugins, which need MSVC's SEH and Microsoft Detours) and
 # defender-scan.yml (a Defender measurement). A `workflow_dispatch` started on a vX.Y.Z tag ref runs
 # the same path as a dry run without the Verify step (#1008), and publishes nothing, unless the tag's release is a
-# DRAFT carrying none of the built files: then the two files are attached to that draft, which stays a draft (see `drafts`).
+# DRAFT carrying none of the built files: then the release's files are attached to that draft, which stays a draft (see `drafts`).
 on:
   workflow_dispatch:
   release:
@@ -66,7 +66,7 @@ jobs:
 
   # A release whose draft was already built, signed and filled with the attested assets fires `published`
   # when it is published. That must not rebuild or re-upload anything: the signal is the release's asset
-  # NAMES (tools/release_already_built.sh: both files of this version are there), never the
+  # NAMES (tools/release_already_built.sh: every file tools/release_asset_names.sh lists for this version is there), never the
   # pre-release flag. Every job below hangs off `build`, so when the assets are there the run is green
   # and does nothing. A listing that fails fails the job (a check that cannot run does not decide).
   guard:
@@ -102,7 +102,7 @@ jobs:
           echo "release $TAG already carries its attested assets: nothing is rebuilt and nothing is re-uploaded"
         fi
 
-    # A workflow_dispatch started on the tag ref of a DRAFT release builds the release's two files, attests
+    # A workflow_dispatch started on the tag ref of a DRAFT release builds the release's files, attests
     # them and attaches them to that draft (GitHub: `release` created/edited/deleted are not triggered for
     # draft releases, and a draft fires no `published` until it is published, so a draft is reached by
     # dispatching on the tag). draft=true only when the tag has exactly one draft and no published release and
@@ -715,10 +715,11 @@ jobs:
         if-no-files-found: error
         retention-days: 7
 
-  # The Quest library: libovrplatformloader.so built from the same tag with the Android NDK (the same steps as
+  # The Quest library: libovrplatformloader.so, and the Quest runtime library libnevr-runtime.so under its own release
+  # name, both built from the same tag with the Android NDK (the same steps as
   # android.yml: `just test-android` is build, the static-initializer gate, the embedded-defaults check and the
-  # ELF ground-truth tests). A loose release asset, attested and uploaded by `publish` under a name that carries
-  # the tag. It is not Authenticode; the signer declares it as a file in its
+  # ELF ground-truth tests). Loose release assets, attested and uploaded by `publish` under names that carry
+  # the tag. They are not Authenticode; the signer declares them as files in its
   # config/sources.yml (rule 3.3). Built for a dry run on a tag too, so the asset set is the same for both.
   quest:
     needs: guard
@@ -807,6 +808,17 @@ jobs:
         cp "$so" "$out"
         ls -l "$out"
         sha256sum "$out"
+        # The Quest runtime library (DESIGN.md piece 17): libnevr-runtime.so from the same tree, published under its own name,
+        # not stripped (as the library above is not). It carries one NEVR-BUILD literal naming this version and commit
+        # (src/core/build_identity.h), checked whole by package_release.py quest-runtime (it has no plugin-trust literal,
+        # so `stamp` does not apply to it).
+        runtime=build/android-arm64/sentinel/libnevr-runtime.so
+        test -s "$runtime"
+        python3 tools/package_release.py quest-runtime --lib "$runtime" --version "$version" --commit "$GITHUB_SHA"
+        runtime_out="quest-asset/$(release_quest_runtime_asset_name "$version")"
+        cp "$runtime" "$runtime_out"
+        ls -l "$runtime_out"
+        sha256sum "$runtime_out"
 
     - name: Upload the Quest library
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -963,7 +975,7 @@ jobs:
     # The upload never sets the pre-release flag: the `prerelease` input is left unset, and the action
     # then re-sends the release's own current value (softprops/action-gh-release, src/github.ts: `config.input_prerelease !== undefined ? config.input_prerelease : existingRelease.prerelease`),
     # read at upload time, so a human's choice (and a promotion made while this run is going) is kept.
-    # The release's sealed zip and the Quest library: the declared public set (both attested above).
+    # The release's sealed zip and the Quest libraries: the declared public set (all attested above).
     - name: Upload the release files
       uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
       with:

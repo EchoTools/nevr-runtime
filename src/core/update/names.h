@@ -16,12 +16,13 @@
 //   * neither is a Windows device name (CON, PRN, AUX, NUL, COM0-9, LPT0-9, CONIN$, CONOUT$) before its first dot,
 //     in any case, because Windows opens the device for "plugins\CON.dll".
 // The files a release carries are written in update\staged.json, update\swap.json and update\state.json as member
-// paths: "nevr-runtime.dll" or "plugins/<name>.dll", the spelling of the core's NevrPcStage result
-// (installer/src/stage.rs, staged_member).
+// paths, the spelling of the core's stage result (installer/src/stage.rs, staged_member): on PC "nevr-runtime.dll" or
+// "plugins/<name>.dll"; on Quest "libnevr-runtime.so" alone.
 //
 // The Quest member, "libnevr-runtime.so", is a member of the vocabulary and is not a ParseMember member: ParseMember is
-// the PC rule and still refuses it, so a PC staged.json or swap.json naming the .so is refused as before. Its own
-// predicate is IsQuestRuntimeMember.
+// the PC rule and refuses it, so a PC staged.json or swap.json naming the .so is refused. The member set is the
+// platform's: ParseMemberOf takes the platform's runtime file (RuntimeMemberFor), and the check of a stage result
+// (policy.h, ParseStageResult) and the start (engine_start.cpp) both read members through it.
 
 #include <cstddef>
 #include <string>
@@ -43,6 +44,8 @@ inline constexpr char kPluginsDir[] = "plugins";
 inline constexpr char kRuntimeFile[] = "nevr-runtime.dll";
 inline constexpr char kRuntimeMember[] = "nevr-runtime.dll";
 inline constexpr char kQuestRuntimeMember[] = "libnevr-runtime.so";
+/// The core's platform word for Quest (ADR 0024, section 3); the PC's is "pc".
+inline constexpr char kQuestPlatform[] = "quest";
 inline constexpr char kPluginPrefix[] = "plugins/";
 inline constexpr char kPluginSuffix[] = ".dll";
 inline constexpr std::size_t kMaxNameLength = 64;
@@ -76,5 +79,17 @@ bool IsQuestRuntimeMember(std::string_view path) noexcept;
 
 /// The member's path as the files spell it ("nevr-runtime.dll", "plugins/<name>.dll").
 std::string MemberPath(const Member& member);
+
+/// The runtime's file for the core's platform word: kQuestRuntimeMember for kQuestPlatform, kRuntimeMember for any other
+/// (the PC, as StartContext::runtime_file defaults to it).
+const char* RuntimeMemberFor(std::string_view platform) noexcept;
+
+/// One member of a release whose runtime is `runtime_file` (nevr-runtime.dll or libnevr-runtime.so): the runtime is that name
+/// alone; beside nevr-runtime.dll a plugin is a ParseMember plugin; a Quest release is the runtime alone, so beside
+/// libnevr-runtime.so every other path is refused. The other platform's runtime name is refused on both.
+bool ParseMemberOf(std::string_view runtime_file, std::string_view path, Member* out) noexcept;
+
+/// The member's path relative to the root, with the runtime spelled `runtime_file`.
+std::string MemberPathOf(std::string_view runtime_file, const Member& member);
 
 }  // namespace nevr_update_names

@@ -32,7 +32,8 @@ constexpr int kUsageExit = 2;
 constexpr int kFailedExit = 1;
 constexpr mode_t kDirMode = 0755;
 constexpr std::uint32_t kVariant = 3;
-constexpr std::uint32_t kNoCapabilities = 0;
+// The capability word the shim hands the runtime: bit 0, the staged swap (piece 15; the shim runs the update start before it loads).
+constexpr std::uint64_t kSwapCapability = nevr_runtime_abi::kHostCapabilitySwap;
 constexpr char kBuildId[] = "0123456789abcdef0123456789abcdef01234567";
 constexpr char kShimVersion[] = "6.18.0-test";
 constexpr char kBaselineName[] = "libnevr-runtime.so";
@@ -89,6 +90,7 @@ HostInputs Inputs() {
   host.shim_version = kShimVersion;
   host.variant = kVariant;
   host.log = &CaptureSink;
+  host.capabilities = kSwapCapability;
   return host;
 }
 
@@ -185,7 +187,7 @@ void CheckLoadedContext() {
   QCHECK(context->shim_version != nullptr && std::strcmp(context->shim_version, kShimVersion) == 0);
   QCHECK(context->log == &CaptureSink);
   QCHECK(context->variant == kVariant);
-  QCHECK(context->capabilities == kNoCapabilities);
+  QCHECK(context->capabilities == kSwapCapability);
 }
 
 }  // namespace

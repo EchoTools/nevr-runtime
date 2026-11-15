@@ -38,7 +38,8 @@ class ReleaseAlreadyBuiltTest(unittest.TestCase):
                               capture_output=True, text=True)
 
     def names(self, version="5.0.0", drop=None):
-        names = [f"nevr-runtime-v{version}-windows.zip", f"nevr-runtime-v{version}-quest-libovrplatformloader.so"]
+        names = [f"nevr-runtime-v{version}-windows.zip", f"nevr-runtime-v{version}-quest-libovrplatformloader.so",
+                 f"nevr-runtime-v{version}-quest-runtime.so"]
         return "\n".join(n for n in names if n != drop) + "\n"
 
     def test_both_assets_mean_already_built(self):
@@ -50,16 +51,25 @@ class ReleaseAlreadyBuiltTest(unittest.TestCase):
         self.assertEqual((result.returncode, result.stdout.strip()), (0, "false"))
         self.assertIn("nevr-runtime-v5.0.0-quest-libovrplatformloader.so", result.stderr)
 
-    def test_every_one_of_the_two_is_required(self):
+    def test_every_one_of_the_three_is_required(self):
         every = self.names().split()
-        self.assertEqual(len(every), 2)
+        self.assertEqual(len(every), 3)
         self.assertEqual(sorted(every), sorted(["nevr-runtime-v5.0.0-windows.zip",
-                                                "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]))
+                                                "nevr-runtime-v5.0.0-quest-libovrplatformloader.so",
+                                                "nevr-runtime-v5.0.0-quest-runtime.so"]))
         for name in every:
             with self.subTest(missing=name):
                 result = self.run_script(FAKE_ASSETS=self.names(drop=name))
                 self.assertEqual(result.stdout.strip(), "false")
                 self.assertIn(name, result.stderr)
+
+    def test_a_draft_built_before_the_runtime_asset_is_not_already_built(self):
+        # The guard reads the release's names, so a release that carries only the two earlier files is "not built" and
+        # the run would rebuild over them (RELEASING.md, "A draft built before the runtime asset"). Pinned here.
+        old_two = self.names(drop="nevr-runtime-v5.0.0-quest-runtime.so")
+        result = self.run_script(FAKE_ASSETS=old_two)
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "false"), result.stderr)
+        self.assertIn("nevr-runtime-v5.0.0-quest-runtime.so", result.stderr)
 
     def test_the_tar_zst_archives_are_not_required_and_do_not_count(self):
         result = self.run_script(FAKE_ASSETS=self.names() + "nevr-runtime-v5.0.0.tar.zst\n")

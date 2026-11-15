@@ -316,6 +316,22 @@ def quest_library_problems(blob: bytes, version: str, commit: str) -> list:
     return problems
 
 
+def quest_runtime_problems(blob: bytes, version: str, commit: str) -> list:
+    """The Quest runtime library (libnevr-runtime.so, released under nevr-runtime-vX.Y.Z-quest-runtime.so) carries exactly one
+    NEVR-BUILD literal, as the PC DLLs do, and no plugin-trust literal, so expected_identity_problems does not apply to it: it
+    would refuse the file for that. The literal must be this version and this commit, matched whole."""
+    try:
+        got_version, got_commit = identity_in(blob, "quest runtime")
+    except GateFailure as error:
+        return [str(error)]
+    problems = []
+    if got_version != version:
+        problems.append(f"quest runtime: version '{got_version}' is not the expected '{version}'")
+    if got_commit != commit:
+        problems.append(f"quest runtime: commit {got_commit[:12]} is not the checked-out commit {commit[:12]}")
+    return problems
+
+
 def stamp_check(dll: Path, version, commit: str = "") -> str:
     """The CI assertion after the build. `version` set: the identity literal must be exactly that release
     version; unset: it must be a development version. `commit` (when given): the checked-out commit."""
@@ -446,6 +462,11 @@ def quest_asset_name(version: str) -> str:
     return f"nevr-runtime-v{version}-quest-libovrplatformloader.so"
 
 
+def quest_runtime_asset_name(version: str) -> str:
+    """The Quest runtime library's release name; tools/release_asset_names.sh `release_quest_runtime_asset_name` is the source."""
+    return f"nevr-runtime-v{version}-quest-runtime.so"
+
+
 def _git_out(repo: Path, *args: str) -> bytes:
     try:
         return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True).stdout
@@ -528,7 +549,7 @@ def headline_record(repo: Path, base: str, rev: str) -> dict:
 
 
 def release_notes(assets: Path, repo: Path, base: str, rev: str) -> str:
-    """The release body for the two assets in `assets`: a header, the player line (the headline file's line when headline_line
+    """The release body for the assets in `assets` (the zip and the two Quest libraries): a header, the player line (the headline file's line when headline_line
     gives one, else the fixed sentence), and one line per file. The version and commit are the ones the
     zip's own BugSplat64.dll and nevr-runtime.dll carry (their identity literals, which must agree), so the body cannot
     describe a zip that is not this release's. It holds no hash: the zip's SHA256SUMS and the attestation carry integrity."""
@@ -556,12 +577,17 @@ def release_notes(assets: Path, repo: Path, base: str, rev: str) -> str:
     quest = assets / quest_asset_name(version)
     if not quest.is_file():
         raise GateFailure(f"{assets}: no {quest.name}")
-    extra = sorted(p.name for p in assets.iterdir() if p.name not in (zip_path.name, quest.name))
+    quest_runtime = assets / quest_runtime_asset_name(version)
+    if not quest_runtime.is_file():
+        raise GateFailure(f"{assets}: no {quest_runtime.name}")
+    release_names = (zip_path.name, quest.name, quest_runtime.name)
+    extra = sorted(p.name for p in assets.iterdir() if p.name not in release_names)
     if extra:
         raise GateFailure(f"{assets}: files that are not release assets: {', '.join(extra)}")
     values = {"VERSION": version,
               "PLAYER_LINE": headline_line(repo, base, rev) or release_audience_section.FALLBACK_PLAYER_LINE,
-              "ZIP": zip_path.name, "APK": f"{package_base(version, commit)}-quest.apk", "QUEST": quest.name}
+              "ZIP": zip_path.name, "APK": f"{package_base(version, commit)}-quest.apk", "QUEST": quest.name,
+              "QUEST_RUNTIME": quest_runtime.name}
     return render(BODY_TEMPLATE, values)
 
 
@@ -578,7 +604,7 @@ def run_all(args) -> list:
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    mode = argv.pop(0) if argv and argv[0] in ("tree", "seal", "stamp", "notes", "quest-library") else "all"
+    mode = argv.pop(0) if argv and argv[0] in ("tree", "seal", "stamp", "notes", "quest-library", "quest-runtime") else "all"
     parser = argparse.ArgumentParser(prog=f"package_release.py {mode}".strip())
     if mode == "seal":
         parser.add_argument("--tree", required=True, type=Path)
@@ -590,7 +616,7 @@ def main(argv=None) -> int:
         parser.add_argument("--repo", default=".", type=Path, help="the repository the range is read from")
         parser.add_argument("--base", required=True, help="the older ref of the player line, excluded")
         parser.add_argument("--rev", required=True, help="the newer ref of the player line, included")
-    elif mode == "quest-library":
+    elif mode in ("quest-library", "quest-runtime"):
         parser.add_argument("--lib", required=True, type=Path)
         parser.add_argument("--version", required=True)
         parser.add_argument("--commit", required=True)
@@ -619,15 +645,16 @@ def main(argv=None) -> int:
     if mode == "all":
         args.version = None
     try:
-        if mode == "quest-library":
+        if mode in ("quest-library", "quest-runtime"):
             if not RELEASE_VERSION.match(args.version):
                 raise GateFailure(f"--version '{args.version}' is not X.Y.Z")
             if not re.fullmatch(r"[0-9a-f]{40}", args.commit):
                 raise GateFailure(f"--commit '{args.commit}' is not 40 hex digits")
-            problems = quest_library_problems(args.lib.read_bytes(), args.version, args.commit)
+            checker = quest_runtime_problems if mode == "quest-runtime" else quest_library_problems
+            problems = checker(args.lib.read_bytes(), args.version, args.commit)
             if problems:
                 raise GateFailure("\n".join(problems))
-            print(f"quest library: version {args.version} commit {args.commit[:8]}")
+            print(f"{'quest runtime' if mode == 'quest-runtime' else 'quest library'}: version {args.version} commit {args.commit[:8]}")
             return 0
         if mode == "stamp":
             if args.version and not RELEASE_VERSION.match(args.version):
