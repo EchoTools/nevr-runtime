@@ -590,28 +590,6 @@ constexpr uint64_t EVT_ALIGNMENT_CHANGED = 0x48f6befc619771a8ull;  // delegate_o
 ULONGLONG g_live_since = 0;
 constexpr uint32_t WANT_PAUSE = 0x20;           // in +13: a PAUSE ask, bit 0 the value
 
-// --- END MATCH (private matches) ------------------------------------------------------------
-// A client asks with F8 (its Echo window in front): 'C' WANT_END. The server, in a private match
-// only (nEVR port (#2289): from SessionGameType(), combat/match_type.h), until the game's
-// nevt_game_over goes out (or END_GIVE_UP_MS):
-//   * blue captures the point as if a blue player stood on it (game thread, EndMatchCapture): each
-//     capture volume not owned by blue gets what the engine's capture tick writes when a capture
-//     completes (+44 owner = 0 blue, +46 capturing = none, progress 0, +40 |= 4 replicate) and
-//     delegate_OnPossessionChanged (what FUN_140ccfb20 raises), so the point script charges blue;
-//   * blue's capture-point points = 9999 (tick thread, the point script's data found in this
-//     process by its "capturepoint" symbol at +100h; +F0 orange, +F8 blue, +FC points to win):
-//     the script's win check, which only runs for the charging team, gives blue the round;
-//   * RULES POINT UNLOCK 1 s / CAPTURE TIME 0 (T = 60: InstantCapture makes the capture 1 ms), so a
-//     real player on the point captures it at once too.
-// Two rounds: the match is over. RULES are put back after.
-// (Tried first, and failed: raising nevt_cbt_round_win_blue only moved the game mode on a round
-// with nobody winning; 999 points for both teams alone needed somebody charging.)
-constexpr uint32_t WANT_END = 0x10000000;
-constexpr uint64_t EVT_GAME_OVER = 0xe2d5eb48e0d8a7c4ull;        // nevt_game_over
-constexpr uint64_t SYM_CAPTUREPOINT = 0xeedeff1586bd8846ull;     // "capturepoint"
-constexpr ULONGLONG END_EVERY_MS = 300, END_GIVE_UP_MS = 180000, END_RESCAN_MS = 2000;
-constexpr float END_POINTS = 9999.0f;
-constexpr float END_TOTAL = 60.0f;               // unlock 1 s, capture 0 (instant)
 // nEVR port (#2289): the match type comes from the session game type the runtime stores (combat/match_type.h), not from
 // the game's session log line, which echovr.exe logs and this module does not watch. The last privacy logged, so each
 // change is one line: -1 none logged yet, else a MatchPrivacy value.
@@ -620,27 +598,10 @@ nevr_combat::MatchPrivacy SessionPrivacy() {
     const std::optional<std::string> type = nevr_arena_round_time::SessionGameType();
     const nevr_combat::MatchPrivacy privacy = nevr_combat::PrivacyOf(type);
     if (InterlockedExchange(&g_privacy_logged, (LONG)privacy) != (LONG)privacy)
-        Log("session game type %s: %s (MAP SWITCH and END MATCH %s)", type ? type->c_str() : "none",
+        Log("session game type %s: %s (MAP SWITCH %s)", type ? type->c_str() : "none",
             nevr_combat::PrivacyText(privacy), privacy == nevr_combat::MatchPrivacy::kPrivate ? "allowed" : "refused");
     return privacy;
 }
-volatile ULONGLONG g_end_until = 0, g_end_next = 0, g_end_scanned = 0;
-volatile LONG g_end_written = 0;                 // times the points were written
-uint8_t *g_end_point = nullptr;                  // the point script's data (cached)
-bool g_end_saved = false;                        // the RULES value to put back
-float g_end_old_total = 0.0f;
-float *g_rules_total_ptr();
-void EndMatchRestore(const char *why) {
-    if (g_end_saved)
-        if (float *t = g_rules_total_ptr()) *(volatile float *)t = g_end_old_total;
-    g_end_saved = false;
-    g_end_until = 0;
-    Log("END MATCH: %s (points written %ld time(s)); RULES put back", why, (long)g_end_written);
-}
-void GameOverSeen(uint64_t event) {
-    if (event == EVT_GAME_OVER && g_end_until) EndMatchRestore("game over");
-}
-
 // --- MAP SWITCH (post-match terminal, private matches) --------------------------------------
 // The post-match podium's four map buttons (tools/fix_map_terminal.py) send mapswitch_<map> when
 // pressed (the podium ignores them). A client hears its own press (script events reach the inner
@@ -776,36 +737,6 @@ void MapSwitchEvent(uint64_t event) {
     }
 }
 
-// The capture point script's data: "capturepoint" at +100h, plausible points at +F0 / +F8 / +FC.
-bool LooksLikePoint(const uint8_t *d) {
-    EC_TRY {
-        if (*(const uint64_t *)(d + 0x100) != SYM_CAPTUREPOINT) return false;
-        float o = *(const float *)(d + 0xF0), b = *(const float *)(d + 0xF8), r = *(const float *)(d + 0xFC);
-        return o >= 0 && o <= 100000 && b >= 0 && b <= 100000 && r >= 10 && r <= 1000;
-    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-uint8_t *FindPointData() {
-    MEMORY_BASIC_INFORMATION mbi;
-    uint8_t *addr = nullptr;
-    while (VirtualQuery(addr, &mbi, sizeof(mbi)) == sizeof(mbi)) {
-        uint8_t *base = (uint8_t *)mbi.BaseAddress;
-        size_t size = mbi.RegionSize;
-        if (mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE && (mbi.Protect == PAGE_READWRITE)) {
-            EC_TRY {
-                for (size_t o = 0x100; o + 8 <= size; o += 8)
-                    if (*(const uint64_t *)(base + o) == SYM_CAPTUREPOINT && LooksLikePoint(base + o - 0x100))
-                        return base + o - 0x100;
-            } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-            }
-        }
-        addr = base + size;
-        if (addr < base) break;
-    }
-    return nullptr;
-}
-
 // What the server's 'G' carries: LOADOUTS in bits 0-1, SERIES-10 ONLY in bit 2, PAUSE state in
 // bits 3-4, payload map bit 5, driving to the checkpoint bit 6, POINT RATE (quarters) in bits
 // 8-15, PAYLOAD SPEED (quarters) in bits 16-23.
@@ -896,18 +827,6 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
             } else if (!g_map_want && !g_map_announce && !g_map_leaving) {
                 g_map_want = k + 1;
                 Log("MAP SWITCH to %s asked by %s", kMapNames[k], Addr(from, buf, sizeof(buf)));
-            }
-        }
-        if (p.type == 'C' && p.id == WANT_END) {                             // F8: END MATCH
-            const nevr_combat::MatchPrivacy privacy = SessionPrivacy();   // nEVR port (#2289)
-            if (privacy != nevr_combat::MatchPrivacy::kPrivate) {
-                Log("END MATCH asked by %s: refused (%s)", Addr(from, buf, sizeof(buf)), nevr_combat::PrivacyText(privacy));
-            } else if (!g_end_until) {
-                ULONGLONG now = GetTickCount64();
-                g_end_written = 0;
-                g_end_next = now;
-                g_end_until = now + END_GIVE_UP_MS;
-                Log("END MATCH asked by %s", Addr(from, buf, sizeof(buf)));
             }
         }
         if (p.type == 'C' && (p.id & WANT_CHASSIS)) {                        // a podium asks for SERIES-10 ONLY
@@ -1018,7 +937,6 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
 void ApplyClassic();
 void ApplyChassisRule();
 void ApplyPause();
-void EndMatchStep();
 void ApplyPayload();
 void RefreshStations();
 int WSAAPI Hooked_sendto(SOCKET s, const char *buf, int len, int flags, const sockaddr *to, int tolen) {
@@ -1094,12 +1012,10 @@ volatile uint64_t g_netgame;
 volatile ULONGLONG g_station_changed = 0;      // when a row last changed (0: none waiting)
 constexpr ULONGLONG STATION_SETTLE_MS = 400;    // one redraw, once the rows have stopped changing
 
-void GameOverSeen(uint64_t event);
 // nEVR port: DispatchEventToSession is the runtime's detour (patch/party_invite_gate.h); this observes it, then the game
 // handles the event, as HookedDispatch did before calling through.
 void ObserveDispatch(void *netgame, uint64_t event) {
     g_netgame = (uint64_t)netgame;
-    GameOverSeen(event);
 }
 
 // Each station grid cell holds one icon element per item (and a lock); the script only shows
@@ -1267,7 +1183,7 @@ constexpr uint64_t EVT_POSSESSION_CHANGED = 0xea580f491680c6e0ull;   // delegate
 
 // DispatchComponentEvent to call: VeilNet hooks it itself (HookedDCE), so its entry no longer
 // holds the stock bytes; then the trampoline to the real one. (Comparing the entry bytes alone
-// made END MATCH's capture and the PAUSE possession poke skip silently on a hooked game.)
+// made the PAUSE possession poke skip silently on a hooked game.)
 extern dispatch_component_fn g_real_dce;
 // On a client another plugin hooks it first (test: "no DispatchComponentEvent", grey buttons): then
 // VeilNet has no hook of its own; the entry is that plugin's jmp, and calling it goes through it.
@@ -1335,8 +1251,6 @@ void ForEachCapturePoint(bool reset_it, bool announce) {
 }
 void ResetCapturePoints() { ForEachCapturePoint(true, true); }
 
-float *g_rules_total_ptr() { return g_rules_total; }
-
 #ifdef ECHOCOMBAT_LOG
 // Logging build, server: each capture volume's state, once a second when it changed (the slow
 // CAPTURE TIME 0 report). Volume (50h bytes, dense, *(cs+100h)): +08 per-team {short claims,
@@ -1380,105 +1294,6 @@ void TraceCapture() {
 }
 #endif
 
-// END MATCH, on the server's game thread: blue captures every capture volume it does not own.
-void EndMatchCapture() {
-    static ULONGLONG next = 0, said = 0;
-    ULONGLONG now = GetTickCount64();
-    if (!g_server || !g_end_until || now < next) return;
-    next = now + 500;
-    uint64_t cs = g_capture_tick.cs;
-    bool ticking = CaptureTicking();
-    if (!cs || !ticking) {
-        if (now - said > 3000) { said = now; Log("END MATCH: no capture point ticking yet (cs %llx)", cs); }
-        return;
-    }
-    auto dispatch = DceFn();
-    if (!dispatch) {
-        if (now - said > 3000) { said = now; Log("END MATCH: DispatchComponentEvent not callable (unexpected build)"); }
-        return;
-    }
-    EC_TRY {
-        auto ref = *(component_ref_fn *)(*(uint64_t *)cs + 0x1D8);
-        uint16_t n = *(uint16_t *)(cs + 0xFC);
-        uint8_t *volumes = *(uint8_t **)(cs + 0x100);
-        uint16_t *dense_to_sparse = *(uint16_t **)(cs + 0xE0);
-        uint8_t *sparse = *(uint8_t **)(cs + 0xD0);
-        // Test: owner forced while the point was still locked (+40 bit 0, the unlock countdown)
-        // was never heard by the point script, and afterwards blue already owned it, so nothing
-        // could capture it. So: only an unlocked point, and blue's ownership is announced again
-        // every second while END MATCH runs.
-        static ULONGLONG announced = 0;
-        bool again = now - announced >= 1000;
-        for (uint16_t i = 0; i < n && i < 16 && volumes; ++i) {
-            uint8_t *vol = volumes + i * 0x50;
-            if (*(uint16_t *)(vol + 0x40) & 1) continue;             // locked: not yet
-            bool blue = *(uint16_t *)(vol + 0x44) == 0;
-            if (blue && !again) continue;
-            uint16_t si = dense_to_sparse[i];
-            uint32_t handle = si | (uint32_t)*(uint16_t *)(sparse + si * 4 + 2) << 16;
-            if (blue) {
-                uint64_t a[2] = {}, b[2] = {};
-                uint64_t param = ref(cs, a, handle)[1];
-                uint64_t link = ref(cs, b, handle)[0];
-                dispatch(*(uint64_t *)(cs + 0x80), EVT_POSSESSION_CHANGED, link, param, 1);
-                announced = now;
-                continue;
-            }
-            if (uint8_t *teams = *(uint8_t **)(vol + 8)) {
-                *(float *)(teams + 4) = 0.0f;                        // both teams' capture progress
-                *(float *)(teams + 12) = 0.0f;
-            }
-            *(uint16_t *)(vol + 0x44) = 0;                          // owner: blue
-            *(uint16_t *)(vol + 0x46) = 0xffff;                     // nobody capturing
-            *(uint16_t *)(vol + 0x40) |= 4;                         // replicate it
-            uint64_t a[2] = {}, b[2] = {};
-            uint64_t param = ref(cs, a, handle)[1];
-            uint64_t link = ref(cs, b, handle)[0];
-            dispatch(*(uint64_t *)(cs + 0x80), EVT_POSSESSION_CHANGED, link, param, 1);
-            announced = now;
-            Log("END MATCH: blue captured capture point %u", i);
-        }
-    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-        Log("END MATCH: capture failed (cs %llx)", cs);
-    }
-}
-
-// END MATCH, on the server's tick thread (see WANT_END).
-void EndMatchStep() {
-    ULONGLONG now = GetTickCount64();
-    if (now >= g_end_until) { EndMatchRestore("no game over in time, gave up"); return; }
-    if (now < g_end_next) return;
-    g_end_next = now + END_EVERY_MS;
-    if (!g_end_saved) {
-        g_end_old_total = g_rules_total ? *(volatile float *)g_rules_total : 0.0f;
-        g_end_saved = true;
-    }
-    if (g_rules_total) *(volatile float *)g_rules_total = END_TOTAL;
-    if (!g_end_point || !LooksLikePoint(g_end_point)) {
-        g_end_point = nullptr;
-        if (now - g_end_scanned < END_RESCAN_MS) return;
-        g_end_scanned = now;
-        g_end_point = FindPointData();
-        Log(g_end_point ? "END MATCH: capture point data at %p" : "END MATCH: no capture point data found%s",
-            g_end_point ? (void *)g_end_point : (void *)"");
-        if (!g_end_point) return;
-    }
-    EC_TRY {
-        *(volatile float *)(g_end_point + 0xF8) = END_POINTS;
-        if (InterlockedIncrement(&g_end_written) % 20 == 1) Log("END MATCH: blue at 9999 points (%ld)", (long)g_end_written);
-        // The point's unlock countdown (+DCh = lock time - (now - start +F4h), worked out every
-        // frame by the script; T only sets the lock time a round starts with, so a round already
-        // running kept its 45 s): its start moves back by what is left, so it unlocks now.
-        float left = *(volatile float *)(g_end_point + 0xDC);
-        if (left > 0.2f && left < 1000.0f) {
-            *(volatile float *)(g_end_point + 0xF4) -= left;
-            Log("END MATCH: point unlock countdown %.1f s cut to 0", left);
-        }
-    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-        g_end_point = nullptr;
-    }
-}
-
 // While paused (or counting down to resume) nothing but VeilNet may lift the cease fire: in test a
 // gun came back during a pause once. Candidates: the game-mode script's own
 // nevt_to_server_disable_combat_cease_fire (state changes) and the capture point's
@@ -1515,7 +1330,6 @@ void CheckpointHit(const char *why, uint64_t event) {
 
 void MapSwitchEvent(uint64_t event);
 void WatchEvent(uint64_t space, uint64_t event, uint64_t link, uint64_t param) {
-    GameOverSeen(event);
     MapSwitchEvent(event);
 #ifdef ECHOCOMBAT_LOG
     // Two-player test: both teams readied and the match never left pre_match_wait_for_ready.
@@ -1584,7 +1398,6 @@ void __fastcall HookedDCE(uint64_t space, uint64_t event, uint64_t link, uint64_
 #ifdef ECHOCOMBAT_LOG
     WatchEvent(space, event, link, param);
 #else
-    GameOverSeen(event);
     MapSwitchEvent(event);
 #endif
     if ((event == EVT_CEASE_FIRE_OFF || event == EVT_LOCAL_CEASE_FIRE_OFF || event == EVT_LOCAL_CEASE_FIRE_TOGGLE) &&
@@ -1717,10 +1530,8 @@ void ApplyMapSwitch() {
     }
 }
 
-void EndMatchCapture();
 void ApplyPause() {
     ApplyMapSwitch();
-    EndMatchCapture();
     if (!g_rules) return;
     LONG paused = g_server ? g_paused : g_rules[PAUSED_SHOWN];
     if (g_server) CaptureTicking();                       // keeps "when the count last moved" current
@@ -2358,7 +2169,6 @@ DWORD WINAPI Tick(LPVOID) {
     sockaddr_in logged_server = {};
     ULONGLONG next_hello = 0, next_pick = 0, next_hook = 0, next_tacmods = 0;
     uint8_t seen_classic_requests = g_rules ? g_rules[CLASSIC_REQUESTS] : 0;
-    bool f8_was = false;
     ULONGLONG next_privacy = 0;                          // nEVR port (#2289)
     while (!g_stop) {
         if (g_server && GetTickCount64() >= next_privacy) {   // nEVR port (#2289): once a second, so the match type's
@@ -2366,7 +2176,6 @@ DWORD WINAPI Tick(LPVOID) {
             SessionPrivacy();
         }
         Sleep(10);                                       // (5 ms: 200 wakeups a second, for checks that need far fewer)
-        if (g_server && g_end_until) EndMatchStep();     // server: F8 END MATCH
 #ifdef ECHOCOMBAT_LOG
         if (g_server) TraceCapture();
 #endif
@@ -2420,17 +2229,6 @@ DWORD WINAPI Tick(LPVOID) {
                 else if (want & WANT_CHASSIS) Log("RULES page 2: SERIES-10 ONLY %s asked of the server", want & 1 ? "on" : "off");
                 else Log("RULES page 2: LOADOUTS %s asked of the server", LoadoutName(want));
             }
-            bool f8 = g_match_control && (GetAsyncKeyState(VK_F8) & 0x8000) != 0;   // nEVR port: match control
-            if (f8 && !f8_was) {
-                DWORD pid = 0;
-                GetWindowThreadProcessId(GetForegroundWindow(), &pid);
-                if (pid == GetCurrentProcessId()) {
-                    SendToServer('C', WANT_END);
-                    SendToServer('C', WANT_END);                             // once more, against loss
-                    Log("END MATCH asked of the server (F8)");
-                }
-            }
-            f8_was = f8;
             if (now >= next_hello) {
                 next_hello = now + 2000;
                 SendToServer('H', 0);
@@ -2842,7 +2640,7 @@ bool Install(bool server) {
     g_dispatch_hooked = HookDispatch();                 // nEVR port: kept, so the feature line says whether it is in
     if (g_dispatch_hooked) Log("LOADOUTS / PAUSE: event dispatch hooked");
     else LogWarning("LOADOUTS / PAUSE: event dispatch not hooked (a SetAlpha head mismatch, or a runtime detour it rides is "
-                    "not in place; see the lines above): stations not redrawn, PAUSE, END MATCH and MAP SWITCH off");
+                    "not in place; see the lines above): stations not redrawn, PAUSE and MAP SWITCH off");
     if (g_match_control) {                              // nEVR port: LOADOUTS is match control
     g_slots_hooked = HookClassicSlots();
     Log(g_slots_hooked ? "LOADOUTS: equipment slot setters filtered (the runtime's hooks)"

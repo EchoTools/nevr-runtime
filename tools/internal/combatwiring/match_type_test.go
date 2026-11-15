@@ -81,7 +81,6 @@ func TestBothGatesAskSessionPrivacy(t *testing.T) {
 	src := code(t, veilnet)
 	for _, gate := range []string{
 		"if (p.type == 'C' && (p.id & 0xF0000000) == WANT_MAP && (p.id & 0xF) < MAP_COUNT)",
-		"if (p.type == 'C' && p.id == WANT_END)",
 	} {
 		b := body(t, src, gate)
 		if !strings.Contains(b, "SessionPrivacy()") || !strings.Contains(b, "!= nevr_combat::MatchPrivacy::kPrivate") {
