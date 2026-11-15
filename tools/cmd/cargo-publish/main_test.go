@@ -540,3 +540,42 @@ func TestBinaryUploadLogsEachUploadedKey(t *testing.T) {
 		t.Fatalf("stdout summary = %s; want uploaded 3", stdout.String())
 	}
 }
+
+func TestStagingPrefixKeepsEveryKeyInsideThePrefix(t *testing.T) {
+	const staging = "v1-staging/"
+	dir, frame := writeSet(t, [][]byte{[]byte("alpha")})
+	p, err := buildPlan(dir, staging)
+	if err != nil {
+		t.Fatalf("buildPlan: %v", err)
+	}
+	for _, o := range p.Objects {
+		if !strings.HasPrefix(o.Key, staging) {
+			t.Errorf("key %s is outside %s", o.Key, staging)
+		}
+	}
+	want := staging + "manifests/" + sha256Hex(frame) + manifestFrameExt
+	found := false
+	for _, o := range p.Objects {
+		found = found || o.Key == want
+	}
+	if !found {
+		t.Errorf("no key %s in the plan", want)
+	}
+}
+
+func TestAPresentManifestKeyWithOtherContentIsAnErrorNotASkip(t *testing.T) {
+	dir, _ := writeSet(t, [][]byte{[]byte("alpha")})
+	f, srv := newFake(t)
+	f.objects[testPrefix+manifestFrameName] = []byte("another set's manifest")
+	cfg := testConfig(srv.URL)
+	p, err := buildPlan(dir, cfg.Prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPublish(context.Background(), cfg, p, quietLog()); err == nil || !strings.Contains(err.Error(), "present with other content") {
+		t.Fatalf("err = %v, want present with other content", err)
+	}
+	if string(f.objects[testPrefix+manifestFrameName]) != "another set's manifest" {
+		t.Error("the present object was overwritten")
+	}
+}

@@ -10,7 +10,8 @@
 //
 // The set is <dir>/blobs/sha256/<64 hex>: each file must start with the zstd frame magic and hash to its name. The
 // manifest goes up only as the zstd frame <dir>/manifest.json.zst, never as plain JSON, at two keys: <prefix>manifest.json.zst
-// and v1/manifests/<sha256 of the frame>.json.zst. A plain manifest.json in the set is not read.
+// and v1/manifests/<sha256 of the frame>.json.zst (under the staging prefix v1-staging/ the second key is
+// <prefix>manifests/<sha256 of the frame>.json.zst, so nothing outside the prefix is written). A plain manifest.json in the set is not read.
 //
 // Blobs are written at <prefix>blobs/sha256/<hex>. Per object: a HEAD on the public domain (200 skips the object, 404
 // puts it, any other status is an error), a PUT with If-None-Match: * (the bucket refuses to overwrite), then a GET on the
@@ -58,6 +59,7 @@ const (
 	plainManifestName = "manifest.json"
 	manifestFrameName = "manifest.json.zst"
 	manifestsKeyDir   = "v1/manifests/"
+	stagingPrefix     = "v1-staging/" // a staging set stays whole under it: its by-hash manifest is kept at <prefix>manifests/
 	manifestFrameExt  = ".json.zst"
 	liveManifestKey   = "v1/manifest.json" // never written by this tool
 	logLevelDefault   = slog.LevelInfo
@@ -201,7 +203,7 @@ func buildPlan(dir, prefix string) (plan, error) {
 	if err != nil {
 		return plan{}, fmt.Errorf("hash manifest frame: %w", err)
 	}
-	keys := []string{prefix + manifestFrameName, manifestsKeyDir + sum + manifestFrameExt}
+	keys := []string{prefix + manifestFrameName, manifestsDirFor(prefix) + sum + manifestFrameExt}
 	for _, k := range keys {
 		if k == liveManifestKey {
 			return plan{}, fmt.Errorf("manifest key %s is the live manifest; refused", k)
@@ -211,6 +213,15 @@ func buildPlan(dir, prefix string) (plan, error) {
 	}
 	sort.Slice(p.Objects, func(i, j int) bool { return p.Objects[i].Key < p.Objects[j].Key })
 	return p, nil
+}
+
+// manifestsDirFor is the folder the by-hash copy of the manifest goes to: the shared v1/manifests/, except for a set under
+// the staging prefix, which writes nothing outside it (sprockee decides what reaches v1/).
+func manifestsDirFor(prefix string) string {
+	if strings.HasPrefix(prefix, stagingPrefix) {
+		return prefix + "manifests/"
+	}
+	return manifestsKeyDir
 }
 
 func hashFile(p string) (string, int64, error) {
@@ -302,6 +313,17 @@ func publishOne(ctx context.Context, cfg config, o object, log *slog.Logger) (st
 		return "", fmt.Errorf("%s: head: %w", o.Key, err)
 	}
 	if present {
+		// A blob's key is its hash, so presence is identity. A manifest key is a name: what is there may be another set's.
+		if strings.HasSuffix(o.Key, manifestFrameName) {
+			got, n, err := publicHash(ctx, cfg, o.Key)
+			if err != nil {
+				return "", fmt.Errorf("%s: present, read back: %w", o.Key, err)
+			}
+			if got != o.SHA || n != o.Size {
+				log.Error("present with other content", "key", o.Key, "want_sha256", o.SHA, "got_sha256", got)
+				return "", fmt.Errorf("%s: present with other content (sha256 %s, %d bytes), not overwritten; the set is not served under this key", o.Key, got, n)
+			}
+		}
 		log.Debug("object present, skipped", "key", o.Key, "bytes", o.Size)
 		return "skipped", nil
 	}
