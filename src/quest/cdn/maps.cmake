@@ -1,7 +1,7 @@
 # The custom-map channel on the Quest (docs/adr/0048-custom-maps-channel.md): the core's start and fetch (core/map_channel.h,
 # core/map_run.cpp and their formats), the shared resource-set registry the PC also compiles (core/resource_set_registry.cpp), the
 # script image rules, the Quest's map file system and set registration (sentinel/map_sets.cpp), route B's map scripts
-# (plugin/map_scripts.cpp), and the Quest's service, mount and production start (cargo/map_*.cpp).
+# (plugin/map_scripts.cpp), and the Quest's service, mount and production start (cdn/map_*.cpp).
 # It is linked into libovrplatformloader.so: production_steps.cpp calls nevr_quest::maps::StartFromConfig, which returns at once and
 # writes one Info record unless the Quest config gives maps.base_url. Included from src/quest/sentinel/CMakeLists.txt.
 set(_qmaps_monocypher "${NEVR_REPO_ROOT}/third_party/monocypher/src")
@@ -14,6 +14,10 @@ add_library(nevr_quest_maps STATIC
   ../../core/map_manifest.cpp
   ../../core/map_index.cpp
   ../../core/map_derive.cpp
+  ../../core/map_local_precedence.cpp
+  ../../core/map_fetch_queue.cpp
+  ../../core/stock_source.cpp
+  ../../core/map_session_pin.cpp
   ../../core/map_set_tables.cpp
   ../../core/minisign_verify.cpp
   ../../core/resource_set_registry.cpp
@@ -22,11 +26,12 @@ add_library(nevr_quest_maps STATIC
   ../../core/device_memory.cpp
   ../sentinel/map_sets.cpp
   ../plugin/map_scripts.cpp
-  posix_map_fs.cpp
-  stock_source.cpp
-  map_service.cpp
-  map_mount.cpp
-  map_start.cpp
+  ../../cdn/posix_map_fs.cpp
+  ../cdn/stock_source.cpp
+  ../cdn/map_pin_game.cpp
+  ../cdn/map_service.cpp
+  ../cdn/map_mount.cpp
+  ../cdn/map_start.cpp
   "${_qmaps_monocypher}/monocypher.c"
   "${_qmaps_monocypher}/monocypher-ed25519.c")
 target_include_directories(nevr_quest_maps PRIVATE

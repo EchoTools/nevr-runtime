@@ -35,10 +35,10 @@ target_sources(nevr_core PRIVATE ${_maps_format_sources} ${_maps_monocypher_sour
 target_include_directories(nevr_core PRIVATE "${_maps_monocypher_dir}")
 
 # The recipe rebuild (core/map_derive.h; ADR 0048): a stock-derived asset rebuilt from the player's own install and merged into
-# the map's set, with the one reader of a set file (core/map_set_tables.h). Each frame header is judged by the texture cargo's
+# the map's set, with the one reader of a set file (core/map_set_tables.h). Each frame header is judged by the texture CDN's
 # validator (cdn/cdn_validate.h, ADR 0045), and the memory a rebuild holds is a share of the device's (cdn/cdn_limits.h),
 # read by the one memory reader (core/device_memory.h, whose Win32 half the PC's Env calls). The PC build has no other user of
-# those three cargo files, so the map channel brings them into nevr_core. No PCH: device_memory.cpp includes <windows.h> itself,
+# those three CDN files, so the map channel brings them into nevr_core. No PCH: device_memory.cpp includes <windows.h> itself,
 # after <winsock2.h>, and the others include no Windows header.
 set(_maps_derive_sources
   "${CMAKE_CURRENT_LIST_DIR}/map_set_tables.cpp"
