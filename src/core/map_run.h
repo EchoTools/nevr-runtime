@@ -174,10 +174,21 @@ struct FetchReport {
   std::uint64_t set_bytes = 0, bytes_to_fetch = 0, bytes_fetched = 0, elapsed_ms = 0;
 };
 
-// Fetches one group's manifest and the maps it lists. `deferred` are maps a mount deferred (MountReport::deferred): their files
-// are hashed again before the plan. `progress` (optional) is called after the plan and after every piece, on the worker.
+// Which of the maps a group's manifest lists one fetch stores. By default every listed map (a server's group, ADR 0048 decision 13).
+// On demand (a client's fetch): only the ids the caller names (the map its session needs) and the maps the cache already holds at a
+// version the manifest no longer lists, so a bucket of many maps costs a player only the maps it plays. A named id the manifest
+// does not list for this platform fails the fetch (not_listed); nothing outside the verified manifest is ever fetched.
+struct FetchScope {
+  bool on_demand = false;
+  std::vector<std::string> ids;
+};
+
+// Fetches one group's manifest and the maps `scope` takes of it. `deferred` are maps a mount deferred (MountReport::deferred):
+// their files are hashed again before the plan. `progress` (optional) is called after the plan and after every piece, on the
+// worker.
 FetchReport FetchGroup(nevr_cdn::Env& env, MapFs& fs, const ChannelConfig& config, const std::string& group,
                        const std::vector<std::string>& deferred, Deriver* deriver, const std::string& now_utc,
-                       const std::function<bool()>& keep_going, const FetchProgressFn& progress = nullptr);
+                       const std::function<bool()>& keep_going, const FetchProgressFn& progress = nullptr,
+                       const FetchScope& scope = FetchScope());
 
 }  // namespace nevr_maps

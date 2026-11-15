@@ -605,9 +605,9 @@ struct ResumePoint {
 class FetchRun {
  public:
   FetchRun(Env& env, MapFs& fs, const ChannelConfig& config, const std::string& group, Deriver* deriver,
-           const std::function<bool()>& keep_going, const FetchProgressFn& progress)
+           const std::function<bool()>& keep_going, const FetchProgressFn& progress, const FetchScope& scope)
       : env_(env), fs_(fs), config_(config), group_(group), deriver_(deriver), keep_going_(keep_going),
-        progress_fn_(progress) {
+        progress_fn_(progress), scope_(scope) {
     report_.group = group;
     local_names_ = CollectLocalNames(config.local_level_names, config.local_maps);
   }
@@ -1313,6 +1313,11 @@ class FetchRun {
       auto plan = [&](const char* reason, EventLevel level = EventLevel::kInfo) {
         env_.Event(level, "map_plan", {{"group", group_}, {"id", id}, {"reason", reason}});
       };
+      const auto cached = index_.maps.find(key);
+      if (scope_.on_demand && cached == index_.maps.end() && !Contains(scope_.ids, id)) {
+        plan("not_needed");
+        continue;
+      }
       report_.set_bytes += entry.bytes;
       const LocalPrecedence local = DecideLocalPrecedence({id, entry.level_name}, local_names_);
       if (local.skip) {
@@ -1332,7 +1337,6 @@ class FetchRun {
         plan("signed_only", EventLevel::kWarn);
         continue;
       }
-      const auto cached = index_.maps.find(key);
       if (cached != index_.maps.end() && cached->second.index_sha256 == entry.index.sha256) {
         plan("current");
         continue;
@@ -1346,6 +1350,12 @@ class FetchRun {
       planned += entry.bytes;
       plan("fetch");
       to_fetch.push_back(Planned{id, &entry});
+    }
+    for (const std::string& id : scope_.ids) {
+      const auto listed = manifest.maps.find(id);
+      if (listed != manifest.maps.end() && listed->second.platforms.count(config_.platform) != 0) continue;
+      env_.Event(EventLevel::kWarn, "map_plan", {{"group", group_}, {"id", id}, {"reason", "not_listed"}});
+      MapFailed("not_listed");
     }
     report_.bytes_to_fetch = planned;
     Progress();
@@ -1459,6 +1469,7 @@ class FetchRun {
   Deriver* deriver_;
   const std::function<bool()>& keep_going_;
   const FetchProgressFn& progress_fn_;
+  const FetchScope& scope_;
   nevr_cdn::Limits limits_;
   std::uint64_t document_bytes_ = 0;
   std::uint64_t table_bytes_ = 0;
@@ -1513,8 +1524,8 @@ MountReport CacheMount::Mount(const std::vector<std::string>& groups, const std:
 
 FetchReport FetchGroup(Env& env, MapFs& fs, const ChannelConfig& config, const std::string& group,
                        const std::vector<std::string>& deferred, Deriver* deriver, const std::string& now_utc,
-                       const std::function<bool()>& keep_going, const FetchProgressFn& progress) {
-  return FetchRun(env, fs, config, group, deriver, keep_going, progress).Run(deferred, now_utc);
+                       const std::function<bool()>& keep_going, const FetchProgressFn& progress, const FetchScope& scope) {
+  return FetchRun(env, fs, config, group, deriver, keep_going, progress, scope).Run(deferred, now_utc);
 }
 
 }  // namespace nevr_maps

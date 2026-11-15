@@ -1166,4 +1166,93 @@ TEST(GroupFetchQueue, ABadGroupIsRefusedAndStopAnswersEveryWaitingRequest) {
   EXPECT_FALSE(queue.WaitForRequest(0));
 }
 
+// On demand: a client's fetch stores the maps it names and the ones the cache holds at an older version, never the rest of a group.
+class MapRunOnDemandTest : public MapRunTest {
+ protected:
+  FetchReport FetchOnDemand(const std::vector<std::string>& ids) {
+    FetchScope scope;
+    scope.on_demand = true;
+    scope.ids = ids;
+    return FetchGroup(env, fs, config, kGroup, {}, nullptr, kNow, keep_going, nullptr, scope);
+  }
+  std::size_t IndexGets(const std::string& id) { return GetsOf(std::string(kBase) + "blobs/sha256/" + channel.IndexSha(id)); }
+};
+
+TEST_F(MapRunOnDemandTest, OnlyTheNamedMapOfAGroupIsFetched) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+  channel.Sign(1);
+  const FetchReport fetched = FetchOnDemand({"beta"});
+  EXPECT_EQ(fetched.reason, "");
+  EXPECT_EQ(fetched.outcome, FetchOutcome::kFetched);
+  EXPECT_EQ(fetched.maps_updated, 1u);
+  EXPECT_EQ(IndexGets("alpha"), 0u);
+  EXPECT_EQ(IndexGets("beta"), 1u);
+  const MountReport boot = Boot();
+  EXPECT_TRUE(Mounted(boot, "beta"));
+  EXPECT_FALSE(Mounted(boot, "alpha"));
+  EXPECT_EQ(TokenOf(boot, "alpha"), "not_cached");
+}
+
+TEST_F(MapRunOnDemandTest, ACachedCurrentMapIsMountedWithNoPieceFetched) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Sign(1);
+  ASSERT_EQ(FetchOnDemand({"alpha"}).outcome, FetchOutcome::kFetched);
+  const std::size_t gets = env.requests.size();
+  const FetchReport again = FetchOnDemand({"alpha"});
+  EXPECT_EQ(again.outcome, FetchOutcome::kCached);
+  EXPECT_EQ(again.pieces_fetched, 0u);
+  EXPECT_EQ(env.requests.size(), gets + 1);  // the group's manifest only
+  EXPECT_TRUE(Mounted(Boot(), "alpha"));
+}
+
+TEST_F(MapRunOnDemandTest, ACachedMapTheManifestUpdatedFetchesOnlyTheChangedPiecesAndMountsTheNewVersion) {
+  const std::string v1 = MakeSet(6, 'a');
+  channel.Publish("alpha", "1.0.0", v1);
+  channel.Sign(1);
+  ASSERT_EQ(FetchOnDemand({"alpha"}).outcome, FetchOutcome::kFetched);
+  std::string v2 = v1;
+  v2[FramesStart(6) + 3 * kFrameBytes + 20] ^= 1;  // a byte of frame 3's payload
+  channel.Publish("alpha", "1.1.0", v2);
+  channel.Sign(2);
+  const FetchReport update = FetchOnDemand({});  // not named: the cache holds an older version, so it is in scope
+  EXPECT_EQ(update.maps_updated, 1u);
+  EXPECT_EQ(update.pieces_fetched, 1u);
+  EXPECT_EQ(update.pieces_reused, 6u);
+  const MountReport boot = Boot();
+  ASSERT_EQ(boot.staged.size(), 1u);
+  EXPECT_EQ(boot.staged[0].version, "1.1.0");
+}
+
+TEST_F(MapRunOnDemandTest, AnUpdateThatFailsToFetchLeavesTheOldVersionRefusedStale) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Sign(1);
+  ASSERT_EQ(FetchOnDemand({"alpha"}).outcome, FetchOutcome::kFetched);
+  const std::string v1_index = channel.IndexSha("alpha");
+  channel.Publish("alpha", "1.1.0", MakeSet(4, 'b'));
+  channel.Sign(2);
+  const std::string v2_index = std::string(kBase) + "blobs/sha256/" + channel.IndexSha("alpha");
+  ASSERT_NE(channel.IndexSha("alpha"), v1_index);
+  env.server.erase(v2_index);  // the manifest arrives, the new version cannot be had
+  const FetchReport failed = FetchOnDemand({"alpha"});
+  EXPECT_EQ(failed.outcome, FetchOutcome::kFailed);
+  const MountReport boot = Boot();
+  EXPECT_TRUE(boot.staged.empty());
+  EXPECT_EQ(TokenOf(boot, "alpha"), kStaleToken);
+  EXPECT_FALSE(mounter.Called("set map:alpha"));
+}
+
+TEST_F(MapRunOnDemandTest, ANamedIdTheManifestDoesNotListFailsAndFetchesNothing) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Sign(1);
+  const FetchReport fetched = FetchOnDemand({"ghost"});
+  EXPECT_EQ(fetched.outcome, FetchOutcome::kFailed);
+  EXPECT_EQ(fetched.reason, "not_listed");
+  EXPECT_EQ(fetched.pieces_fetched, 0u);
+  EXPECT_EQ(IndexGets("alpha"), 0u);
+  const Record* plan = env.FindRecord("map_plan");
+  ASSERT_NE(plan, nullptr);
+  EXPECT_TRUE(Boot().mounted.empty());
+}
+
 }  // namespace
