@@ -105,7 +105,7 @@ uw::Inputs BaseInputs(const nevr_update::UpdateFs* fs, const std::string& root, 
     return true;
   };
   in.core = FakeCore();
-  in.verify = [](const std::string&) { return nevr_update::VerifyOutcome{true, false, "accepted"}; };
+  in.verify = [](const std::string&, const nevr_update::ExpectedFile&) { return nevr_update::VerifyOutcome{true, false, "accepted"}; };
   in.log = lines->Fn();
   in.now_ms = [] { return std::uint64_t{0}; };
   return in;
@@ -243,6 +243,46 @@ void TheRunningRuntimeIsTheFileTheCodeIsIn() {
   QCHECK(e2 == "no_version");
 }
 
+// The Quest verifier (VerifyStagedQuestFile): the staged file must be the bytes its stage result entry lists, by size and sha256; a link
+// or a directory where the file must be is a verdict; a file that cannot be opened is not.
+void TheStagedFileIsCheckedAgainstItsEntry(const std::string& root) {
+  const std::string dir = root + "/verify";
+  std::filesystem::create_directories(dir);
+  const std::string bytes = "staged runtime bytes";
+  const std::string path = dir + "/libnevr-runtime.so";
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << bytes;
+  }
+  const nevr_update::ExpectedFile entry{bytes.size(), nevr_quest::data::Sha256Hex(bytes.data(), bytes.size())};
+
+  const nevr_update::VerifyOutcome accepted = uw::VerifyStagedQuestFile(path, entry);
+  QCHECK(accepted.ok && !accepted.refused && accepted.reason == "accepted");
+
+  nevr_update::ExpectedFile wrong_size = entry;
+  wrong_size.size += 1;
+  const nevr_update::VerifyOutcome size = uw::VerifyStagedQuestFile(path, wrong_size);
+  QCHECK(!size.ok && size.refused && size.reason == "size_mismatch");
+
+  nevr_update::ExpectedFile wrong_hash = entry;
+  wrong_hash.sha256[0] = wrong_hash.sha256[0] == '0' ? '1' : '0';
+  const nevr_update::VerifyOutcome hash = uw::VerifyStagedQuestFile(path, wrong_hash);
+  QCHECK(!hash.ok && hash.refused && hash.reason == "sha256_mismatch");
+
+  const std::string link = dir + "/linked.so";
+  std::error_code ec;
+  std::filesystem::remove(link, ec);
+  std::filesystem::create_symlink(path, link);
+  const nevr_update::VerifyOutcome linked = uw::VerifyStagedQuestFile(link, entry);
+  QCHECK(!linked.ok && linked.refused && linked.reason == "link");
+
+  const nevr_update::VerifyOutcome folder = uw::VerifyStagedQuestFile(dir, entry);
+  QCHECK(!folder.ok && folder.refused && folder.reason == "not_a_regular_file");
+
+  const nevr_update::VerifyOutcome missing = uw::VerifyStagedQuestFile(dir + "/missing.so", entry);
+  QCHECK(!missing.ok && !missing.refused && missing.reason == "open_failed");
+}
+
 }  // namespace
 
 int main() {
@@ -254,6 +294,7 @@ int main() {
   ARefusedFrameCallIsSaid(fs.get(), root);
   TheFrameCallRefusesAnUnusableContext();
   TheRunningRuntimeIsTheFileTheCodeIsIn();
+  TheStagedFileIsCheckedAgainstItsEntry(root);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "update_wiring_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

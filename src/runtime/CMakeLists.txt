@@ -59,6 +59,8 @@ set(PATCHES_SOURCES
     "../core/update/policy.cpp"
     "../core/update/engine_check.cpp"
     "../core/update/worker.cpp"
+    # The core's C binding (installer/include/nevr_install.h), shared with the Quest runtime (src/quest/sentinel/CMakeLists.txt).
+    "../core/update/core_ffi.cpp"
     "lifecycle/update_fs_win32.cpp"
     "lifecycle/update_run.cpp"
     "lifecycle/update_process.cpp"

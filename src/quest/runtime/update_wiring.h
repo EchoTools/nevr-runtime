@@ -9,10 +9,9 @@
 // No sentinel, config or frame-dispatch header is included: the caller (runtime_entry.cpp) supplies the values and the registration
 // function, so this unit builds and is tested on the host with a fake core.
 //
-// Held, and stated here so it is not read as done: the check and the stage need the Rust core (Core) and the verifier (verify) on
-// Quest. Neither is linked in this build, so the runtime's caller passes neither, and Start then does not start the worker
-// (StartOutcome::kCoreNotLinked). `-no-update` has no source on Quest (the process has no argument list); `flag_no_update` is for a
-// caller that has one.
+// The runtime's caller passes the Rust core (core/update/core_ffi.h, the quest-runtime profile below) and VerifyStagedQuestFile. A
+// caller that passes no core gets StartOutcome::kCoreNotLinked and no worker. `-no-update` has no source on Quest (the process has no
+// argument list); `flag_no_update` is for a caller that has one.
 
 #include <cstdint>
 #include <functional>
@@ -28,6 +27,10 @@ namespace nevr_quest::update_wiring {
 /// The core's platform word for Quest (the PC's is "pc"): ADR 0024, section 3.
 inline constexpr char kPlatformWord[] = "quest";
 
+/// The stage profile of the Quest runtime: the artifact kind and the one member, the same text as installer/src/stage.rs QUEST_PROFILE.
+/// A release lists the runtime as `quest-runtime`, one file with no zip (installer/include/nevr_install.h, NevrStage).
+inline constexpr char kQuestStageProfile[] = R"({"kind":"quest-runtime","members":["libnevr-runtime.so"]})";
+
 /// What the runtime knows when it starts the worker.
 struct Inputs {
   bool dev_build = false;                    ///< nevr_build::kIsDev: a developer's runtime is never replaced
@@ -40,7 +43,7 @@ struct Inputs {
   /// The version and the sha256 of the file this process mapped; see ReadRunningRuntime.
   std::function<bool(std::string* version, std::string* sha256, std::string* error)> read_running;
   nevr_update::Core core;                    ///< the Rust core's job functions; empty when the core is not linked
-  std::function<nevr_update::VerifyOutcome(const std::string& path)> verify;
+  std::function<nevr_update::VerifyOutcome(const std::string& path, const nevr_update::ExpectedFile& expected)> verify;
   nevr_update::LogFn log;                    ///< called from the worker's threads: it must be thread-safe
   std::function<std::uint64_t()> now_ms;     ///< a monotonic clock in milliseconds
 };
@@ -69,6 +72,14 @@ struct StartResult {
 /// Builds the inputs, starts the worker once and registers its frame call. The worker is never destroyed: the frame call holds it for
 /// the life of the process, as PC's does (update_process.cpp g_worker_for_frames). Never throws.
 StartResult Start(Inputs inputs, const RegisterFrameWorkFn& register_frame_work) noexcept;
+
+/// The Quest verifier of one staged file (Inputs::verify). The core checked the file against the signed manifest when it staged it
+/// (ADR 0024, section 4.1). Here the bytes the engine staged must still be those: the file is opened without following a link, must be
+/// a regular file, and its size and sha256 must equal `expected` (the stage result's entry). A link or a size or hash mismatch is a
+/// verdict (`refused`); a file that cannot be opened or read is not (a scanner's lock, a missing file).
+/// KNOWN-WRONG #TBD: the stored proof pair (NevrProofVerify, DESIGN section 2) is not checked here; that is the piece after this one
+/// (6.19), so a release the signer later revokes still verifies against its own bytes until then.
+nevr_update::VerifyOutcome VerifyStagedQuestFile(const std::string& path, const nevr_update::ExpectedFile& expected);
 
 /// For Inputs::read_running: the file the code at `in_library` was loaded from (dladdr), its sha256 and `version`. False with `error`
 /// set when the address is in no loaded object, the file cannot be read, or the version is empty. Reads the whole file: call it from

@@ -30,6 +30,7 @@
 #include "quest/combat/combat_active.h"
 #include "quest/integration/entry_hooks.h"
 #include "quest/invite/frame_dispatch.h"
+#include "core/update/core_ffi.h"
 #include "quest/runtime/update_wiring.h"
 #include "quest/redirect/hook_adapter.h"
 #include "quest/sentinel/activation.h"
@@ -125,8 +126,8 @@ sentinel::LogLevel UpdateLevel(int level) noexcept {
 }
 
 // Starts the update worker once the constructor sequence has run, so the frame dispatcher exists (update_wiring.h). The inputs are the
-// runtime's own: the build, the config's `update:` section, the host's capability bit and update root. Two are not there yet: the Rust
-// core and the verifier are not linked into this build (the Android build of the core is a held piece), so Start does not start the
+// runtime's own: the build, the config's `update:` section, the host's capability bit and update root, and the core install method
+// (core/update/core_ffi.h) staging the quest-runtime profile with the Quest verifier. A build without the core library starts no
 // worker and says so in one record. The host's capability bit is also 0 until the shim can swap, which would disable the update anyway.
 void StartUpdateWorker(const NevrQuestHostContext* host) noexcept {
   nevr_quest::update_wiring::Inputs in;
@@ -136,6 +137,8 @@ void StartUpdateWorker(const NevrQuestHostContext* host) noexcept {
   in.config_channel = config.update.channel;
   in.host_can_swap = nevr_quest_runtime_abi::HostCanSwap(host);
   if (host->update_root != nullptr) in.root = host->update_root;
+  in.core = nevr_update::MakeFfiCore(nevr_quest::update_wiring::kQuestStageProfile);
+  in.verify = &nevr_quest::update_wiring::VerifyStagedQuestFile;
   // One file system for the life of the process: the worker's threads outlive this call.
   // Never destroyed: a static unique_ptr would free it at process exit under the worker threads that still use it.
   static nevr_update::UpdateFs* const fs = in.root.empty() ? nullptr : nevr_update::MakePosixUpdateFs(in.root).release();

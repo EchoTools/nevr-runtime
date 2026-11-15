@@ -21,9 +21,10 @@ bool RootToUtf8(const std::wstring& wide, std::string* utf8) {
   return ok;
 }
 
-std::function<VerifyOutcome(const std::string& utf8_path)> WidenVerifier(
+std::function<VerifyOutcome(const std::string& utf8_path, const ExpectedFile& expected)> WidenVerifier(
     std::function<VerifyOutcome(const std::wstring& path)> verify) {
-  return [verify = std::move(verify)](const std::string& utf8_path) -> VerifyOutcome {
+  // The Authenticode check reads the file itself, so the entry the stage result gave it is not needed here.
+  return [verify = std::move(verify)](const std::string& utf8_path, const ExpectedFile&) -> VerifyOutcome {
     std::wstring wide;
     if (!Utf8ToWide(utf8_path, &wide)) {
       VerifyOutcome refused;  // not a verdict on the bytes: nothing is discarded for it

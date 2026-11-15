@@ -344,7 +344,7 @@ CheckEnv MakeEnv(const Root& root, FakeCore& core, Lines& lines) {
   env.runtime_sha256 = kOldSha;
   env.core = core.Make();
   env.fs = &TestFs();
-  env.verify = [](const std::string& path) {
+  env.verify = [](const std::string& path, const ExpectedFile&) {
     const std::string text = ReadAllFile(path);
     VerifyOutcome v;
     v.ok = text.find("BAD") == std::string::npos;
@@ -515,16 +515,24 @@ TEST(UpdateCheck, EachStagedFileIsVerifiedAtItsPathInTheReleasesFolder) {
   core.with_plugin = true;
   CheckEnv env = MakeEnv(root, core, lines);
   std::vector<std::string> seen;
+  std::vector<ExpectedFile> expected_seen;
   const auto inner = env.verify;
-  env.verify = [&seen, inner](const std::string& path) {
+  env.verify = [&seen, &expected_seen, inner](const std::string& path, const ExpectedFile& expected) {
     seen.push_back(path);
-    return inner(path);
+    expected_seen.push_back(expected);
+    return inner(path, expected);
   };
   const CheckOutcome out = RunCheck(env);
   EXPECT_EQ(out.action, CheckAction::kStaged) << lines.Dump();
   ASSERT_EQ(seen.size(), kStagedFilesWithAPlugin);
   EXPECT_EQ(seen[0], root.File("update\\staging\\5.99.0\\nevr-runtime.dll"));
   EXPECT_EQ(seen[1], root.File("update\\staging\\5.99.0\\plugins\\a.dll")) << "a plugin's member path has a separator of its own";
+  // The verifier is given the entry the stage result listed for each file (the Quest verifier checks the bytes against it).
+  ASSERT_EQ(expected_seen.size(), kStagedFilesWithAPlugin);
+  EXPECT_EQ(expected_seen[0].size, std::string("NEW-RUNTIME").size());
+  EXPECT_EQ(expected_seen[0].sha256, kNewSha);
+  EXPECT_EQ(expected_seen[1].size, sizeof(kPluginBytes) - 1);
+  EXPECT_EQ(expected_seen[1].sha256, kOldSha);
 }
 
 namespace {
@@ -588,9 +596,9 @@ TEST(UpdateCheck, TheCheckAsksTheFsForEachOperationInTheOrderOfTheAdr) {
   RecordingFs fs(root.path());
   env.fs = &fs;
   const auto inner = env.verify;
-  env.verify = [&fs, inner](const std::string& path) {
+  env.verify = [&fs, inner](const std::string& path, const ExpectedFile& expected) {
     fs.calls.push_back("verify");
-    return inner(path);
+    return inner(path, expected);
   };
   const CheckOutcome out = RunCheck(env);
   EXPECT_EQ(out.action, CheckAction::kStaged) << lines.Dump();
@@ -625,9 +633,9 @@ TEST(UpdateCheck, ALinkAtUpdateStagingOrTheReleasesFolderBlocksTheCheck) {
     env.fs = &fs;
     int verified = 0;
     const auto inner = env.verify;
-    env.verify = [&verified, inner](const std::string& path) {
+    env.verify = [&verified, inner](const std::string& path, const ExpectedFile& expected) {
       ++verified;
-      return inner(path);
+      return inner(path, expected);
     };
     const CheckOutcome out = RunCheck(env);
     EXPECT_EQ(out.action, CheckAction::kBlocked) << c.link << "\n" << lines.Dump();
@@ -848,9 +856,9 @@ TEST(UpdateCheck, AReleaseThatTurnsLateWhileItIsBeingVerifiedIsRemovedToo) {
   auto clock = std::make_shared<std::uint64_t>(1000);
   env.now_ms = [clock] { return *clock; };
   const auto verify = env.verify;
-  env.verify = [clock, verify](const std::string& path) {
+  env.verify = [clock, verify](const std::string& path, const ExpectedFile& expected) {
     *clock += kCheckBudgetMs + 1000;  // the verification itself runs past the budget
-    return verify(path);
+    return verify(path, expected);
   };
   const CheckOutcome out = RunCheck(env);
   EXPECT_EQ(out.reason, "timeout");
@@ -1090,12 +1098,12 @@ TEST(UpdateEdgePc, APathThatDoesNotConvertIsNotAVerdictAndTheWideVerifierIsNotRu
     ran = true;
     return VerifyOutcome{true, false, "accepted"};
   });
-  const VerifyOutcome out = verify(std::string("C:\\x\xFF"));  // not UTF-8
+  const VerifyOutcome out = verify(std::string("C:\\x\xFF"), ExpectedFile{});  // not UTF-8
   EXPECT_FALSE(out.ok);
   EXPECT_FALSE(out.refused) << "a path that does not convert is not a refusal: nothing is discarded for it";
   EXPECT_EQ(out.reason, "path_unconvertible");
   EXPECT_FALSE(ran);
-  EXPECT_TRUE(verify(std::string("C:\\ok")).ok) << "a path that converts reaches the wide verifier";
+  EXPECT_TRUE(verify(std::string("C:\\ok"), ExpectedFile{}).ok) << "a path that converts reaches the wide verifier";
   EXPECT_TRUE(ran);
 }
 
@@ -1128,7 +1136,7 @@ struct WorkerFixture {
       return true;
     };
     deps.core = core.Make();
-    deps.verify = [](const std::string&) { return VerifyOutcome{true, false, "accepted"}; };
+    deps.verify = [](const std::string&, const ExpectedFile&) { return VerifyOutcome{true, false, "accepted"}; };
     deps.log = lines.Fn();
     deps.now_ms = [this] { return clock.load(); };
     deps.fs = &TestFs();

@@ -36,7 +36,9 @@ done
 
 # The two compiler-rt entries every arm64 NDK library carries, and the sentinel's own constructor (not a plugin's).
 if [ "$plugin" = 1 ]; then
-    expected=" init_have_lse_atomics init_cpu_features "
+    # `__init_cpu_features` is the same compiler-rt CPU-feature constructor under the name Rust's bundled compiler-builtins gives it: the
+    # runtime library links the Rust core (src/quest/sentinel/CMakeLists.txt), and the NDK's init_cpu_features is the shim's entry.
+    expected=" init_have_lse_atomics init_cpu_features __init_cpu_features "
 else
     expected=" init_have_lse_atomics init_cpu_features _ZL18nevr_sentinel_ctorv "
 fi

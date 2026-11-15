@@ -1,9 +1,12 @@
 #include "quest/runtime/update_wiring.h"
 
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
-#include <cstdio>
-#include <exception>
+#include <cerrno>
+#include <cstdint>
 #include <memory>
 #include <new>
 #include <utility>
@@ -23,6 +26,31 @@ constexpr char kFrameWorkRefusedLine[] =
 constexpr std::size_t kMaxRuntimeBytes = 256u * 1024u * 1024u;
 // The chunk the file is read in.
 constexpr std::size_t kReadChunkBytes = 64u * 1024u;
+
+// How a descriptor's bytes came out: read to the end and hashed, read until a read failed, or longer than kMaxRuntimeBytes.
+enum class HashResult : std::uint8_t { kOk, kReadFailed, kTooLarge };
+
+// The size and sha256 of the bytes `fd` holds from offset 0 to its end. Reads through the descriptor, so the caller's open decides what
+// file it is (a link is refused by the open, not here).
+HashResult HashDescriptor(int fd, std::uint64_t* size_out, std::string* sha256_out) {
+  nevr_quest::data::Sha256 hash;
+  std::unique_ptr<unsigned char[]> chunk(new unsigned char[kReadChunkBytes]);
+  std::uint64_t total = 0;
+  for (;;) {
+    const ssize_t got = read(fd, chunk.get(), kReadChunkBytes);
+    if (got < 0) {
+      if (errno == EINTR) continue;
+      return HashResult::kReadFailed;
+    }
+    if (got == 0) break;
+    total += static_cast<std::uint64_t>(got);
+    if (total > static_cast<std::uint64_t>(kMaxRuntimeBytes)) return HashResult::kTooLarge;
+    hash.Update(chunk.get(), static_cast<std::size_t>(got));
+  }
+  *size_out = total;
+  *sha256_out = hash.Hex();
+  return HashResult::kOk;
+}
 
 // What the frame call needs: the worker and the clock. Leaked with the worker, because the frame call holds both for the life of the
 // process.
@@ -90,6 +118,55 @@ StartResult Start(Inputs inputs, const RegisterFrameWorkFn& register_frame_work)
   return result;
 }
 
+nevr_update::VerifyOutcome VerifyStagedQuestFile(const std::string& path, const nevr_update::ExpectedFile& expected) {
+  nevr_update::VerifyOutcome out;
+  // O_NOFOLLOW: a link where the staged file must be is a verdict (ELOOP). Any other open failure is not: the file may be locked or gone.
+  const int fd = open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  if (fd < 0) {
+    out.refused = errno == ELOOP;
+    out.reason = out.refused ? "link" : "open_failed";
+    return out;
+  }
+  struct stat st {};
+  if (fstat(fd, &st) != 0) {
+    close(fd);
+    out.reason = "stat_failed";  // not a verdict on the bytes
+    return out;
+  }
+  if (!S_ISREG(st.st_mode)) {
+    close(fd);
+    out.refused = true;
+    out.reason = "not_a_regular_file";
+    return out;
+  }
+  std::uint64_t size = 0;
+  std::string sha256;
+  const HashResult result = HashDescriptor(fd, &size, &sha256);
+  close(fd);
+  if (result == HashResult::kReadFailed) {
+    out.reason = "read_failed";  // not a verdict on the bytes
+    return out;
+  }
+  if (result == HashResult::kTooLarge) {
+    out.refused = true;
+    out.reason = "too_large";
+    return out;
+  }
+  if (size != expected.size) {
+    out.refused = true;
+    out.reason = "size_mismatch";
+    return out;
+  }
+  if (sha256 != expected.sha256) {
+    out.refused = true;
+    out.reason = "sha256_mismatch";
+    return out;
+  }
+  out.ok = true;
+  out.reason = "accepted";
+  return out;
+}
+
 bool ReadRunningRuntime(const void* in_library, const char* version, std::string* version_out, std::string* sha256_out,
                         std::string* error) {
   if (version == nullptr || version[0] == '\0') {
@@ -101,38 +178,25 @@ bool ReadRunningRuntime(const void* in_library, const char* version, std::string
     *error = "no_object";
     return false;
   }
-  std::FILE* file = std::fopen(info.dli_fname, "rb");
-  if (file == nullptr) {
+  const int fd = open(info.dli_fname, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) {
     *error = "open_failed";
     return false;
   }
-  nevr_quest::data::Sha256 hash;
-  std::unique_ptr<unsigned char[]> chunk(new unsigned char[kReadChunkBytes]);
-  std::size_t total = 0;
-  bool ok = true;
-  for (;;) {
-    const std::size_t got = std::fread(chunk.get(), 1, kReadChunkBytes, file);
-    if (got > 0) {
-      total += got;
-      if (total > kMaxRuntimeBytes) {
-        ok = false;
-        *error = "too_large";
-        break;
-      }
-      hash.Update(chunk.get(), got);
-    }
-    if (got < kReadChunkBytes) {
-      if (std::ferror(file) != 0) {
-        ok = false;
-        *error = "read_failed";
-      }
-      break;
-    }
+  std::uint64_t size = 0;
+  std::string sha256;
+  const HashResult result = HashDescriptor(fd, &size, &sha256);
+  close(fd);
+  if (result == HashResult::kTooLarge) {
+    *error = "too_large";
+    return false;
   }
-  std::fclose(file);
-  if (!ok) return false;
+  if (result == HashResult::kReadFailed) {
+    *error = "read_failed";
+    return false;
+  }
   *version_out = version;
-  *sha256_out = hash.Hex();
+  *sha256_out = sha256;
   return true;
 }
 

@@ -228,7 +228,7 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
       names::ParseMember(file.path, &member);  // parsed once already (ParseStageResult)
       const std::string path = paths.MemberIn(folder, member);
       VerifyOutcome v;
-      if (env.verify) v = env.verify(path);
+      if (env.verify) v = env.verify(path, ExpectedFile{file.size, file.sha256});
       Emit(env.log, v.ok ? kInfo : kWarning, "update verify",
            {{"path", file.path}, {"version", staged.version}, {"ok", v.ok ? "true" : "false"},
             {"reason", v.ok ? std::string("accepted") : v.reason}});
