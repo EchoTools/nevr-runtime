@@ -227,7 +227,7 @@ class TheStepOrder(unittest.TestCase):
         ctor = extract_braced_function(read("entry.cpp"), "static void nevr_sentinel_ctor() {")
         self.assertIn("StartRuntime(", ctor)
         start = extract_braced_function(read("entry.cpp"), "void StartRuntime(std::uint32_t variant) {")
-        self.assertIn("StartBaselineBesideShim(", start)
+        self.assertIn("nevr_quest::update_start::Start(", start)
         init = runtime_initialize()
         self.assertIn("nevr_quest::toast::CaptureUiLooper();", init)
         self.assertNotIn("kIsDev) nevr_quest::toast::CaptureUiLooper", init)

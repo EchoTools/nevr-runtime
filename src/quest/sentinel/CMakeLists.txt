@@ -139,7 +139,24 @@ target_include_directories(ovrplatformloader PRIVATE
   ${CMAKE_BINARY_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/breakpad/src)
 
-target_link_libraries(ovrplatformloader PRIVATE zstd::libzstd nevr::plugin_sdk nevr_quest_got_hook nevr_quest_config nlohmann_json::nlohmann_json nevr_quest_prompt_board nevr_quest_data_wiring nevr_quest_invite_join nevr_quest_cdn nevr_quest_combat nevr_quest_data_net nevr_quest_data nevr_quest_atomic_write nevr_quest_symcache breakpad_client log dl)
+# The update start (piece 15): the shared start decision, its POSIX edge and the names it reads (core/update), with the shim's edges and
+# the load that follows the decision (shim/update_start.cpp). Its own library: the runtime target takes the shim's link libraries but
+# not its sources, so it links the same archive members the shim does and no object twice. The engine is built with exceptions: the start catches its
+# own failures (update_start.h). Never a load-time initializer: tools/check_quest_static_init.sh runs on the shim.
+add_library(nevr_quest_update_start STATIC
+  ../shim/update_start.cpp
+  "${NEVR_REPO_ROOT}/src/core/update/engine_start.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/names.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/fs_posix.cpp")
+set_source_files_properties(
+  ../shim/update_start.cpp
+  "${NEVR_REPO_ROOT}/src/core/update/engine_start.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/names.cpp"
+  "${NEVR_REPO_ROOT}/src/core/update/fs_posix.cpp"
+  PROPERTIES COMPILE_OPTIONS -fexceptions)
+target_link_libraries(nevr_quest_update_start PUBLIC nlohmann_json::nlohmann_json nevr_quest_data)
+
+target_link_libraries(ovrplatformloader PRIVATE zstd::libzstd nevr::plugin_sdk nevr_quest_got_hook nevr_quest_config nlohmann_json::nlohmann_json nevr_quest_prompt_board nevr_quest_data_wiring nevr_quest_invite_join nevr_quest_cdn nevr_quest_combat nevr_quest_data_net nevr_quest_data nevr_quest_atomic_write nevr_quest_symcache nevr_quest_update_start breakpad_client log dl)
 # The custom-map channel (docs/adr/0048): its core, the map sets, route B's map scripts and the production start (src/quest/cdn/maps.cmake).
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cdn/maps.cmake")
 

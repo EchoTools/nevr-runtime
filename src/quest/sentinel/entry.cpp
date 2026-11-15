@@ -60,10 +60,12 @@
 #include "quest/integration/entry_hooks.h"
 #include "quest/redirect/hook_adapter.h"
 #include "quest/shim/runtime_load.h"
+#include "quest/shim/update_start.h"
 #include "quest/shim/update_root.h"
 #include "libr15_identity.h"
 
 #include <jni.h>
+#include <unistd.h>
 
 #include <atomic>
 #include <cstddef>
@@ -403,15 +405,25 @@ void StartRuntime(std::uint32_t variant) {
   host.shim_version = nevr_build::kVersion;
   host.variant = variant;
   host.log = &RuntimeLog;
-  const nevr_quest::runtime_load::Outcome outcome = nevr_quest::runtime_load::StartBaselineBesideShim(&kShimAnchor, host);
-  if (outcome == nevr_quest::runtime_load::Outcome::kLoaded) {
+  // The update start (update_start.h) runs first: it swaps a staged runtime in and judges a pending one, then loads what it chose.
+  // With no update folder it loads the baseline, as this function did before the update start existed.
+  nevr_quest::update_start::Inputs inputs;
+  inputs.root = nevr_quest::update_root::Resolve();
+  inputs.in_shim = &kShimAnchor;
+  inputs.host = host;
+  const nevr_quest::update_start::Result start = nevr_quest::update_start::Start(inputs);
+  // A release whose initialize failed: the process ends with the stop code, and game_stop is already in the log.
+  if (start.stop) _exit(nevr_quest::update_start::kUpdateFailedExitCode);
+  if (start.outcome == nevr_quest::runtime_load::Outcome::kLoaded) {
     // The versions record: the shim's version and the loaded runtime's, apart. The APK's versionCode is read at android_main
     // (update_root.h), so it is not part of this record.
     nevr_quest::update_root::VersionsFacts facts;
     facts.host_version = host.shim_version;
     const char* runtimeVersion = nevr_quest::runtime_load::LoadedRuntimeVersion();
     facts.runtime_version = runtimeVersion[0] != '\0' ? runtimeVersion : nevr_quest::update_root::kUnknownValue;
-    facts.runtime_path = nevr_quest::runtime_load::kBaselineFileName;
+    facts.runtime_path = start.origin == nevr_quest::update_start::Origin::kUpdate
+                             ? start.path
+                             : std::string(nevr_quest::runtime_load::kBaselineFileName);
     nevr_quest::update_root::LogVersions(facts);
   }
 }

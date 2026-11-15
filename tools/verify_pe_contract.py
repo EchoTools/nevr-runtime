@@ -114,11 +114,11 @@ RUNTIME_ONLY_MARKERS = (b"NEVR-PLUGIN-TRUST ", b"[NEVR.PLUGIN]", b"[NEVR.WS]", b
 # The host's sections other than .debug_* end at 0x1f2000; the runtime's image is 0x1c30000.
 HOST_MAX_SIZE_OF_IMAGE = 0x400000
 # The cap on the host's own .text (#1983). SizeOfImage does not see code growth in the stripped host: one object pulling in
-# iostream and locale code made .text 0x188670, under the 0x400000 cap. With that object free of them the host's .text is
-# 0xdcb50 (mingw-release, `x86_64-w64-mingw32-objdump -h`), so the cap is that size rounded up to 0xe0000: room for ordinary
-# growth, none for a standard-library stream or locale layer. A change that needs more raises it here, in the same commit,
-# with the new measurement.
-HOST_MAX_TEXT_SIZE = 0xe0000
+# iostream and locale code made .text 0x188670, under the 0x400000 cap. The host's .text is 0xe34a0 (mingw-release,
+# `x86_64-w64-mingw32-objdump -h`, .text row), and the cap is the next multiple of 0x10000 above it, 0xf0000, which leaves
+# 0xcb60 bytes of margin (0xf0000 - 0xe34a0). A standard-library stream or locale layer is about 700 KB, so it does not fit in
+# that margin and the cap catches it. A change that needs more raises the cap here, in the same commit, with the new measurement.
+HOST_MAX_TEXT_SIZE = 0xf0000
 
 # echovr.exe sha256 b6d08277e5846900c81004b64b298df6acba834b69700a640b758bda94a52043
 # (PE timestamp 0x6452dff6): nine named imports from BugSplat64.dll, no ordinal imports.

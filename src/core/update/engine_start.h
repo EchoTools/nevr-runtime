@@ -10,6 +10,7 @@
 
 #include "core/update/edges.h"
 #include "core/update/fs.h"
+#include "core/update/names.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -52,10 +53,10 @@ enum class PendingFailure : std::uint8_t {
   kMapped,    ///< the runtime was mapped and then failed: it stays mapped, so the next start puts the previous one back
 };
 
-/// R1's classification. `code_before_entry` is RuntimeLoaderEdge::CodeBeforeEntry(). PC answers true, and so an entry-only
-/// failure is kMapped, as it has always been. The false branch (a runtime with no constructors, which Quest would roll back
-/// in the same start) is the Quest edges' decision, not written in this tree (ADR 0023, section 7): until it is, both values answer kMapped, the
-/// stop that PC takes, never a load of a runtime nothing verified.
+/// R1's classification. `code_before_entry` is RuntimeLoaderEdge::CodeBeforeEntry(). PC answers true, so an entry-only failure is
+/// kMapped, as it has always been. Quest answers false (a runtime with no constructors): its entry-only failure ran no runtime
+/// code and is kNeverRan, put back in the same start. A load that failed at its entry or in initialize is never a load of a
+/// runtime nothing verified: the start stops (kMapped) or puts the previous release back.
 PendingFailure ClassifyPendingFailure(LoadClass load, bool code_before_entry) noexcept;
 
 /// The two hooks a start consults, as function pointers so the engine holds no state of its own. Production passes nulls: no
@@ -94,7 +95,25 @@ struct StartContext {
   /// update\lock is taken into this slot and stays there when a start leaves it held (the load releases it). The slot is
   /// the host's; a start that finds it held does not take it again.
   std::unique_ptr<FsLock>* lock = nullptr;
+  /// The runtime's file name in the root: nevr-runtime.dll (PC, the default) or libnevr-runtime.so (Quest). The member
+  /// vocabulary accepts only this one name as the runtime; the other platform's name is refused.
+  std::string runtime_file = nevr_update_names::kRuntimeFile;
+  /// The release the APK carries as the baseline (Quest; the edge reads its version and sha256). When the root holds no runtime, a
+  /// swap names the baseline as the release it replaces and moves nothing out, so a fresh install's first swap runs. A rollback of
+  /// that release removes the failed runtime from the root (quarantined) and leaves the root without one: the start then loads the
+  /// baseline. Absent on PC, where every behaviour above is unchanged.
+  struct BaselineRelease {
+    bool present = false;
+    std::string version;
+    std::string sha256;
+  };
+  BaselineRelease baseline = {};
 };
+
+/// How long a start waits for update\lock, and how often it tries (ADR 0024, section 4.1). The one definition: the PC host and the
+/// Quest shim take the lock with these values.
+inline constexpr std::uint32_t kUpdateLockTimeoutMs = 30000;
+inline constexpr std::uint32_t kUpdateLockStepMs = 100;
 
 /// The step ADR 0024 section 4 runs at every start. Never throws: an exception inside it is recorded and answered as
 /// the start's own (`internal_error`).

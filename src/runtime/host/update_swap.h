@@ -69,9 +69,9 @@ class UpdateLock {
   std::unique_ptr<nevr_update::FsLock> lock_;
 };
 
-/// How long a start waits for update\lock, and how often it tries (ADR 0024, section 4.1).
-inline constexpr DWORD kUpdateLockTimeoutMs = 30000;
-inline constexpr DWORD kUpdateLockStepMs = 100;
+/// How long a start waits for update\lock, and how often it tries (ADR 0024, section 4.1): the engine's definition.
+using nevr_update::kUpdateLockStepMs;
+using nevr_update::kUpdateLockTimeoutMs;
 /// Discards of one release after which it is quarantined (ADR 0024, section 4.3): the engine's definition.
 using nevr_update::kDiscardsToQuarantine;
 
