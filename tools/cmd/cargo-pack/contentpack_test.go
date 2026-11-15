@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,10 +43,16 @@ func shaOf(b []byte) string {
 // package, in a folder that holds no stock package. It returns the folder; stock records are in the manifest only.
 func makePack(t *testing.T, listed func(files map[string]string)) string {
 	t.Helper()
+	return makeTypedPack(t, listed, typeA, otherType)
+}
+
+// makeTypedPack is makePack with the type of the replaced record and the type of the added record given.
+func makeTypedPack(t *testing.T, listed func(files map[string]string), replacedType, addedType int64) string {
+	t.Helper()
 	stockDir := t.TempDir()
 	stock := map[radpack.Key][]byte{
-		{Type: typeA, Name: replacedName}:  []byte("stock one"),
-		{Type: typeB, Name: untouchedName}: []byte("stock two"),
+		{Type: replacedType, Name: replacedName}: []byte("stock one"),
+		{Type: typeB, Name: untouchedName}:       []byte("stock two"),
 	}
 	if err := radpack.WriteStockSet(stockDir, testSet, []map[radpack.Key][]byte{stock}); err != nil {
 		t.Fatal(err)
@@ -55,8 +62,8 @@ func makePack(t *testing.T, listed func(files map[string]string)) string {
 		t.Fatal(err)
 	}
 	manifest, pkg, err := radpack.Build(s.Manifest, map[radpack.Key][]byte{
-		{Type: typeA, Name: replacedName}:  []byte("the pack's replacement"),
-		{Type: otherType, Name: addedName}: []byte("added by the pack"),
+		{Type: replacedType, Name: replacedName}: []byte("the pack's replacement"),
+		{Type: addedType, Name: addedName}:       []byte("added by the pack"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -581,5 +588,50 @@ func TestTheScriptsListIsTheFormTheRuntimeParses(t *testing.T) {
 		if !symbol.MatchString(e["name"]) || !symbol.MatchString(e["stock_source"]) || !sha256Hex.MatchString(e["stock_sha256"]) || e["name"] == e["stock_source"] {
 			t.Errorf("entry %v is not one ReadScript accepts", e)
 		}
+	}
+}
+
+// A Quest set is laid out as a PC one: a pack of Android-typed records, taken as android-arm64, comes out as the Quest's records
+// with the types its manifest stores. Taken as windows-x86_64 it is refused, and nothing is written.
+func TestAQuestPackComesOutAsQuestRecordsAndIsRefusedAsAPCOne(t *testing.T) {
+	const modelAndroid = 0x042c7bbb8da4211c         // CModelCRAndroid
+	var lightmapAndroid uint64 = 0x8cce0f0b134fc0ed // CGLightMapResourceAndroidGPU (the manifest's field is signed)
+	dir := makeTypedPack(t, nil, modelAndroid, int64(lightmapAndroid))
+	out := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	args := []string{"-content-pack", dir, "-label", "combat_content", "-platform", "android-arm64", "-out", out, "-max-window", fmt.Sprint(testWindow)}
+	if code := run(args, &stdout, &stderr, quiet()); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	mframe, err := os.ReadFile(filepath.Join(out, manifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc manifestDoc
+	if err := json.Unmarshal(decode(t, mframe), &doc); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, e := range doc.Labels["combat_content"].Entries {
+		got[e.Type] = e.Platform
+	}
+	if len(got) != recordsOfThePack || got["0x042c7bbb8da4211c"] != "android-arm64" || got["0x8cce0f0b134fc0ed"] != "android-arm64" {
+		t.Errorf("entries by type = %v, want the two Android types on android-arm64", got)
+	}
+	var sum summary
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.UnnamedTypes) != 0 {
+		t.Errorf("unnamed types = %v, want none (both are named)", sum.UnnamedTypes)
+	}
+	pcOut := t.TempDir()
+	stderr.Reset()
+	args = []string{"-content-pack", dir, "-label", "combat_content", "-platform", "windows-x86_64", "-out", pcOut, "-max-window", fmt.Sprint(testWindow)}
+	if code := run(args, io.Discard, &stderr, quiet()); code != 1 || !strings.Contains(stderr.String(), "an on-disk type of android-arm64") {
+		t.Errorf("a Quest pack taken as windows-x86_64: exit %d, %s", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(pcOut, manifestName)); !os.IsNotExist(err) {
+		t.Errorf("a refused pack wrote a manifest: %v", err)
 	}
 }

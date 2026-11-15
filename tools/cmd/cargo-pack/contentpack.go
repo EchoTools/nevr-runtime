@@ -113,7 +113,7 @@ func contentPackScripts(dir, label, platformName string, log *slog.Logger) ([]sc
 	if !labelRe.MatchString(label) {
 		return nil, fmt.Errorf("label %q is not 1 to 48 of [a-z0-9_]", label)
 	}
-	if !platform[platformName] {
+	if _, ok := platformWord[platformName]; !ok {
 		return nil, fmt.Errorf("platform %q is not android-arm64 or windows-x86_64", platformName)
 	}
 	doc, err := readContentDoc(dir)
@@ -126,7 +126,7 @@ func contentPackScripts(dir, label, platformName string, log *slog.Logger) ([]sc
 		if !scriptHex.MatchString(r.Name) || !scriptHex.MatchString(r.StockSource) || !sha256Hex.MatchString(r.StockSha256) {
 			return nil, fmt.Errorf("%s: rekey %q from %q (sha-256 %q) is not a 16-hex name, a 16-hex stock source and a 64-hex sha-256", contentJSON, r.Name, r.StockSource, r.StockSha256)
 		}
-		if !platform[r.Platform] {
+		if _, ok := platformWord[r.Platform]; !ok {
 			return nil, fmt.Errorf("%s: rekey %s names platform %q, not android-arm64 or windows-x86_64", contentJSON, r.Name, r.Platform)
 		}
 		if r.Name == r.StockSource {
@@ -152,7 +152,7 @@ func contentPackRecords(dir, label, platformName string, log *slog.Logger) ([]re
 	if !labelRe.MatchString(label) {
 		return nil, fmt.Errorf("label %q is not 1 to 48 of [a-z0-9_]", label)
 	}
-	if !platform[platformName] {
+	if _, ok := platformWord[platformName]; !ok {
 		return nil, fmt.Errorf("platform %q is not android-arm64 or windows-x86_64", platformName)
 	}
 	doc, err := readContentDoc(dir)

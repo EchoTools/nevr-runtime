@@ -28,6 +28,14 @@
 // its label's `empty` list (type, name, platform and alignment, no object), the same as a record of 0 bytes in a content pack;
 // it has no stock_size, which an empty record does not carry.
 //
+// Both forms make records for either platform, android-arm64 (the Quest build) or windows-x86_64 (the PC build); one label may hold
+// both, and the same (type, name) on two platforms is two records. A record keeps the type its input gives it: the spec's `type`,
+// or the type the pack's manifest stores (-platform names the platform the pack's sets were built for: a Quest set is laid out as a
+// PC one, rad15/android in place of rad15/win10). The engine makes an on-disk type from the class and the platform's word, "Android"
+// on the Quest and "Win10" on the PC (platform_types.go), so a record whose type is a named on-disk type of the other platform is
+// refused, and nothing is written: it is a record no game of its platform looks up. A type the table does not name is taken as it
+// is and listed, per platform, in the summary's `unnamed_types`.
+//
 // Exit codes: 0 done; 1 refused; 2 usage; 74 the run log failed (internal/runlog).
 package main
 
@@ -68,9 +76,8 @@ const (
 )
 
 var (
-	hexName  = regexp.MustCompile(fmt.Sprintf("^0x[0-9a-f]{%d}$", hexDigits))
-	labelRe  = regexp.MustCompile(fmt.Sprintf("^[a-z0-9_]{1,%d}$", maxLabelBytes))
-	platform = map[string]bool{"android-arm64": true, "windows-x86_64": true}
+	hexName = regexp.MustCompile(fmt.Sprintf("^0x[0-9a-f]{%d}$", hexDigits))
+	labelRe = regexp.MustCompile(fmt.Sprintf("^[a-z0-9_]{1,%d}$", maxLabelBytes))
 )
 
 type specEntry struct {
@@ -162,6 +169,9 @@ type summary struct {
 	ManifestSha256 string          `json:"manifest_sha256"`
 	ManifestBytes  int             `json:"manifest_frame_bytes"`
 	MaxWindow      uint64          `json:"max_window"`
+	// UnnamedTypes lists, per platform, the distinct types of the set the platform table does not name (platform_types.go): taken
+	// as they are, and listed so a type of the wrong platform that the table does not know yet can be seen.
+	UnnamedTypes map[string][]string `json:"unnamed_types"`
 }
 
 func main() {
@@ -283,7 +293,7 @@ func checkEntry(e specEntry) error {
 	if !labelRe.MatchString(e.Label) {
 		return fmt.Errorf("label %q is not 1 to 48 of [a-z0-9_]", e.Label)
 	}
-	if !platform[e.Platform] {
+	if _, ok := platformWord[e.Platform]; !ok {
 		return fmt.Errorf("platform %q is not android-arm64 or windows-x86_64", e.Platform)
 	}
 	if !hexName.MatchString(e.Type) || !hexName.MatchString(e.Name) {
@@ -402,7 +412,17 @@ func buildLabeled(recs []record, scripts map[string][]scriptDoc, out string, max
 	var todo []record
 	var empties []placedEmpty
 	seen := map[string]bool{}
+	unnamed := map[string][]string{}
+	unnamedSeen := map[string]bool{}
 	for _, r := range recs {
+		named, err := checkPlatformType(r)
+		if err != nil {
+			return nil, err
+		}
+		if !named && !unnamedSeen[r.platform+r.typ] {
+			unnamedSeen[r.platform+r.typ] = true
+			unnamed[r.platform] = append(unnamed[r.platform], r.typ)
+		}
 		if r.align == 0 || r.align&(r.align-1) != 0 || r.align > maxAlignment {
 			return nil, fmt.Errorf("%s %s: alignment %d is not a power of two of at most %d", r.typ, r.name, r.align, maxAlignment)
 		}
@@ -451,7 +471,7 @@ func buildLabeled(recs []record, scripts map[string][]scriptDoc, out string, max
 	close(jobs)
 	wg.Wait()
 	man := manifestDoc{Schema: schemaName, SchemaVersion: schemaVersion, Labels: map[string]labelDoc{}, Empty: []emptyDoc{}}
-	sum := &summary{MaxWindow: maxWindow, EmptyRecords: len(empties)}
+	sum := &summary{MaxWindow: maxWindow, EmptyRecords: len(empties), UnnamedTypes: unnamed}
 	for _, b := range all {
 		l := man.Labels[b.label]
 		l.Entries = append(l.Entries, b.doc)
@@ -504,6 +524,6 @@ func buildLabeled(recs []record, scripts map[string][]scriptDoc, out string, max
 	h := sha256.Sum256(mframe)
 	sum.ManifestSha256 = hex.EncodeToString(h[:])
 	sum.ManifestBytes = len(mframe)
-	log.Info("packed", "objects", len(all), "empty_records", len(empties), "manifest_sha256", sum.ManifestSha256)
+	log.Info("packed", "objects", len(all), "empty_records", len(empties), "manifest_sha256", sum.ManifestSha256, "unnamed_types", unnamed)
 	return sum, nil
 }

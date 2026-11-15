@@ -88,11 +88,14 @@ unset or empty those tests skip with a line that names it (`.env.example` lists 
 
 ## A pack's records as a CDN label
 
-`tools/cmd/cargo-pack -content-pack <pack folder> -label <label> -platform windows-x86_64 -out <dir> -max-window <bytes>`
+`tools/cmd/cargo-pack -content-pack <pack folder> -label <label> -platform <android-arm64|windows-x86_64> -out <dir> -max-window <bytes>`
 reads an installed-pack folder as data (nothing in it is run) and makes one cargo label of the records the pack's own
 packages store: every resource whose chunk is in a listed package numbered from `stock_packages` on (a pack's packages
-include every record it adds or replaces, and may include others). The manifest and package files are checked against the sha-256 `content.json` lists. A record of 0
-bytes is listed in an `empty` list. `cargo-pack` writes the top-level `empty` list, which the parser (`ParseManifest` in `src/cdn/cdn_manifest.cpp`) reads as belonging to the one label of a manifest that has exactly one label; a manifest with two or more labels refuses a top-level record as `unscoped_empty`. A label's own `empty` list (`labels.<label>.empty`, each record with its `platform`) is the scoped form the parser also reads: `Mount` (`src/cdn/cdn_store.cpp`) mounts those records only with their label's objects. A record that two of the pack's sets both store is one record when its bytes
+include every record it adds or replaces, and may include others). The manifest and package files are checked against the sha-256 `content.json` lists. `-platform` is the platform the pack's sets were built for: a Quest set
+(`rad15/android`) has the layout of a PC one, and its records keep the types its manifest stores. The engine makes an on-disk type
+from the class and the platform's word, `Android` on the Quest and `Win10` on the PC, so a record whose type is a named on-disk type
+of the other platform is refused (`tools/cmd/cargo-pack/platform_types.go`). A record of 0
+bytes is listed in its label's own `empty` list (`labels.<label>.empty`, each record with its `platform`), and the top-level `empty` is written as `[]`: the parser (`ParseManifest` in `src/cdn/cdn_manifest.cpp`) reads a top-level record as belonging to the one label of a manifest that has exactly one label, and a manifest with two or more labels refuses it as `unscoped_empty`. `Mount` (`src/cdn/cdn_store.cpp`) mounts a label's records of 0 bytes only with that label's objects of the same platform. One label may carry both platforms' records: `tools/cmd/cargo-merge` joins a label the base and the added manifest both carry, and refuses only a (platform, type, name) listed twice. A record that two of the pack's sets both store is one record when its bytes
 and alignment are the same, and a refusal when they differ. The output is the `cargo-publish` input
 (`docs/adr/0045-cdn-texture-delivery.md`). A script DLL is no record: the game loads it from a file (`../engine/asset-system.md`,
 "Script DLLs"), so a label carries the pack's resources and the scripts stay with an installed pack.

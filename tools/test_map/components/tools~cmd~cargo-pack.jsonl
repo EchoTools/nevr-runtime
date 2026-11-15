@@ -3,4 +3,5 @@
 {"file":"tools/cmd/cargo-pack/contentpack_test.go","tests":["go:cmd/cargo-pack","go:cmd/guard-proof"]}
 {"file":"tools/cmd/cargo-pack/main.go","tests":["go:cmd/cargo-pack","go:cmd/guard-proof"]}
 {"file":"tools/cmd/cargo-pack/main_test.go","tests":["go:cmd/cargo-pack","go:cmd/guard-proof"]}
+{"file":"tools/cmd/cargo-pack/platform_types.go","tests":["go:cmd/cargo-pack","go:cmd/guard-proof"]}
 {"file":"tools/cmd/cargo-pack/script_gate_test.go","tests":["go:cmd/cargo-pack","go:cmd/guard-proof"]}

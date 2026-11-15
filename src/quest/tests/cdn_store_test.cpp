@@ -667,6 +667,61 @@ void LabelScopedEmptiesMountWithTheirLabelOnTheirPlatform() {
   }
 }
 
+// One label holding both platforms' records, in the shape tools/cmd/cargo-merge writes when it joins a Quest set into a label of PC
+// records (the base's entries and records of 0 bytes first, then the added ones, each with its platform): the same name has a PC
+// record (CModelCRWin10) and a Quest one (CModelCRAndroid), and each platform has a record of 0 bytes (CGLightMapResource
+// Win10GPU / AndroidGPU). A client mounts only its own platform's records, and its records of 0 bytes name its own objects' chunk.
+constexpr std::uint64_t kModelPc = 0xea51a0d76eb90142ULL;       // CModelCRWin10
+constexpr std::uint64_t kModelQuest = 0x042c7bbb8da4211cULL;    // CModelCRAndroid
+constexpr std::uint64_t kLightmapPc = 0x7b9a4c9fd03f37ebULL;    // CGLightMapResourceWin10GPU
+constexpr std::uint64_t kLightmapQuest = 0x8cce0f0b134fc0edULL; // CGLightMapResourceAndroidGPU
+constexpr std::uint64_t kSharedName = 0xc1;
+constexpr std::uint64_t kEmptyName = 0xe1;
+constexpr const char* kAndroidName = "android-arm64";
+
+json PlatformEntry(const char* platform, std::uint64_t type, std::uint64_t name, const std::string& frame, std::uint64_t bytes) {
+  json e = WinEntry(type, name, frame, bytes);
+  e["platform"] = platform;
+  return e;
+}
+
+json EmptyOf(const char* platform, std::uint64_t type, std::uint64_t name) {
+  return json{{"platform", platform}, {"type", nc::FormatHex64(type)}, {"name", nc::FormatHex64(name)}, {"align", kObjectAlign}};
+}
+
+void OneLabelOfBothPlatformsMountsOnlyThisPlatformsRecords() {
+  FakeEnv env;
+  std::unique_ptr<nc::Store> store = Open(env, TestLimits());
+  const std::string pc = MakeFrame(kObjectBytes, kStoredBytes, 'p');
+  const std::string quest = MakeFrame(kObjectBytes, kStoredBytes, 'q');
+  Put(*store, pc, kObjectBytes);
+  Put(*store, quest, kObjectBytes);
+  json combat{{"entries", json::array({PlatformEntry(kWindowsName, kModelPc, kSharedName, pc, kObjectBytes),
+                                       PlatformEntry(kAndroidName, kModelQuest, kSharedName, quest, kObjectBytes)})},
+              {"empty", json::array({EmptyOf(kWindowsName, kLightmapPc, kEmptyName), EmptyOf(kAndroidName, kLightmapQuest, kEmptyName)})}};
+  json doc{{"schema", nc::kSchema}, {"schema_version", nc::kSchemaVersion}, {"labels", {{kCombatLabel, combat}}}, {"empty", json::array()}};
+  nc::Manifest m;
+  QCHECK(nc::ParseManifest(doc.dump(), TestLimits(), &m).status == nc::ParseStatus::kOk);
+  QCHECK(m.entries.size() == 2 && m.empties.size() == 2 && m.refused.empty());
+  struct Side {
+    const nc::Platform& platform;
+    std::uint64_t mine, theirs, myEmpty, theirEmpty;
+    std::string frame;
+  };
+  const Side sides[] = {{nc::kAndroidArm64, kModelQuest, kModelPc, kLightmapQuest, kLightmapPc, quest},
+                        {nc::kWindowsX64, kModelPc, kModelQuest, kLightmapPc, kLightmapQuest, pc}};
+  for (const Side& side : sides) {
+    const nc::Mounted mounted = nc::Mount(env, *store, m, side.platform, nc::Policy());
+    QCHECK(mounted.records == 2 && mounted.empty_records == 1 && mounted.refused == 0 && mounted.shadow != nullptr);
+    if (mounted.shadow == nullptr) continue;
+    nevr_shadow::Found real, empty, none;
+    QCHECK(mounted.shadow->Find(side.mine, kSharedName, &real) && real.size == kObjectBytes);
+    QCHECK(mounted.shadow->Find(side.myEmpty, kEmptyName, &empty) && empty.size == 0 && empty.chunk == real.chunk);
+    QCHECK(!mounted.shadow->Find(side.theirs, kSharedName, &none));
+    QCHECK(!mounted.shadow->Find(side.theirEmpty, kEmptyName, &none));
+  }
+}
+
 void NothingToMountGivesANullShadowAndHoldsNoFile() {
   FakeEnv env;
   std::unique_ptr<nc::Store> store = Open(env, TestLimits());
@@ -727,6 +782,7 @@ int main() {
   EmptyRecordsWithNoObjectToBorrowAChunkFromAreRefused();
   EmptyRecordsOfALabelThatIsOffDoNotMount();
   LabelScopedEmptiesMountWithTheirLabelOnTheirPlatform();
+  OneLabelOfBothPlatformsMountsOnlyThisPlatformsRecords();
   NothingToMountGivesANullShadowAndHoldsNoFile();
   AStoreFileThatCannotBeOpenedFailsItsNamesAndLeaksNothing();
   TheHexFormIsTheManifestsForm();

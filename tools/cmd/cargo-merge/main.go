@@ -1,7 +1,11 @@
 // Command cargo-merge joins a base content manifest and one added manifest into one manifest in the schema of
-// src/cdn/cdn_manifest.h (docs/adr/0045-cdn-texture-delivery.md). The base's labels keep their exact bytes and their
-// order, and come first: the merge never re-encodes them, so a label's position in the document (which the budget of a
-// device follows, src/cdn/cdn_plan.cpp) and its bytes do not change. The added manifest's labels follow, in its order.
+// src/cdn/cdn_manifest.h (docs/adr/0045-cdn-texture-delivery.md). The base's labels keep their order and come first, so a
+// label's position in the document (which the budget of a device follows, src/cdn/cdn_plan.cpp) does not change; each keeps
+// its exact bytes unless the added manifest carries a label of the same name. Such a label is joined: it keeps the base's
+// place, and holds the base's entries and then the added ones, and the base's records of 0 bytes and then the added ones,
+// each record with its own platform. That is how one label carries both platforms' records (a Quest set of android-arm64
+// records added to a label of windows-x86_64 ones): a client mounts only its platform's records of a label
+// (src/cdn/cdn_store.cpp Mount), its records of 0 bytes included. The added manifest's other labels follow, in its order.
 //
 //	cargo-merge -base <manifest.json.zst> -base-sha256 <hex> -add <manifest.json.zst> -add-sha256 <hex> -out <dir>
 //	            [-stock-data <dir> -stock-set <id>...] [-add-blobs <dir>] [-allow-unchecked-tables]
@@ -18,13 +22,15 @@
 // entry's own platform (scriptgate.Listed), and an added label is written with its list, in the input's order.
 //
 // Both inputs are zstd frames pinned by their sha256: a frame that does not hash to its pin is refused before it is
-// read. Input keys the tool does not know are refused, so nothing is dropped. A label name in both inputs is refused, and
-// so is a (platform, type, name) listed twice across them. The added manifest's top-level empty records move into its one
+// read. Input keys the tool does not know are refused, so nothing is dropped. A (platform, type, name) listed twice across
+// the inputs, as an entry or a record of 0 bytes, is refused: the reader refuses a key held twice (cdn_validate.h
+// duplicate_key), and the same (type, name) on two platforms is two keys. A joined label's `scripts` list is the base's then
+// the added one's; a script both list on one platform is refused (cdn_validate.h duplicate). The added manifest's top-level empty records move into its one
 // label, with that label's one platform; an added manifest with top-level empties and other than one label or one
 // platform is refused. The base has no top-level empty records to move.
 //
 // The merged manifest is written as one zstd frame at <dir>/manifest.json.zst, which is refused when it exists. Its sha256
-// is printed on standard output as one JSON line. The merge writes no object, so the blobs of the added set are not
+// is printed on standard output as one JSON line, with the labels that were joined. The merge writes no object, so the blobs of the added set are not
 // copied here.
 //
 // Exit codes: 0 done; 1 refused; 2 usage; 74 the run log failed (internal/runlog).
@@ -107,6 +113,7 @@ type entryKey struct {
 type labelIn struct {
 	name    string
 	raw     json.RawMessage
+	joined  bool // the added manifest's label of this name was joined into it, so it is encoded, not copied
 	entries []json.RawMessage
 	keys    []entryKey
 	empty   []emptyDoc
@@ -145,6 +152,8 @@ type mergeResult struct {
 	Dropped map[string]int
 	// TablesUnchecked is "label/table" for each level table the script check could not read.
 	TablesUnchecked []string
+	// Joined names the base labels the added manifest's label of the same name was joined into, in document order.
+	Joined []string
 }
 
 // summary is the one line cargo-merge prints.
@@ -156,6 +165,7 @@ type summary struct {
 	Dropped        map[string]int `json:"dropped"`
 	// TablesUnchecked is the level tables (label, name) whose rows were not read for want of -add-blobs.
 	TablesUnchecked []string `json:"script_tables_unchecked"`
+	Joined          []string `json:"joined"`
 }
 
 func main() {
@@ -209,12 +219,12 @@ func run(args []string, stdout, stderr io.Writer, log *slog.Logger) int {
 	if err := writeOnce(filepath.Join(*out, manifestName), res.Frame); err != nil {
 		return refuse(stderr, log, err)
 	}
-	line, err := json.Marshal(summary{Labels: res.Labels, ManifestSha256: res.Sha256, ManifestBytes: len(res.Frame), TextBytes: len(res.Text), Dropped: res.Dropped, TablesUnchecked: res.TablesUnchecked})
+	line, err := json.Marshal(summary{Labels: res.Labels, ManifestSha256: res.Sha256, ManifestBytes: len(res.Frame), TextBytes: len(res.Text), Dropped: res.Dropped, TablesUnchecked: res.TablesUnchecked, Joined: res.Joined})
 	if err != nil {
 		return refuse(stderr, log, err)
 	}
 	fmt.Fprintln(stdout, string(line))
-	log.Info("merged", "labels", len(res.Labels), "manifest_sha256", res.Sha256)
+	log.Info("merged", "labels", len(res.Labels), "joined", res.Joined, "manifest_sha256", res.Sha256)
 	return 0
 }
 
@@ -302,6 +312,7 @@ func mergeExcluding(baseFrame []byte, baseSha string, addFrame []byte, addSha st
 	if err := checkCollisions(base, add); err != nil {
 		return nil, err
 	}
+	joined := joinShared(&base, &add)
 	text, reports, err := encodeMerged(base, add)
 	if err != nil {
 		return nil, err
@@ -310,7 +321,7 @@ func mergeExcluding(baseFrame []byte, baseSha string, addFrame []byte, addSha st
 	if err != nil {
 		return nil, fmt.Errorf("manifest frame: %w", err)
 	}
-	return &mergeResult{Frame: frame, Sha256: sha256Hex(frame), Text: text, Labels: reports, Dropped: dropped, TablesUnchecked: unchecked}, nil
+	return &mergeResult{Frame: frame, Sha256: sha256Hex(frame), Text: text, Labels: reports, Dropped: dropped, TablesUnchecked: unchecked, Joined: joined}, nil
 }
 
 // excludeEntries drops the entries of the excluded types from the added manifest's labels, and counts them per type. Every
@@ -511,9 +522,8 @@ func moveTopLevelEmpties(add *manifestIn) error {
 	return nil
 }
 
-// checkCollisions refuses a label name in both inputs and a record key listed twice.
+// checkCollisions refuses a record key listed twice, within an input or across the two, whichever labels hold it.
 func checkCollisions(base, add manifestIn) error {
-	names := map[string]bool{}
 	keys := map[entryKey]string{}
 	addKey := func(k entryKey, where string) error {
 		if prev, dup := keys[k]; dup {
@@ -524,10 +534,6 @@ func checkCollisions(base, add manifestIn) error {
 	}
 	for _, in := range []manifestIn{base, add} {
 		for _, l := range in.labels {
-			if names[l.name] {
-				return fmt.Errorf("label %s is in both manifests", l.name)
-			}
-			names[l.name] = true
 			for _, k := range l.keys {
 				if err := addKey(k, l.name); err != nil {
 					return err
@@ -540,7 +546,59 @@ func checkCollisions(base, add manifestIn) error {
 			}
 		}
 	}
+	// A label in both inputs is joined, and with it the two `scripts` lists: a script both list on one platform would be one
+	// label's (platform, name) twice, which the reader refuses (cdn_validate.h duplicate) by leaving the whole label out.
+	baseListed := map[string]map[scriptgate.Listed]bool{}
+	for _, l := range base.labels {
+		set := map[scriptgate.Listed]bool{}
+		for _, s := range l.listed {
+			set[s] = true
+		}
+		baseListed[l.name] = set
+	}
+	for _, l := range add.labels {
+		set, shared := baseListed[l.name]
+		if !shared {
+			continue
+		}
+		for _, s := range l.listed {
+			if set[s] {
+				return fmt.Errorf("label %s lists script %s %016x in both manifests, so the joined label would list it twice", l.name, s.Platform, s.Name)
+			}
+		}
+	}
 	return nil
+}
+
+// joinShared moves each added label whose name the base also carries into the base's label: the base's entries, records of
+// 0 bytes and `scripts` list first, then the added ones (the parts encodeLabel writes; the keys and listed scripts were checked
+// before the join). The joined label keeps the base's place. It returns the joined names in document order.
+func joinShared(base, add *manifestIn) []string {
+	at := map[string]int{}
+	for i, l := range base.labels {
+		at[l.name] = i
+	}
+	var joined []string
+	var rest []labelIn
+	for _, l := range add.labels {
+		i, shared := at[l.name]
+		if !shared {
+			rest = append(rest, l)
+			continue
+		}
+		b := &base.labels[i]
+		b.entries = append(append([]json.RawMessage{}, b.entries...), l.entries...)
+		b.empty = append(append([]emptyDoc{}, b.empty...), l.empty...)
+		b.scripts = append(append([]json.RawMessage{}, b.scripts...), l.scripts...)
+		b.joined = true
+	}
+	for _, l := range base.labels {
+		if l.joined {
+			joined = append(joined, l.name)
+		}
+	}
+	add.labels = rest
+	return joined
 }
 
 // encodeMerged writes the merged text: the base's labels as their own bytes, then the added labels encoded, in order.
@@ -564,7 +622,15 @@ func encodeMerged(base, add manifestIn) ([]byte, []labelReport, error) {
 		return nil
 	}
 	for _, l := range base.labels {
-		if err := put(l.name, l.raw); err != nil {
+		value := []byte(l.raw)
+		if l.joined {
+			enc, err := encodeLabel(l)
+			if err != nil {
+				return nil, nil, err
+			}
+			value = enc
+		}
+		if err := put(l.name, value); err != nil {
 			return nil, nil, err
 		}
 		reports = append(reports, labelReport{Name: l.name, Entries: len(l.entries), Empty: len(l.empty)})
@@ -587,8 +653,8 @@ func encodeMerged(base, add manifestIn) ([]byte, []labelReport, error) {
 	return text, reports, nil
 }
 
-// encodeLabel writes an added label: its entries as they were, its empty records when it has any, and its `scripts` list when
-// it has one (the list the script check read, so the merged label delivers what the check counted on).
+// encodeLabel writes an added or a joined label: its entries as they were, its empty records when it has any, and its `scripts`
+// list when it has one (the list the script check read, so the merged label delivers what the check counted on).
 func encodeLabel(l labelIn) ([]byte, error) {
 	entries := l.entries
 	if entries == nil {

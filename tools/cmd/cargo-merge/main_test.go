@@ -23,6 +23,8 @@ const (
 	combatLabel = "combat_content"
 	baseLabel   = "lobby_posters"
 	platformPC  = "windows-x86_64"
+	// platformQuest is the Quest build's platform.
+	platformQuest = "android-arm64"
 	// combatEmpties is the number of records the combat manifest lists as empty (its top-level empty list).
 	combatEmpties = 275
 	// combatEntries is the number of entries the combat label holds, which the merge must leave as they are.
@@ -211,12 +213,122 @@ func TestMergeRefusesAShaMismatchOnEitherInput(t *testing.T) {
 	}
 }
 
-func TestMergeRefusesACollidingLabelName(t *testing.T) {
+// The base's combat_content holds PC records (CModelCRWin10, CGLightMapResourceWin10GPU); the added manifest's holds Quest ones
+// (CModelCRAndroid 0x042c7bbb8da4211c, CGLightMapResourceAndroidGPU 0x8cce0f0b134fc0ed, and one record
+// whose type and name are a PC record's, on the other platform). The two are one label.
+const (
+	joinBase = `{"schema":"nevr-cargo-manifest","schema_version":1,"labels":{` +
+		`"lobby_posters":{"entries":[{"platform":"windows-x86_64","type":"0x4a4c32c49300b8a0","name":"0x0000000000000001"}]},` +
+		`"combat_content":{"entries":[{"platform":"windows-x86_64","type":"0xea51a0d76eb90142","name":"0x00000000000000c1"}],` +
+		`"empty":[{"platform":"windows-x86_64","type":"0x7b9a4c9fd03f37eb","name":"0x00000000000000e1","align":16}]}},"empty":[]}`
+	joinAdd = `{"schema":"nevr-cargo-manifest","schema_version":1,"labels":{` +
+		`"combat_content":{"entries":[{"platform":"android-arm64","type":"0x042c7bbb8da4211c","name":"0x00000000000000c1"},` +
+		`{"platform":"android-arm64","type":"0xea51a0d76eb90142","name":"0x00000000000000c1"}],` +
+		`"empty":[{"platform":"android-arm64","type":"0x8cce0f0b134fc0ed","name":"0x00000000000000e1","align":16}]},` +
+		`"quest_only":{"entries":[{"platform":"android-arm64","type":"0x489bb35d53ca50e9","name":"0x0000000000000002"}]}},"empty":[]}`
+	joinedEntries = 3 // the base's one and the added two
+	joinedEmpty   = 2 // one per platform
+)
+
+func TestASharedLabelIsJoinedAndHoldsBothPlatforms(t *testing.T) {
 	t.Parallel()
-	base, bsha := frameOf(t, `{"schema":"nevr-cargo-manifest","schema_version":1,"labels":{"lobby_posters":{"entries":[{"platform":"windows-x86_64","type":"0x0000000000000001","name":"0x0000000000000001"}]}},"empty":[]}`)
-	add, asha := frameOf(t, `{"schema":"nevr-cargo-manifest","schema_version":1,"labels":{"lobby_posters":{"entries":[{"platform":"windows-x86_64","type":"0x0000000000000002","name":"0x0000000000000002"}]}},"empty":[]}`)
-	if _, err := merge(base, bsha, add, asha); err == nil || !strings.Contains(err.Error(), "lobby_posters") {
-		t.Errorf("a label name in both: err = %v", err)
+	base, bsha := frameOf(t, joinBase)
+	add, asha := frameOf(t, joinAdd)
+	res, err := merge(base, bsha, add, asha)
+	if err != nil {
+		t.Fatalf("a label in both manifests was refused: %v", err)
+	}
+	if len(res.Joined) != 1 || res.Joined[0] != combatLabel {
+		t.Errorf("joined = %v, want [%s]", res.Joined, combatLabel)
+	}
+	if got := labelOrder(t, res.Text); strings.Join(got, ",") != "lobby_posters,combat_content,quest_only" {
+		t.Errorf("label order = %v: the joined label keeps the base's place, the added manifest's own label follows", got)
+	}
+	if !bytes.Equal(rawLabel(t, res.Text, baseLabel), rawLabel(t, []byte(joinBase), baseLabel)) {
+		t.Error("a base label the added manifest does not carry changed its bytes")
+	}
+	var joined struct {
+		Entries []json.RawMessage `json:"entries"`
+		Empty   []emptyDoc        `json:"empty"`
+	}
+	if err := json.Unmarshal(rawLabel(t, res.Text, combatLabel), &joined); err != nil {
+		t.Fatal(err)
+	}
+	if len(joined.Entries) != joinedEntries || len(joined.Empty) != joinedEmpty {
+		t.Fatalf("joined label holds %d entries and %d empty records, want %d and %d", len(joined.Entries), len(joined.Empty), joinedEntries, joinedEmpty)
+	}
+	var baseBody, addBody struct {
+		Entries []json.RawMessage `json:"entries"`
+	}
+	if err := json.Unmarshal(rawLabel(t, []byte(joinBase), combatLabel), &baseBody); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(rawLabel(t, []byte(joinAdd), combatLabel), &addBody); err != nil {
+		t.Fatal(err)
+	}
+	want := append(append([]json.RawMessage{}, baseBody.Entries...), addBody.Entries...)
+	for i := range want {
+		if !bytes.Equal(joined.Entries[i], want[i]) {
+			t.Errorf("joined entry %d = %s, want %s (the base's first, then the added ones, each as it was)", i, joined.Entries[i], want[i])
+		}
+	}
+	if joined.Empty[0].Platform != platformPC || joined.Empty[1].Platform != platformQuest {
+		t.Errorf("joined empty records = %+v: each keeps its own platform, the base's first", joined.Empty)
+	}
+	for _, r := range res.Labels {
+		if r.Name == combatLabel && (r.Entries != joinedEntries || r.Empty != joinedEmpty) {
+			t.Errorf("report for %s = %+v", combatLabel, r)
+		}
+	}
+}
+
+func TestAJoinedLabelRefusesAKeyHeldTwiceOnOnePlatform(t *testing.T) {
+	t.Parallel()
+	base, bsha := frameOf(t, joinBase)
+	for name, text := range map[string]string{
+		"an entry":            `{"schema":"nevr-cargo-manifest","schema_version":1,"labels":{"combat_content":{"entries":[{"platform":"windows-x86_64","type":"0xea51a0d76eb90142","name":"0x00000000000000c1"}]}},"empty":[]}`,
+		"a record of 0 bytes": `{"schema":"nevr-cargo-manifest","schema_version":1,"labels":{"combat_content":{"entries":[{"platform":"windows-x86_64","type":"0xea51a0d76eb90142","name":"0x00000000000000c2"}],"empty":[{"platform":"windows-x86_64","type":"0x7b9a4c9fd03f37eb","name":"0x00000000000000e1","align":16}]}},"empty":[]}`,
+	} {
+		add, asha := frameOf(t, text)
+		if _, err := merge(base, bsha, add, asha); err == nil || !strings.Contains(err.Error(), "listed twice") {
+			t.Errorf("%s the base's label already holds on its platform: err = %v", name, err)
+		}
+	}
+}
+
+// A joined label's `scripts` list is the base's then the added one's, each entry as it was; a script both list on one platform
+// is refused (the reader would refuse the label whole as duplicate), and the same name on the other platform is not.
+const (
+	joinScriptPC    = `{"name":"0x00000000000000c1","platform":"windows-x86_64","stock_source":"0x190ed14fe6c74dd3","stock_sha256":"` + joinStockSha + `"}`
+	joinScriptQuest = `{"name":"0x00000000000000c1","platform":"android-arm64","stock_source":"0x190ed14fe6c74dd3","stock_sha256":"` + joinStockSha + `"}`
+	joinStockSha    = "1111111111111111111111111111111111111111111111111111111111111111"
+	joinScriptsBase = `{"schema":"nevr-cargo-manifest","schema_version":1,"labels":{"combat_content":{"entries":[{"platform":"windows-x86_64","type":"0xea51a0d76eb90142","name":"0x00000000000000c1"}],"scripts":[` + joinScriptPC + `]}},"empty":[]}`
+)
+
+func joinScriptsAdd(script string) string {
+	return `{"schema":"nevr-cargo-manifest","schema_version":1,"labels":{"combat_content":{"entries":[{"platform":"android-arm64","type":"0x042c7bbb8da4211c","name":"0x00000000000000c1"}],"scripts":[` + script + `]}},"empty":[]}`
+}
+
+func TestAJoinedLabelHoldsBothScriptsListsAndRefusesAScriptListedTwice(t *testing.T) {
+	t.Parallel()
+	base, bsha := frameOf(t, joinScriptsBase)
+	add, asha := frameOf(t, joinScriptsAdd(joinScriptQuest))
+	res, err := merge(base, bsha, add, asha)
+	if err != nil {
+		t.Fatalf("a joined label whose lists name the script on two platforms was refused: %v", err)
+	}
+	var joined struct {
+		Scripts []json.RawMessage `json:"scripts"`
+	}
+	if err := json.Unmarshal(rawLabel(t, res.Text, combatLabel), &joined); err != nil {
+		t.Fatal(err)
+	}
+	if len(joined.Scripts) != 2 || string(joined.Scripts[0]) != joinScriptPC || string(joined.Scripts[1]) != joinScriptQuest {
+		t.Errorf("joined scripts = %s, want the base's entry then the added one, each as it was", joined.Scripts)
+	}
+	add, asha = frameOf(t, joinScriptsAdd(joinScriptPC))
+	if _, err := merge(base, bsha, add, asha); err == nil || !strings.Contains(err.Error(), "list it twice") {
+		t.Errorf("a script both halves list on one platform: err = %v", err)
 	}
 }
 
@@ -278,6 +390,34 @@ func TestRunWritesTheManifestAndPrintsItsSha(t *testing.T) {
 	if code := run([]string{"-base", prodFile, "-base-sha256", prodSha, "-add", combatFile, "-add-sha256", combatSha, "-out", out},
 		&bytes.Buffer{}, &bytes.Buffer{}, quiet()); code == 0 {
 		t.Error("a second run overwrote the merged manifest")
+	}
+}
+
+// The printed summary names the labels that were joined.
+func TestRunPrintsTheJoinedLabels(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	base, bsha := frameOf(t, joinBase)
+	add, asha := frameOf(t, joinAdd)
+	baseFile, addFile := filepath.Join(dir, "base.json.zst"), filepath.Join(dir, "add.json.zst")
+	for path, frame := range map[string][]byte{baseFile: base, addFile: add} {
+		if err := os.WriteFile(path, frame, filePerm); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"-base", baseFile, "-base-sha256", bsha, "-add", addFile, "-add-sha256", asha, "-out", filepath.Join(dir, "merged")},
+		&stdout, &stderr, quiet()); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	var sum struct {
+		Joined []string `json:"joined"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("stdout %q: %v", stdout.String(), err)
+	}
+	if len(sum.Joined) != 1 || sum.Joined[0] != combatLabel {
+		t.Errorf("printed joined = %v, want [%s]", sum.Joined, combatLabel)
 	}
 }
 

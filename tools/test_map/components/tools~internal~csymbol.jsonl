@@ -1,0 +1,3 @@
+{"component":"tools/internal/csymbol","dir":"tools/internal/csymbol"}
+{"file":"tools/internal/csymbol/csymbol.go","tests":["go:cmd/cargo-pack","go:internal/csymbol","go:internal/questwiring","go:symcache"]}
+{"file":"tools/internal/csymbol/csymbol_test.go","tests":["go:cmd/cargo-pack","go:internal/csymbol","go:internal/questwiring","go:symcache"]}
