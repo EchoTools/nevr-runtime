@@ -26,6 +26,7 @@
 {"file":"docs/quest/combat/pfxtev.md","none":"documentation: only the scanners read it"}
 {"file":"docs/quest/combat/powerboost.md","none":"documentation: only the scanners read it"}
 {"file":"docs/quest/combat/resolution.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/script_lifts.md","tests":["go:internal/questlifts"]}
 {"file":"docs/quest/combat/script_markers.md","none":"documentation: only the scanners read it"}
 {"file":"docs/quest/combat/sendguard.md","none":"documentation: only the scanners read it"}
 {"file":"docs/quest/combat/sensorwd.md","tests":["go:internal/questwiring"]}

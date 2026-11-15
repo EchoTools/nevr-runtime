@@ -1,0 +1,4 @@
+{"component":"tools/internal/questlifts","dir":"tools/internal/questlifts"}
+{"file":"tools/internal/questlifts/doc.go","tests":["go:internal/questlifts","go:internal/questwiring"]}
+{"file":"tools/internal/questlifts/lifts.go","tests":["go:internal/questlifts","go:internal/questwiring"]}
+{"file":"tools/internal/questlifts/lifts_test.go","tests":["go:internal/questlifts","go:internal/questwiring"]}
