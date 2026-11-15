@@ -70,6 +70,8 @@ target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_session_pin.cpp"
 # Its PC glue is runtime/server/map_hold.cpp and join_hold.cpp. Platform-free: no PCH, no Log().
 set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/map_server_hold.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_server_hold.cpp")
+# Same-owner replace of a mounted map (core/map_swap.h): the decision and the serving table. Platform-free.
+target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_swap.cpp")
 
 # The custom-map channel's start (core/map_channel.h; ADR 0048 decisions 3, 7, 8, 12): the settings, the start decision, the boot and
 # its idempotence, the mount observer's decision (DecideMount) and the background worker. Platform-free: no PCH. Its tests are the Quest
@@ -168,4 +170,12 @@ if(BUILD_TESTING AND GTest_FOUND)
   target_link_libraries(test_map_session_pin_core PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk
     nlohmann_json::nlohmann_json)
   gtest_discover_tests(test_map_session_pin_core DISCOVERY_MODE PRE_TEST)
+
+  # Same-owner replace (core/map_swap.h) on the Test edge's Env: swap, defer, restart, and the old keys never served after a swap.
+  add_executable(test_map_swap "${CMAKE_CURRENT_LIST_DIR}/tests/map_swap_test.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/tests/map_swap_test.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  target_include_directories(test_map_swap PRIVATE "${CMAKE_SOURCE_DIR}/src")
+  target_link_libraries(test_map_swap PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk
+    nlohmann_json::nlohmann_json)
+  gtest_discover_tests(test_map_swap DISCOVERY_MODE PRE_TEST)
 endif()
