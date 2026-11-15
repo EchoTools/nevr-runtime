@@ -97,6 +97,7 @@ set(PATCHES_SOURCES
     "hook/script_hooks.cpp"
     "hook/script_resource_hook.cpp"
     # EchoCombat: he_is_the_cat's three plugins, ported, see runtime/combat/combat.h
+    "combat/announcer_callouts.cpp"
     "combat/clock_pause.cpp"
     "combat/capture_scores.cpp"
     "combat/capture_time.cpp"
@@ -1358,6 +1359,15 @@ if(BUILD_TESTING)
     target_include_directories(test_clock_pause PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_clock_pause PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_clock_pause DISCOVERY_MODE PRE_TEST)
+
+    # #2242: the announcer callouts (runtime/combat/announcer_callouts.h), on a fake announcer script.
+    add_executable(test_announcer_callouts tests/test_announcer_callouts.cpp combat/announcer_callouts.cpp hook/script_hooks.cpp hook/hook_guard.cpp "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp")
+    set_source_files_properties(tests/test_announcer_callouts.cpp combat/announcer_callouts.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_announcer_callouts PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_announcer_callouts PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_announcer_callouts PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_announcer_callouts DISCOVERY_MODE PRE_TEST)
 
     # #600: POINT RATE and PAUSE on the capture points (runtime/combat/point_rate.h), on a fake capture point script.
     add_executable(test_point_rate tests/test_point_rate.cpp combat/point_rate.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
