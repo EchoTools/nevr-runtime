@@ -237,8 +237,8 @@ func TestExtractThenVerifyPasses(t *testing.T) {
 		t.Errorf("manifest = %+v", doc)
 	}
 	entries := doc.Labels["game"].Entries
-	if len(entries) != 7 || len(doc.Empty) != 1 || doc.Empty[0] != (emptyDoc{Type: "0x0000000000000020", Name: "0x0000000000000001", Align: 16}) {
-		t.Fatalf("%d entries, empty = %+v", len(entries), doc.Empty)
+	if len(entries) != 7 || len(doc.Labels["game"].Empty) != 1 || doc.Labels["game"].Empty[0] != (emptyDoc{Platform: "windows-x86_64", Type: "0x0000000000000020", Name: "0x0000000000000001", Align: 16}) || len(doc.Empty) != 0 {
+		t.Fatalf("%d entries, label empty = %+v, top-level empty = %+v", len(entries), doc.Labels["game"].Empty, doc.Empty)
 	}
 	want := map[string][]byte{}
 	for _, r := range []res{small1, small2, small3, twin, large, other, solo} {
@@ -349,8 +349,8 @@ func TestEmptyRecordsAreListedAndNotStored(t *testing.T) {
 			t.Errorf("the empty record is an entry: %+v", e)
 		}
 	}
-	if len(doc.Empty) != sum.ZeroByteRecords || doc.Empty[0].Align != 16 {
-		t.Errorf("empty = %+v", doc.Empty)
+	if len(doc.Labels["game"].Empty) != sum.ZeroByteRecords || doc.Labels["game"].Empty[0].Align != 16 || len(doc.Empty) != 0 {
+		t.Errorf("label empty = %+v, top-level empty = %+v", doc.Labels["game"].Empty, doc.Empty)
 	}
 }
 
@@ -772,12 +772,16 @@ func TestVerifyNamesTheFirstDifference(t *testing.T) {
 			writeDoc(t, out, doc)
 		}, "the manifest lists it twice"},
 		{"a record of bytes listed as empty", func(t *testing.T, _, out string, doc manifestDoc) {
-			doc.Empty = append(doc.Empty, emptyDoc{Type: "0x0000000000000040", Name: "0x0000000000000001", Align: 4})
 			l := doc.Labels["game"]
+			l.Empty = append(l.Empty, emptyDoc{Platform: "windows-x86_64", Type: "0x0000000000000040", Name: "0x0000000000000001", Align: 4})
 			l.Entries = append(l.Entries[:find(doc, "0x0000000000000040", "0x0000000000000001")], l.Entries[find(doc, "0x0000000000000040", "0x0000000000000001")+1:]...)
 			doc.Labels["game"] = l
 			writeDoc(t, out, doc)
 		}, "it is listed as empty with alignment 4, the stock record is 50 bytes"},
+		{"a record of 0 bytes left in the top-level empty list", func(t *testing.T, _, out string, doc manifestDoc) {
+			doc.Empty = append(doc.Empty, emptyDoc{Platform: "windows-x86_64", Type: "0x0000000000000040", Name: "0x0000000000000001", Align: 4})
+			writeDoc(t, out, doc)
+		}, "they belong under their label"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

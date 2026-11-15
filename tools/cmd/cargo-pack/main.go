@@ -9,7 +9,7 @@
 // The second form reads a content pack (docs/reference/content-packs.md: <dir> holds content.json, manifests/ and packages/)
 // as data and makes one label of the records the pack's own packages store: every record whose chunk is in a listed package
 // numbered from the manifest's stock_packages on (a pack's packages include every record it adds or replaces, and may include
-// others). A record of 0 bytes goes to the manifest's empty list. The manifest and package files are checked against the sha-256 content.json lists for them; the
+// others). A record of 0 bytes goes to its label's empty list, with its platform. The manifest and package files are checked against the sha-256 content.json lists for them; the
 // pack's scripts are not records (the game loads them from files) and are left out, and no file of the pack is run.
 //
 // The spec is {"entries": [{"label", "platform", "type", "name", "file", "align", "stock_size"?}]}: `type` and `name` are
@@ -89,10 +89,13 @@ type entryDoc struct {
 	StockSize *uint64 `json:"stock_size,omitempty"`
 }
 
+// labelDoc is one label: its entries, and the records of 0 bytes it names with their platform (the label's `empty`).
 type labelDoc struct {
 	Entries []entryDoc `json:"entries"`
+	Empty   []emptyDoc `json:"empty,omitempty"`
 }
 
+// manifestDoc is the manifest. The top-level `empty` is always written as [] (a record of 0 bytes belongs to its label).
 type manifestDoc struct {
 	Schema        string              `json:"schema"`
 	SchemaVersion int                 `json:"schema_version"`
@@ -109,10 +112,18 @@ type record struct {
 	source                     string // what to name in an error: a file of the spec, or the pack's set
 }
 
+// emptyDoc is a record of 0 bytes, with the platform it belongs to: it has no object, only a name and an alignment.
 type emptyDoc struct {
-	Type  string `json:"type"`
-	Name  string `json:"name"`
-	Align uint32 `json:"align"`
+	Platform string `json:"platform"`
+	Type     string `json:"type"`
+	Name     string `json:"name"`
+	Align    uint32 `json:"align"`
+}
+
+// placedEmpty is an empty record and the label it is listed under.
+type placedEmpty struct {
+	label string
+	doc   emptyDoc
 }
 
 type objectSummary struct {
@@ -282,7 +293,7 @@ func specRecords(specPath string) ([]record, error) {
 			return nil, err
 		}
 		if len(data) == 0 {
-			return nil, fmt.Errorf("%s is empty: a record of 0 bytes belongs in the manifest's empty list", e.File)
+			return nil, fmt.Errorf("%s is empty: a record of 0 bytes belongs in its label's empty list", e.File)
 		}
 		recs = append(recs, record{label: e.Label, platform: e.Platform, typ: e.Type, name: e.Name, align: e.Align, data: data,
 			stockSize: e.StockSize, source: e.File})
@@ -299,7 +310,7 @@ func build(recs []record, out string, maxWindow uint64, log *slog.Logger) (*summ
 	}
 	// Check the set whole first; nothing is encoded for a set that is refused.
 	var todo []record
-	var empties []emptyDoc
+	var empties []placedEmpty
 	seen := map[string]bool{}
 	for _, r := range recs {
 		if r.align == 0 || r.align&(r.align-1) != 0 || r.align > maxAlignment {
@@ -311,7 +322,7 @@ func build(recs []record, out string, maxWindow uint64, log *slog.Logger) (*summ
 		}
 		seen[key] = true
 		if len(r.data) == 0 {
-			empties = append(empties, emptyDoc{Type: r.typ, Name: r.name, Align: r.align})
+			empties = append(empties, placedEmpty{label: r.label, doc: emptyDoc{Platform: r.platform, Type: r.typ, Name: r.name, Align: r.align}})
 			continue
 		}
 		todo = append(todo, r)
@@ -342,10 +353,7 @@ func build(recs []record, out string, maxWindow uint64, log *slog.Logger) (*summ
 	}
 	close(jobs)
 	wg.Wait()
-	if empties == nil {
-		empties = []emptyDoc{}
-	}
-	man := manifestDoc{Schema: schemaName, SchemaVersion: schemaVersion, Labels: map[string]labelDoc{}, Empty: empties}
+	man := manifestDoc{Schema: schemaName, SchemaVersion: schemaVersion, Labels: map[string]labelDoc{}, Empty: []emptyDoc{}}
 	sum := &summary{MaxWindow: maxWindow, EmptyRecords: len(empties)}
 	for _, b := range all {
 		l := man.Labels[b.label]
@@ -353,6 +361,17 @@ func build(recs []record, out string, maxWindow uint64, log *slog.Logger) (*summ
 		man.Labels[b.label] = l
 		sum.Objects = append(sum.Objects, objectSummary{Label: b.label, Platform: b.doc.Platform, Name: b.doc.Name, Type: b.doc.Type,
 			Sha256: b.doc.Sha256, Size: b.doc.Size, Bytes: b.doc.Bytes})
+	}
+	for _, e := range empties {
+		l := man.Labels[e.label]
+		l.Empty = append(l.Empty, e.doc)
+		man.Labels[e.label] = l
+	}
+	for name, l := range man.Labels {
+		if l.Entries == nil {
+			l.Entries = []entryDoc{}
+		}
+		man.Labels[name] = l
 	}
 	text, err := json.Marshal(man)
 	if err != nil {

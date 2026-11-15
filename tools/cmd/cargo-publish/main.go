@@ -23,6 +23,13 @@
 // directory of the bucket root and v1/manifests/ (and, under any other prefix, v1/manifests/), and no secret is logged. Dry run checks and hashes the set and prints the counts and bytes it would send,
 // without the network and without any credential.
 //
+// -replace-live <sha256> is the one exception to "never overwrites": with NEVR_CARGO_PREFIX v1/ it puts the set's manifest
+// over v1/manifest.json.zst, and only while that object holds <sha256> and its recovery copy v1/manifests/<sha256>.json.zst
+// holds the same bytes. The PUT is conditional on the object's ETag (If-Match), so a write that landed after the check
+// is refused (412) rather than overwritten; the object is read back and must hash to the new manifest. Rollback is the same
+// command with the hashes swapped (the old manifest as the set's, the new one as <sha256>). No object is deleted. The
+// bucket must honour If-Match on PUT; a public domain that sends no ETag is refused before the PUT.
+//
 // Records are JSON on standard error (Info per uploaded object and for the summary, Debug per skipped object, Error for
 // each failure); the run summary is one JSON line on standard output. Exit 1 names each failure.
 package main
@@ -85,6 +92,8 @@ type config struct {
 	Prefix      string
 	Workers     int
 	HTTP        *http.Client
+	// ReplaceLive, when set, is the sha256 the live manifest must hold for it to be replaced (-replace-live).
+	ReplaceLive string
 }
 
 // loadConfig reads every setting from the environment through getenv. A missing one is refused by name.
@@ -118,6 +127,18 @@ func loadConfig(getenv func(string) string) (config, error) {
 	c.Workers = defaultWorkers
 	c.HTTP = &http.Client{Timeout: requestTimeout}
 	return c, nil
+}
+
+// checkReplaceLive refuses -replace-live unless the prefix is the live one (its only key is v1/manifest.json.zst) and the
+// expected hash is a sha256 in lower-case hex.
+func checkReplaceLive(prefix, expected string) error {
+	if prefix != livePrefix {
+		return fmt.Errorf("-replace-live replaces %s%s and nothing else: NEVR_CARGO_PREFIX must be %s, not %q", livePrefix, manifestFrameName, livePrefix, prefix)
+	}
+	if !hexName.MatchString(expected) {
+		return fmt.Errorf("-replace-live needs the live manifest's sha256 as %d lower-case hex characters", sha256HexLen)
+	}
+	return nil
 }
 
 // checkPrefix refuses a prefix that is not a relative folder path ending in "/", so no key can leave it.
@@ -343,6 +364,9 @@ func runPublish(ctx context.Context, cfg config, p plan, log *slog.Logger) (summ
 
 // publishOne returns "skipped" when the object is present, "uploaded" after a put that read back by hash.
 func publishOne(ctx context.Context, cfg config, o object, log *slog.Logger) (string, error) {
+	if cfg.ReplaceLive != "" && o.Key == livePrefix+manifestFrameName {
+		return replaceLive(ctx, cfg, o, log)
+	}
 	present, err := publicStatus(ctx, cfg, o.Key)
 	if err != nil {
 		log.Error("head failed", "key", o.Key, "error", err.Error())
@@ -380,6 +404,45 @@ func publishOne(ctx context.Context, cfg config, o object, log *slog.Logger) (st
 	return "uploaded", nil
 }
 
+// replaceLive puts the set's manifest over the live one, once three checks pass: the live object holds the expected sha256,
+// its recovery copy <prefix>manifests/<expected>.json.zst holds it too, and the PUT is conditional on the live object's
+// ETag, so a write that landed after the check is refused (412), not overwritten. The read-back must hash to the new
+// manifest. Rollback is the same call with the hashes swapped: the old manifest is the set's, the new one is expected.
+func replaceLive(ctx context.Context, cfg config, o object, log *slog.Logger) (string, error) {
+	live, err := publicGet(ctx, cfg, o.Key)
+	if err != nil {
+		return "", fmt.Errorf("%s: read the live manifest: %w", o.Key, err)
+	}
+	if live.SHA != cfg.ReplaceLive {
+		log.Error("live manifest is not the expected one", "key", o.Key, "want_sha256", cfg.ReplaceLive, "got_sha256", live.SHA)
+		return "", fmt.Errorf("%s: live manifest has sha256 %s, not the expected %s; nothing written", o.Key, live.SHA, cfg.ReplaceLive)
+	}
+	recovery := manifestsKeyDir + cfg.ReplaceLive + manifestFrameExt
+	rec, err := publicGet(ctx, cfg, recovery)
+	if err != nil {
+		return "", fmt.Errorf("%s: the recovery copy: %w", recovery, err)
+	}
+	if rec.SHA != cfg.ReplaceLive {
+		return "", fmt.Errorf("%s: recovery copy has sha256 %s, not %s; nothing written", recovery, rec.SHA, cfg.ReplaceLive)
+	}
+	if live.ETag == "" {
+		return "", fmt.Errorf("%s: the public domain sent no ETag, so the PUT cannot be conditional; nothing written", o.Key)
+	}
+	if err := putConditional(ctx, cfg, o, ifMatchHeader, live.ETag); err != nil {
+		log.Error("replace refused", "key", o.Key, "error", err.Error())
+		return "", fmt.Errorf("%s: replace: %w", o.Key, err)
+	}
+	got, n, err := publicHash(ctx, cfg, o.Key)
+	if err != nil {
+		return "", fmt.Errorf("%s: readback: %w", o.Key, err)
+	}
+	if got != o.SHA || n != o.Size {
+		return "", fmt.Errorf("%s: readback mismatch after replace: want sha256 %s and %d bytes, got %s and %d bytes", o.Key, o.SHA, o.Size, got, n)
+	}
+	log.Info("live manifest replaced", "key", o.Key, "old_sha256", live.SHA, "new_sha256", o.SHA, "bytes", o.Size)
+	return "uploaded", nil
+}
+
 func publicURL(cfg config, key string) string {
 	return strings.TrimRight(cfg.PublicBase, "/") + "/" + key
 }
@@ -405,30 +468,55 @@ func publicStatus(ctx context.Context, cfg config, key string) (bool, error) {
 	}
 }
 
-// publicHash fetches the key from the public domain and returns its SHA-256 and byte count.
-func publicHash(ctx context.Context, cfg config, key string) (string, int64, error) {
+// publicInfo is what a GET on the public domain tells about an object: its SHA-256, its size and its ETag.
+type publicInfo struct {
+	SHA  string
+	Size int64
+	ETag string
+}
+
+// publicGet fetches the key from the public domain and returns its SHA-256, byte count and ETag.
+func publicGet(ctx context.Context, cfg config, key string) (publicInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, publicURL(cfg, key), nil)
 	if err != nil {
-		return "", 0, err
+		return publicInfo{}, err
 	}
 	resp, err := cfg.HTTP.Do(req)
 	if err != nil {
-		return "", 0, err
+		return publicInfo{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return publicInfo{}, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	h := sha256.New()
 	n, err := io.Copy(h, resp.Body)
 	if err != nil {
-		return "", 0, err
+		return publicInfo{}, err
 	}
-	return hex.EncodeToString(h.Sum(nil)), n, nil
+	return publicInfo{SHA: hex.EncodeToString(h.Sum(nil)), Size: n, ETag: resp.Header.Get("ETag")}, nil
 }
+
+// publicHash fetches the key from the public domain and returns its SHA-256 and byte count.
+func publicHash(ctx context.Context, cfg config, key string) (string, int64, error) {
+	info, err := publicGet(ctx, cfg, key)
+	return info.SHA, info.Size, err
+}
+
+const (
+	ifNoneMatchHeader = "If-None-Match"
+	ifMatchHeader     = "If-Match"
+	ifNoneMatchAny    = "*"
+)
 
 // putObject writes the object with a conditional PUT: the bucket refuses (412) when the key already exists.
 func putObject(ctx context.Context, cfg config, o object) error {
+	return putConditional(ctx, cfg, o, ifNoneMatchHeader, ifNoneMatchAny)
+}
+
+// putConditional writes the object with the precondition header given: If-None-Match "*" refuses an existing key, and
+// If-Match an ETag refuses a key whose content is not that one (412 in both cases).
+func putConditional(ctx context.Context, cfg config, o object, precondition, value string) error {
 	f, err := os.Open(o.Local)
 	if err != nil {
 		return err
@@ -444,7 +532,7 @@ func putObject(ctx context.Context, cfg config, o object) error {
 		return err
 	}
 	req.ContentLength = o.Size
-	req.Header.Set("If-None-Match", "*")
+	req.Header.Set(precondition, value)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	signV4(req, cfg, time.Now())
 	resp, err := cfg.HTTP.Do(req)
@@ -457,6 +545,9 @@ func putObject(ctx context.Context, cfg config, o object) error {
 	case http.StatusOK, http.StatusCreated:
 		return nil
 	case http.StatusPreconditionFailed:
+		if precondition == ifMatchHeader {
+			return fmt.Errorf("the object changed since it was read; not overwritten (HTTP 412)")
+		}
 		return fmt.Errorf("key already exists; not overwritten (HTTP 412)")
 	default:
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
@@ -508,7 +599,7 @@ func signV4(req *http.Request, cfg config, now time.Time) {
 	req.Header.Set("X-Amz-Date", amzDate)
 	req.Header.Set("X-Amz-Content-Sha256", unsignedPayload)
 	headers := map[string]string{"host": req.URL.Host}
-	for _, name := range []string{"If-None-Match", "X-Amz-Content-Sha256", "X-Amz-Date"} {
+	for _, name := range []string{"If-Match", "If-None-Match", "X-Amz-Content-Sha256", "X-Amz-Date"} {
 		if v := req.Header.Get(name); v != "" {
 			headers[strings.ToLower(name)] = v
 		}
@@ -539,6 +630,7 @@ func hmacSHA256(key []byte, msg string) []byte {
 func main() {
 	dir := flag.String("dir", "", "extracted set: blobs/sha256/* and manifest.json.zst")
 	dry := flag.Bool("dry-run", false, "count the objects and bytes that would be sent; no network, no credential")
+	replaceLive := flag.String("replace-live", "", "replace the live manifest v1/manifest.json.zst, only while it holds this sha256 (its recovery copy must exist)")
 	workers := flag.Int("workers", defaultWorkers, "parallel objects")
 	flag.Parse()
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevelDefault}))
@@ -553,6 +645,11 @@ func main() {
 	prefix := strings.TrimSpace(os.Getenv("NEVR_CARGO_PREFIX"))
 	if prefix == "" {
 		fail(errors.New("missing environment variable(s): NEVR_CARGO_PREFIX"))
+	}
+	if *replaceLive != "" {
+		if err := checkReplaceLive(prefix, *replaceLive); err != nil {
+			fail(err)
+		}
 	}
 	p, err := buildPlan(*dir, prefix)
 	if err != nil {
@@ -570,6 +667,7 @@ func main() {
 		fail(err)
 	}
 	cfg.Workers = *workers
+	cfg.ReplaceLive = *replaceLive
 	sum, err := runPublish(context.Background(), cfg, p, logger)
 	emit(sum)
 	if err != nil {

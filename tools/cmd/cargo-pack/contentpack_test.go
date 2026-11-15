@@ -139,10 +139,21 @@ func TestARecordOfZeroBytesIsListedAsEmptyAndHasNoObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	var top struct {
-		Empty []emptyDoc `json:"empty"`
+		Labels map[string]struct {
+			Empty []emptyDoc `json:"empty"`
+		} `json:"labels"`
+		Empty json.RawMessage `json:"empty"`
 	}
-	if err := json.Unmarshal(decode(t, mframe), &top); err != nil || len(top.Empty) != 1 || top.Empty[0].Name != "0x0000000000000002" || top.Empty[0].Align != testAlign {
-		t.Errorf("empty list = %+v, err %v", top.Empty, err)
+	if err := json.Unmarshal(decode(t, mframe), &top); err != nil {
+		t.Fatal(err)
+	}
+	// The record belongs to its label, with its platform; the top-level list is written empty.
+	if string(top.Empty) != "[]" {
+		t.Errorf("top-level empty = %s, want []", top.Empty)
+	}
+	got := top.Labels["l"].Empty
+	if len(got) != 1 || got[0] != (emptyDoc{Platform: "windows-x86_64", Type: "0x0000000000000001", Name: "0x0000000000000002", Align: testAlign}) {
+		t.Errorf("label l empty = %+v, want one windows-x86_64 record named 0x...2", got)
 	}
 }
 

@@ -52,13 +52,26 @@ type fakeS3 struct {
 	putOrder []string
 	// badSigs counts PUTs whose Authorization does not match the request as received (answered 403, never stored).
 	badSigs int
+	// ifMatch lists the If-Match value of each PUT that sent one.
+	ifMatch []string
+	// noETag makes GET answer without an ETag, as a public domain that does not send one would.
+	noETag bool
+	// corruptKey, when set with corrupt, limits the corruption to the PUT of that key.
+	corruptKey string
+	// swapKey, when set, makes the object at that key take the bytes swapTo right after its first GET is served: a
+	// second writer that lands between a check and a conditional PUT.
+	swapKey string
+	swapTo  []byte
 }
+
+// etagOf is the ETag the fake serves for an object's bytes: the quoted SHA-256, as the public domain serves one.
+func etagOf(b []byte) string { return `"` + sha256Hex(b) + `"` }
 
 // signatureMatches recomputes the SigV4 Authorization from the request as it arrived: its method, its escaped path and
 // its signed headers. A signer that signs a different path or header set than it sends is refused.
 func signatureMatches(r *http.Request) bool {
 	headers := map[string]string{"host": r.Host}
-	for _, n := range []string{"If-None-Match", "X-Amz-Content-Sha256", "X-Amz-Date"} {
+	for _, n := range []string{"If-Match", "If-None-Match", "X-Amz-Content-Sha256", "X-Amz-Date"} {
 		if v := r.Header.Get(n); v != "" {
 			headers[strings.ToLower(n)] = v
 		}
@@ -94,7 +107,14 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+		if !f.noETag {
+			w.Header().Set("ETag", etagOf(b))
+		}
 		_, _ = w.Write(b)
+		if key == f.swapKey && f.swapTo != nil {
+			f.objects[key] = f.swapTo
+			f.swapTo = nil
+		}
 	case http.MethodPut:
 		f.puts++
 		f.putOrder = append(f.putOrder, key)
@@ -105,11 +125,18 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
+		if im := r.Header.Get("If-Match"); im != "" {
+			f.ifMatch = append(f.ifMatch, im)
+			if cur, ok := f.objects[key]; !ok || etagOf(cur) != im {
+				w.WriteHeader(http.StatusPreconditionFailed)
+				return
+			}
+		}
 		if _, exists := f.objects[key]; exists && r.Header.Get("If-None-Match") == "*" {
 			w.WriteHeader(http.StatusPreconditionFailed)
 			return
 		}
-		if f.corrupt && len(body) > 0 {
+		if f.corrupt && len(body) > 0 && (f.corruptKey == "" || key == f.corruptKey) {
 			body[0] ^= 0xff
 		}
 		f.objects[key] = body
@@ -651,3 +678,221 @@ func TestAFailedBlobStopsTheManifests(t *testing.T) {
 		}
 	}
 }
+
+// replaceSet makes a set whose manifest frame is the bytes given (blobs are not needed for these checks).
+func replaceSet(t *testing.T, manifestFrame []byte) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "blobs", "sha256"), testDirPerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, manifestFrameName), manifestFrame, testFilePerm); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// liveFixture puts the live manifest at old and its recovery copy under the by-hash key, as a publish leaves them.
+func liveFixture(t *testing.T, f *fakeS3, old []byte) {
+	t.Helper()
+	f.objects[livePrefix+manifestFrameName] = old
+	f.objects[manifestsKeyDir+sha256Hex(old)+manifestFrameExt] = old
+}
+
+func replaceCfg(srvURL, expected string) config {
+	cfg := testConfig(srvURL)
+	cfg.Prefix = livePrefix
+	cfg.ReplaceLive = expected
+	return cfg
+}
+
+func TestReplaceLiveReplacesTheLiveManifestWithIfMatchAndReadsItBack(t *testing.T) {
+	f, srv := newFake(t)
+	oldFrame := zstdFrame(t, []byte("the manifest being replaced"))
+	liveFixture(t, f, oldFrame)
+	dir := replaceSet(t, zstdFrame(t, []byte("the new manifest")))
+	newFrame := readFileT(t, filepath.Join(dir, manifestFrameName))
+	cfg := replaceCfg(srv.URL, sha256Hex(oldFrame))
+	p, err := buildPlan(dir, cfg.Prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPublish(context.Background(), cfg, p, quietLog()); err != nil {
+		t.Fatalf("runPublish: %v", err)
+	}
+	if !bytes.Equal(f.objects[livePrefix+manifestFrameName], newFrame) {
+		t.Fatal("the live manifest was not replaced")
+	}
+	if len(f.ifMatch) != 1 || f.ifMatch[0] != etagOf(oldFrame) {
+		t.Fatalf("If-Match on the live PUT = %v, want the old ETag %s", f.ifMatch, etagOf(oldFrame))
+	}
+	if !bytes.Equal(f.objects[manifestsKeyDir+sha256Hex(newFrame)+manifestFrameExt], newFrame) {
+		t.Fatal("the new manifest has no by-hash copy")
+	}
+	if f.badSigs != 0 {
+		t.Fatalf("%d PUT(s) with a signature that does not match", f.badSigs)
+	}
+}
+
+func TestReplaceLiveRefusesWhenTheLiveHashIsNotTheExpectedOne(t *testing.T) {
+	f, srv := newFake(t)
+	old := zstdFrame(t, []byte("the manifest the set expects to replace"))
+	live := zstdFrame(t, []byte("someone else's manifest"))
+	f.objects[livePrefix+manifestFrameName] = live
+	// The recovery copy of the expected manifest is there, so only the live check can refuse.
+	f.objects[manifestsKeyDir+sha256Hex(old)+manifestFrameExt] = old
+	dir := replaceSet(t, zstdFrame(t, []byte("the new manifest")))
+	cfg := replaceCfg(srv.URL, sha256Hex(old))
+	p, err := buildPlan(dir, cfg.Prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPublish(context.Background(), cfg, p, quietLog()); err == nil {
+		t.Fatal("a live manifest whose hash is not the expected one was replaced")
+	}
+	if !bytes.Equal(f.objects[livePrefix+manifestFrameName], live) || len(f.ifMatch) != 0 {
+		t.Fatal("the live manifest was written")
+	}
+}
+
+func TestReplaceLiveRefusesARecoveryCopyThatHoldsOtherContent(t *testing.T) {
+	f, srv := newFake(t)
+	old := zstdFrame(t, []byte("the manifest being replaced"))
+	liveFixture(t, f, old)
+	f.objects[manifestsKeyDir+sha256Hex(old)+manifestFrameExt] = zstdFrame(t, []byte("not the recovery copy"))
+	dir := replaceSet(t, zstdFrame(t, []byte("the new manifest")))
+	cfg := replaceCfg(srv.URL, sha256Hex(old))
+	p, err := buildPlan(dir, cfg.Prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPublish(context.Background(), cfg, p, quietLog()); err == nil {
+		t.Fatal("a replace whose recovery copy holds other bytes ran")
+	}
+	if !bytes.Equal(f.objects[livePrefix+manifestFrameName], old) || len(f.ifMatch) != 0 {
+		t.Fatal("the live manifest was written against a bad recovery copy")
+	}
+}
+
+func TestReplaceLiveRefusesAPublicDomainThatSendsNoETag(t *testing.T) {
+	f, srv := newFake(t)
+	old := zstdFrame(t, []byte("the manifest being replaced"))
+	liveFixture(t, f, old)
+	f.noETag = true
+	dir := replaceSet(t, zstdFrame(t, []byte("the new manifest")))
+	cfg := replaceCfg(srv.URL, sha256Hex(old))
+	p, err := buildPlan(dir, cfg.Prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPublish(context.Background(), cfg, p, quietLog()); err == nil {
+		t.Fatal("a replace without an ETag to condition on ran")
+	}
+	if !bytes.Equal(f.objects[livePrefix+manifestFrameName], old) || len(f.ifMatch) != 0 {
+		t.Fatal("the live manifest was written without a conditional PUT")
+	}
+}
+
+func TestReplaceLiveRefusesWithoutTheRecoveryCopy(t *testing.T) {
+	f, srv := newFake(t)
+	old := zstdFrame(t, []byte("the manifest being replaced"))
+	f.objects[livePrefix+manifestFrameName] = old // no v1/manifests copy of it
+	dir := replaceSet(t, zstdFrame(t, []byte("the new manifest")))
+	cfg := replaceCfg(srv.URL, sha256Hex(old))
+	p, err := buildPlan(dir, cfg.Prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPublish(context.Background(), cfg, p, quietLog()); err == nil {
+		t.Fatal("a replace with no recovery copy ran")
+	}
+	if !bytes.Equal(f.objects[livePrefix+manifestFrameName], old) || len(f.ifMatch) != 0 {
+		t.Fatal("the live manifest was written without a recovery copy")
+	}
+}
+
+func TestReplaceLiveRefusesAConcurrentChangeBetweenCheckAndPut(t *testing.T) {
+	f, srv := newFake(t)
+	old := zstdFrame(t, []byte("the manifest being replaced"))
+	liveFixture(t, f, old)
+	other := zstdFrame(t, []byte("a second writer's manifest"))
+	f.swapKey, f.swapTo = livePrefix+manifestFrameName, other
+	dir := replaceSet(t, zstdFrame(t, []byte("the new manifest")))
+	cfg := replaceCfg(srv.URL, sha256Hex(old))
+	p, err := buildPlan(dir, cfg.Prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPublish(context.Background(), cfg, p, quietLog()); err == nil {
+		t.Fatal("the replace overwrote a manifest another writer had just put")
+	}
+	if !bytes.Equal(f.objects[livePrefix+manifestFrameName], other) {
+		t.Fatal("the other writer's manifest was overwritten")
+	}
+}
+
+func TestReplaceLiveReadbackMismatchFails(t *testing.T) {
+	f, srv := newFake(t)
+	old := zstdFrame(t, []byte("the manifest being replaced"))
+	liveFixture(t, f, old)
+	// Only the live PUT is corrupted: the by-hash copy is written right, so the live read-back is what must refuse.
+	f.corrupt, f.corruptKey = true, livePrefix+manifestFrameName
+	dir := replaceSet(t, zstdFrame(t, []byte("the new manifest")))
+	cfg := replaceCfg(srv.URL, sha256Hex(old))
+	p, err := buildPlan(dir, cfg.Prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPublish(context.Background(), cfg, p, quietLog()); err == nil {
+		t.Fatal("a replaced manifest that reads back with other bytes passed")
+	}
+}
+
+func TestReplaceLiveRollbackIsTheSameCommandWithTheHashesSwapped(t *testing.T) {
+	f, srv := newFake(t)
+	oldFrame := zstdFrame(t, []byte("the manifest being replaced"))
+	liveFixture(t, f, oldFrame)
+	// Publish the new one first, as the forward replace did: it is now live, and its recovery copy exists.
+	newFrame := zstdFrame(t, []byte("the new manifest"))
+	f.objects[livePrefix+manifestFrameName] = newFrame
+	f.objects[manifestsKeyDir+sha256Hex(newFrame)+manifestFrameExt] = newFrame
+	// The rollback's set holds the old frame as its manifest.
+	dir := replaceSet(t, oldFrame)
+	cfg := replaceCfg(srv.URL, sha256Hex(newFrame))
+	p, err := buildPlan(dir, cfg.Prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPublish(context.Background(), cfg, p, quietLog()); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if !bytes.Equal(f.objects[livePrefix+manifestFrameName], oldFrame) {
+		t.Fatal("the rollback did not restore the old manifest")
+	}
+}
+
+func TestReplaceLiveIsRefusedUnderAnyPrefixOtherThanTheLiveOne(t *testing.T) {
+	t.Parallel()
+	if err := checkReplaceLive(testPrefix, sha256Hex([]byte("x"))); err == nil {
+		t.Error("a staging-style prefix accepted -replace-live")
+	}
+	if err := checkReplaceLive(livePrefix, "not-a-hash"); err == nil {
+		t.Error("a malformed expected sha256 was accepted")
+	}
+	if err := checkReplaceLive(livePrefix, sha256Hex([]byte("x"))); err != nil {
+		t.Errorf("the live prefix with a well-formed hash: %v", err)
+	}
+}
+
+// readFileT returns a file's bytes, failing the test when it cannot be read.
+func readFileT(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// badSha is a well-formed sha256 that no test object has: the expected hash of a live manifest that is not there.
+const badSha = "0000000000000000000000000000000000000000000000000000000000000000"
