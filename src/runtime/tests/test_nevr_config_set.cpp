@@ -580,7 +580,16 @@ TEST(NevrConfigSetConcurrent, TheLockIsHeldThroughTheObjectUpdate) {
 }
 
 // #1857: SetPluginEnabled, the plugin manager's writer. The same promise as Set (every other byte kept), addressed by list
-// index. Red until the splice is written: the stub returns "not_implemented".
+// index.
+//
+// The indexes the plugin tests name, in kThreePlugins order, and the size of that list.
+constexpr std::size_t kAlpha = 0;
+constexpr std::size_t kBeta = 1;
+constexpr std::size_t kGamma = 2;
+constexpr std::size_t kThreePluginCount = 3;
+// An index no test list reaches, far past its end.
+constexpr std::size_t kFarPastTheEnd = 5;
+
 const char* const kThreePlugins =
     "# nevr config\n"
     "plugins:\n"
@@ -604,7 +613,7 @@ nevr::ConfigSetResult SetPluginOn(const std::string& file, std::size_t index, bo
 TEST(NevrConfigSetPlugin, TurningOneOffKeepsEveryOtherByte) {
   Dir dir;
   Write(dir.File(), kThreePlugins);
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), 1, false);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kBeta, false);
   ASSERT_TRUE(r.ok) << r.reason;
   EXPECT_TRUE(r.wrote);
   std::string want = kThreePlugins;
@@ -613,50 +622,44 @@ TEST(NevrConfigSetPlugin, TurningOneOffKeepsEveryOtherByte) {
   EXPECT_EQ(Read(dir.File()), want);
 
   const nevr::NevrConfig again = nevr::NevrConfig::LoadFromFile(dir.File());
-  ASSERT_EQ(again.Plugins().size(), 3u);
-  EXPECT_TRUE(again.Plugins()[0].enabled);
-  EXPECT_FALSE(again.Plugins()[1].enabled);
-  EXPECT_TRUE(again.Plugins()[2].enabled);
+  ASSERT_EQ(again.Plugins().size(), kThreePluginCount);
+  EXPECT_TRUE(again.Plugins()[kAlpha].enabled);
+  EXPECT_FALSE(again.Plugins()[kBeta].enabled);
+  EXPECT_TRUE(again.Plugins()[kGamma].enabled);
 }
 
 TEST(NevrConfigSetPlugin, AMissingEnabledIsInsertedAtTheEntrysIndentation) {
   Dir dir;
   Write(dir.File(), kThreePlugins);
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), 2, false);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kGamma, false);
   ASSERT_TRUE(r.ok) << r.reason;
   std::string want = kThreePlugins;
   const std::string at = "  - name: gamma\n";
   want.insert(want.find(at) + at.size(), "    enabled: false\n");
   EXPECT_EQ(Read(dir.File()), want);
-  EXPECT_FALSE(nevr::NevrConfig::LoadFromFile(dir.File()).Plugins()[2].enabled);
+  EXPECT_FALSE(nevr::NevrConfig::LoadFromFile(dir.File()).Plugins()[kGamma].enabled);
 }
 
 TEST(NevrConfigSetPlugin, AFlowStyleListIsRefusedAndNothingIsWritten) {
   Dir dir;
   const std::string before = "plugins: [{name: a, enabled: true}]\n";
   Write(dir.File(), before);
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), 0, false);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, false);
   EXPECT_FALSE(r.ok);
   EXPECT_FALSE(r.wrote);
-  EXPECT_STRNE(r.reason, "");
-  EXPECT_STRNE(r.reason, "not_implemented");
+  EXPECT_STREQ(r.reason, "plugins_flow_style");
   EXPECT_EQ(Read(dir.File()), before);
 }
 
 TEST(NevrConfigSetPlugin, AnIndexPastTheEndIsRefused) {
   Dir dir;
   Write(dir.File(), kThreePlugins);
-  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), 5, false);
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kFarPastTheEnd, false);
   EXPECT_FALSE(r.ok);
   EXPECT_FALSE(r.wrote);
-  EXPECT_STRNE(r.reason, "not_implemented");
+  EXPECT_STREQ(r.reason, "plugin_index_out_of_range");
   EXPECT_EQ(Read(dir.File()), kThreePlugins);
 }
-
-// The indexes the plugin tests name, in kThreePlugins order.
-constexpr std::size_t kAlpha = 0;
-constexpr std::size_t kBeta = 1;
-constexpr std::size_t kGamma = 2;
 
 TEST(NevrConfigSetPlugin, TurningOneOnWritesTrueAndLeavesTheOthers) {
   Dir dir;
@@ -681,7 +684,7 @@ TEST(NevrConfigSetPlugin, TheLoadedListFollowsTheFile) {
   Dir dir;
   Write(dir.File(), kThreePlugins);
   nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFile(dir.File());
-  ASSERT_EQ(cfg.Plugins().size(), 3u);
+  ASSERT_EQ(cfg.Plugins().size(), kThreePluginCount);
   ASSERT_TRUE(cfg.SetPluginEnabled(kBeta, false).ok);
   EXPECT_TRUE(cfg.Plugins()[kAlpha].enabled);
   EXPECT_FALSE(cfg.Plugins()[kBeta].enabled);
