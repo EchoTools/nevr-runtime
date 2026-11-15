@@ -5,6 +5,8 @@ description: Use right after you land a branch on main, or when df shows the dis
 
 # merge-cleanup
 
+After a landing, clean up only work that has landed on `origin/main`; a finished branch that has not landed is landed first ("Finished work lands" in `AGENTS.md`), not cleaned up.
+
 1. `just reap-merged` (dry run). Read all of it.
    - `REAP` blocks pass every proof: the tip is in `origin/main` or is the exact head of a MERGED PR,
      the tree is clean, only build output is ignored, no process has its cwd inside, the ledger names

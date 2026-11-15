@@ -121,6 +121,8 @@ review subagent with the diff, the commit message and the issue; FIX goes back t
 "Ownership and cleanup". A defect you do not fix in the same turn gets an issue ("Fix it or file it, in the same turn"),
 shaped as "What a landed commit carries" says; a security-sensitive one goes to the owner.
 
+Your own finished work lands on `origin/main` in the same turn ("Finished work lands" in `AGENTS.md`): you start the review, answer every FIX, run `just land`, then clean up. You do not stop at a MERGE verdict, a pushed branch or a report.
+
 ## Mistakes that recur
 
 - Reading `$?` after `just build | tail`: it is the last stage's. Write the output to a file under the work root and read

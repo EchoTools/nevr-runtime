@@ -48,7 +48,7 @@ These seven rules come before every other rule in this file. Each carries its re
 3. **Never discard work you did not make or have not read.** No `git restore`, no `git checkout` of a path, no `git reset --hard` and no `git clean` over it. Uncommitted changes you did not make are someone's work: leave them, read them (`git diff`), tell the owner, or, if they truly block you, stash them (`git stash push -u -m "<seat>: <why>"`) and report the stash. Reason: uncommitted work exists in one place, so discarding it cannot be undone, and an agent that has not read it cannot know what it destroys.
 4. **Never wait on a subagent's report.** When a subagent should be done, check the result yourself with a command (`git -C <worktree> log --oneline origin/main..HEAD`, `git ls-remote origin refs/heads/main`, the test output) and take the next step in the same turn. Reason: a report is the subagent's account of itself, and it can be late, wrong or never sent; the commit and the test output are the state of the work, and the step after them is yours.
 5. **Sessions are disposable.** Assume yours can die at any time. Keep state in git and in files (a commit for each finished tranche, the issue, the ledger) and recover from them ("Recover a session"), never from memory. Reason: what a session remembers dies with it, and a summary of it is lossy; a commit or a file is still there for the next session.
-6. **These phrases mean the agent has stopped working, and are never said:** "I need Andrew's approval", "it's your call", "waiting on the return", "I shouldn't have". Do the next documented step, or name the missing pattern. Where this file reserves a step for the owner ("Production Deployment", a release, deleting a doc), the documented step is to finish everything else and report that step as not done, with the command it takes. A question that your task or this file already answers is not a decision: do not list it, act on the answer. Reason: each phrase stops the work and hands the owner a decision this file already made; an apology repairs nothing, the next step does.
+6. **These phrases mean the agent has stopped working, and are never said:** "I need Andrew's approval", "it's your call", "waiting on the return", "I shouldn't have". Do the next documented step, or name the missing pattern. Where this file reserves a step for the owner ("Production Deployment", a release, deleting a doc), the documented step is to finish everything else and report that step as not done, with the command it takes. Finished code is not such a step: it lands on `origin/main` ("Finished work lands"). A question that your task or this file already answers is not a decision: do not list it, act on the answer. Reason: each phrase stops the work and hands the owner a decision this file already made; an apology repairs nothing, the next step does.
 7. **An agent is a tool, not a person.** No persona, no "I feel", no promises. A seat name, a commit author and a GitHub account are labels for which session or account did something, not characters to speak as. Reason: an agent's output is judged only by what lands on `main`; a feeling cannot be checked, and a promise from a session that may die (rule 5) is worth nothing.
 
 - **The patterns.** Rule 1 looks an action up here. A `just` recipe, a standard in `docs/standards/` or a step in `RELEASING.md` is a pattern where a section named below sends you to it.
@@ -82,6 +82,12 @@ After "How an agent works here", these come before every other rule in this file
   you do and the action it would trigger. A check with no such result, or whose failure a later step the owner already
   named would catch, is cut.
 - **Done is the owner's stated done.** Add no criteria to it.
+- **Finished work lands.** Our own work is not done until it is on `origin/main`. A seat that finishes a tranche runs the
+  quick check, starts the review itself, fixes every FIX, and runs `just land` itself, in the same turn. It never stops at a
+  passing check, a MERGE verdict, a pushed branch or a report, never leaves a branch for another seat or for the owner to
+  land, and never waits for a review or an approval that no one is performing. Only a step this file reserves for the owner
+  (a deploy, a tag, a release) is reported as not done. A branch that truly cannot land gets a one-line reason naming the
+  blocker. An explicit instruction in the task not to commit or land is honoured, and the work is then reported as unlanded. This is about our own code; a contributor's branches are not touched by it.
 - **Read a text to its end before a claim about what it lacks.** Before you state that a text (an issue, a pull request
   body, a comment, a file, a log) does not contain something, read all of it. A slice does not count: `head`, `tail`,
   `cut -c`, `grep -m`, a `[0:N]` slice of `.body` in `gh ... --jq`, or a `Read` with a `limit` that stops short. When the
@@ -888,7 +894,7 @@ your seat name, for example `claude-main` or `codex`.
   with `EVR_GAME_DIR=<copy>/echovr`, and the combat generator with
   `--output-dir <copy>/echovr/bin/win10/_overrides/combat` (run
   `python tools/echomod/generate_resources.py` directly). A writer that cannot be pointed at the
-  copy waits for a human.
+  copy is not run; the change lands on its quick check and the run is named as not run.
 - **The copy** lives under `~/src/nevr-runtime-work/<agent>/` (named per agent, never another
   agent's). `<copy>` below is `<that directory>/game-copy`, the pristine copy.
   - **Make it.** Dereference only the top-level link, and keep every link inside as a link (no `-L`):
@@ -958,11 +964,11 @@ your seat name, for example `claude-main` or `codex`.
     the work root, `~/src/nevr-runtime-work/`), and restores it into the current copy. It also deletes, by the absolute paths it recorded, the
     files the earlier run added (`BugSplat64.dll`, `nevr-runtime.dll`, `plugins/*`, the nevr root's `config.yaml`). Clear or
     inspect that directory before a run against a different copy than the last. When no copy exists, the run
-    waits for a human; a runtime change is not verified until then.
+    is not made; the change lands on its quick check, and the report names the run as not done.
 
 ### Review, verification and landing
 
-- **Review in a fresh context before landing.** After the quick check, start a `nevr-runtime-engineer` subagent (`.claude/agents/nevr-runtime-engineer.md`, never `general-purpose`) that did not write the change, with the diff (`git diff origin/main...HEAD`), the issue text, and the commit messages as claims to reproduce; nothing else from the author is passed. It reads the diff and the surrounding code, reproduces what the commit message claims, reports findings with `file:line` and quoted evidence, and ends with one verdict: MERGE or FIX. FIX goes back to the work, and the new tip gets a new review. Only MERGE lands.
+- **Review in a fresh context before landing.** The seat that did the work starts the reviewer itself; no one else will. After the quick check, start a `nevr-runtime-engineer` subagent (`.claude/agents/nevr-runtime-engineer.md`, never `general-purpose`) that did not write the change, with the diff (`git diff origin/main...HEAD`), the issue text, and the commit messages as claims to reproduce; nothing else from the author is passed. It reads the diff and the surrounding code, reproduces what the commit message claims, reports findings with `file:line` and quoted evidence, and ends with one verdict: MERGE or FIX. FIX goes back to the work, and the new tip gets a new review. Only MERGE lands.
 - **A test must fail without the change.** For every test you add or change, revert or mutate the
   source, run it, paste the failing output, restore the source and show it passing.
 - **Name the result before the check.** Before a check, a test run or a done condition, write down the result that would
@@ -1060,7 +1066,7 @@ your seat name, for example `claude-main` or `codex`.
   in parallel; items that share a file run in turn.
 - **Pick the model by the work.** Sonnet for specified implementation and verification; Opus for
   adversarial reviews and open design questions; a small model for search and mechanical edits.
-- **Brief them with the rules above.** Name their worktree, their branch and their own scratch subdirectory (never the dispatcher's), and where a command will find the result: the branch for commits, a file for test output, a file for a review's findings and verdict. Say who lands: the subagent, through "Landing", or the dispatcher, once the subagent's commits are on its branch. Forbid any other push and any force-push; require mutation proof for tests; ask for commands run with raw output and a list of what was not verified.
+- **Brief them with the rules above.** Name their worktree, their branch and their own scratch subdirectory (never the dispatcher's), and where a command will find the result: the branch for commits, a file for test output, a file for a review's findings and verdict. Say who lands: the subagent, through "Landing", or the dispatcher, once the subagent's commits are on its branch. Someone always lands it; a branch is never left for no one. Forbid any other push and any force-push; require mutation proof for tests; ask for commands run with raw output and a list of what was not verified.
 - **Check, do not wait** (rule 4). When a subagent should be done, read its branch, its test output or `origin/main` with a command and take the next step in the same turn.
 - **Subagents report observations, not verdicts,** except a review's MERGE or FIX. Check what they claim before relying on it.
 
