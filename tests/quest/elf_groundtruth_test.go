@@ -402,6 +402,11 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 		// std::exception itself). No exception leaves it: it is noexcept, and its translation unit is built
 		// -fno-exceptions (src/quest/sentinel/CMakeLists.txt).
 		"wizard metric observer (MetricLog)": regexp.MustCompile(`^_ZN10nevr_quest13wizard_metric12_GLOBAL__N_17ObserveE`),
+
+		// Cat's weapon values merged into mp_weapon_settings (MergeBalance in src/quest/sentinel/menu_cards_hook.cpp): the
+		// read-finished handler calls it before the game's allocator and the game's callback. It parses and builds JSON
+		// (core/combat_balance/balance_merge.h) and calls no game code; it is noexcept.
+		"combat balance merge (mp_weapon_settings)": regexp.MustCompile(`^_ZN10nevr_quest10menu_cards12_GLOBAL__N_112MergeBalanceE`),
 	}
 	for what, re := range want {
 		if !anyMatches(v.annotatedReached, re) {
