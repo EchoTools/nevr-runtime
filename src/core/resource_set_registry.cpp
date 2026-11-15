@@ -153,9 +153,11 @@ Outcome Registry::Add(const std::string& plugin, const std::string& label, const
 }
 
 Outcome Registry::AddMapFile(const std::string& owner, const std::string& label, const void* bytes, std::uint64_t size,
-                              std::int64_t handle) {
+                              std::int64_t handle, bool stockOverride) {
   if (!IsMapOwner(owner)) return Refuse(Refusal::kFormat, "bad_owner (a map's set is registered for \"map:<id>\")");
-  return AddChecked(owner, label, bytes, size, handle, 0, true);
+  const Outcome outcome = AddChecked(owner, label, bytes, size, handle, 0, true);
+  if (outcome.ok()) sets_.back()->stock_override = stockOverride;
+  return outcome;
 }
 
 Outcome Registry::AddChecked(const std::string& plugin, const std::string& label, const void* bytes, std::uint64_t size,
@@ -342,8 +344,12 @@ LaterMountView::LaterMountView(const StockView& stock, const std::vector<const R
 
 bool LaterMountView::Has(void* ctx, std::uint64_t type, std::uint64_t name) {
   const LaterMountView& view = *static_cast<const LaterMountView*>(ctx);
-  return std::binary_search(view.served_.begin(), view.served_.end(), std::make_pair(type, name)) ||
-         view.base_.has(view.base_.ctx, type, name);
+  return Served(ctx, type, name) || view.base_.has(view.base_.ctx, type, name);
+}
+
+bool LaterMountView::Served(void* ctx, std::uint64_t type, std::uint64_t name) {
+  const LaterMountView& view = *static_cast<const LaterMountView*>(ctx);
+  return std::binary_search(view.served_.begin(), view.served_.end(), std::make_pair(type, name));
 }
 
 MountReport Registry::Mount(const StockView& stock) {
@@ -362,7 +368,11 @@ MountReport Registry::Mount(const StockView& stock) {
     }
     Outcome outcome;
     for (const nevr_shadow::Record& r : set.records) {
-      if (stock.has(stock.ctx, r.type, r.name)) {
+      const bool clash = set.stock_override
+                             ? SortedHas(served, Key{r.type, r.name}) ||
+                                   (stock.served != nullptr && stock.served(stock.ctx, r.type, r.name))
+                             : stock.has(stock.ctx, r.type, r.name);
+      if (clash) {
         outcome = Refuse(Refusal::kStockKey, KeyText(r.type, r.name));
         break;
       }

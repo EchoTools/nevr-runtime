@@ -711,10 +711,12 @@ Outcome RegisterFileResourceSet(const MapFileRequest& request, std::int64_t held
     }
     bytes = size;
     const std::lock_guard<std::mutex> lock(g_mutex);
-    if (!g_registry.mounted()) return g_registry.AddMapFile(request.owner, request.label, view, size, held_handle);
+    if (!g_registry.mounted()) {
+      return g_registry.AddMapFile(request.owner, request.label, view, size, held_handle, request.stock_override);
+    }
     if (g_abandoned) return Outcome{Refusal::kTooLate, "the run's resource sets were not mounted (no resolver hook)"};
     if (!g_laterPending) g_laterPending = std::make_unique<Registry>();
-    return g_laterPending->AddMapFile(request.owner, request.label, view, size, held_handle);
+    return g_laterPending->AddMapFile(request.owner, request.label, view, size, held_handle, request.stock_override);
   });
   if (!outcome.ok()) return MapRefused(request, outcome);
   Log(EchoVR::LogLevel::Info,
@@ -950,7 +952,9 @@ const void* ManagerFor(const void* manager, std::uint64_t type, std::uint64_t na
   std::uint32_t user = 0;
   while (published != nullptr && !published->shadow->Find(type, name, nullptr, &user)) published = published->next;
   if (published == nullptr) return nullptr;
-  if (ManagerHasNow(manager, type, name)) {
+  // A signed stock override is served before the game's copy of its keys; every other set yields to the game.
+  const bool stockOverride = user < published->sets.size() && published->sets[user]->stock_override;
+  if (!stockOverride && ManagerHasNow(manager, type, name)) {
     if (published->stockWins.fetch_add(1, std::memory_order_relaxed) == 0) {
       published->firstWinType.store(type);
       published->firstWinName.store(name);

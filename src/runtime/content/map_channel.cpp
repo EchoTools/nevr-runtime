@@ -13,6 +13,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -136,6 +137,7 @@ class PcMounter : public nevr_maps::Mounter {
     request.label = label;
     request.sha256 = sha256;
     request.rehash = !verified_stamp;  // only a worker passes true (core/resource_set_registry.h)
+    request.stock_override = stock_overrides_.count(owner) != 0;
     const nevr_resource_sets::Outcome outcome = nevr_resource_sets::RegisterFileResourceSet(request, held);
     nevr_maps::Grant grant;
     grant.ok = outcome.ok();
@@ -158,7 +160,15 @@ class PcMounter : public nevr_maps::Mounter {
     return grant;
   }
 
+  nevr_maps::Grant StockOverride(const std::string& owner) override {
+    stock_overrides_.insert(owner);
+    nevr_maps::Grant grant;
+    grant.ok = true;
+    return grant;
+  }
+
   void Withdraw(const std::string& owner) override {
+    stock_overrides_.erase(owner);
     nevr_map_scripts::Withdraw(owner);
     nevr_config_alias::Unstage(owner);
     nevr_resource_sets::WithdrawFileResourceSet(owner);
@@ -177,6 +187,7 @@ class PcMounter : public nevr_maps::Mounter {
   }
 
   bool any_script_ = false;
+  std::set<std::string> stock_overrides_;  // owners granted a stock override, until their Withdraw
 };
 
 // The run's channel, heap-owned and never freed: the worker and the mount observer use it for the process's life. The mounter is

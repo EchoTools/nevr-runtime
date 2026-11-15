@@ -464,6 +464,17 @@ TEST_F(MapFileSetTest, TheObserverSeesTheMountBeforeTheShadowIsServed) {
   EXPECT_EQ(g_observed.calls, 1) << "once a run";
 }
 
+// ADR 0048, "Amendment proposed: stock overrides": the resolver serves an override before the game's copy of its keys.
+TEST_F(MapFileSetTest, AStockOverrideIsServedBeforeTheGamesCopyOfItsKeys) {
+  g_stock.insert({kMeshType, kMapMesh});
+  sets::MapFileRequest request = Request("map:arena", "map:arena@3");
+  request.stock_override = true;
+  ASSERT_TRUE(sets::RegisterFileResourceSet(request, Held(MapLevel().Build())).ok());
+  Mount();
+  EXPECT_TRUE(LevelMounted(kMapLevel));
+  EXPECT_NE(sets::ManagerFor(&g_manager, kMeshType, kMapMesh), nullptr) << "the override answers before the game's copy";
+}
+
 TEST_F(MapFileSetTest, TheObserverSeesAStockKeyRefusalWithItsOwner) {
   sets::SetMountObserver(&Observe);
   RegisterPluginSet();

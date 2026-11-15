@@ -218,6 +218,76 @@ TEST_F(MapRunTest, ACachedVersionNoManifestPinsIsRefusedStale) {
   EXPECT_FALSE(mounter.Called("set map:scripted"));
 }
 
+// ADR 0048, "Amendment proposed: stock overrides": an entry signed `overrides` under a compiled-in key is granted as an override
+// before its set, and mounts with no session asking (the menu loads before any session).
+TEST_F(MapRunTest, AnOfficialStockOverrideIsGrantedBeforeItsSetAndMountsWithNoSessionAsking) {
+  TestKey official{1, true, true};
+  config.keys = {official.pin};
+  channel.Publish("mnu_master", "1.0.0", MakeSet(2, 'a'));
+  channel.maps["mnu_master"]["overrides"] = true;
+  channel.Publish("arena", "1.0.0", MakeSet(2, 'b'));
+  channel.Sign(1);
+  Fetch();
+  CacheMount mount(env, fs, config, mounter, nullptr);
+  const std::vector<std::string> none;
+  const MountReport boot = mount.Mount({kGroup}, kNow, &none);
+  EXPECT_TRUE(Mounted(boot, "mnu_master"));
+  EXPECT_EQ(TokenOf(boot, "arena"), kNotAskedToken);
+  const auto granted = std::find(mounter.calls.begin(), mounter.calls.end(), "override map:mnu_master");
+  ASSERT_NE(granted, mounter.calls.end());
+  EXPECT_EQ(std::find(mounter.calls.begin(), granted, "set map:mnu_master"), granted) << "granted before its set";
+  EXPECT_TRUE(mounter.Called("set map:mnu_master"));
+  EXPECT_FALSE(mounter.Called("override map:arena"));
+}
+
+// Only a key compiled into the build carries the permission: under a configured official key the entry is not fetched, and a
+// copy fetched earlier is refused at the mount. Either way no set is registered and the game's level loads.
+TEST_F(MapRunTest, AStockOverrideNoCompiledInKeySignedIsNeitherFetchedNorMounted) {
+  TestKey official{1, true, true};
+  TestKey configured{1, true, false};
+  channel.Publish("mnu_master", "1.0.0", MakeSet(2, 'a'));
+  channel.maps["mnu_master"]["overrides"] = true;
+  channel.Sign(1);
+  config.keys = {configured.pin};
+  Fetch();
+  config.keys = {official.pin};
+  EXPECT_EQ(TokenOf(Boot(), "mnu_master"), "not_cached") << "the pass under a configured key fetched nothing";
+  channel.Sign(2);
+  Fetch();
+  config.keys = {configured.pin};
+  mounter.calls.clear();
+  EXPECT_EQ(TokenOf(Boot(), "mnu_master"), kOverrideUnofficialToken);
+  EXPECT_FALSE(mounter.Called("override map:mnu_master"));
+  EXPECT_FALSE(mounter.Called("set map:mnu_master"));
+  ExpectNoLeak();
+}
+
+// The menu can never be lost: a platform that cannot serve the override, or a cached copy no manifest lists any longer (stale),
+// registers no set, so the game's level loads.
+TEST_F(MapRunTest, AStockOverrideThePlatformRefusesOrThatIsStaleMountsNothingAndTheStockLevelLoads) {
+  TestKey official{1, true, true};
+  config.keys = {official.pin};
+  channel.Publish("mnu_master", "1.0.0", MakeSet(2, 'a'));
+  channel.maps["mnu_master"]["overrides"] = true;
+  channel.Sign(1);
+  Fetch();
+  mounter.refuse_overrides = {"map:mnu_master"};
+  EXPECT_EQ(TokenOf(Boot(), "mnu_master"), "override_unsupported");
+  EXPECT_FALSE(mounter.Called("set map:mnu_master"));
+  ExpectNoLeak();
+
+  mounter.refuse_overrides.clear();
+  channel.Publish("mnu_master", "1.1.0", MakeSet(2, 'b'));
+  channel.maps["mnu_master"]["overrides"] = true;
+  channel.Sign(2);
+  env.fail_writes = {std::string(kDir) + "/index.json"};  // the new manifest is stored, the new version is not
+  Fetch();
+  mounter.calls.clear();
+  EXPECT_EQ(TokenOf(Boot(), "mnu_master"), kStaleToken);
+  EXPECT_FALSE(mounter.Called("override map:mnu_master"));
+  EXPECT_FALSE(mounter.Called("set map:mnu_master"));
+}
+
 TEST_F(MapRunTest, TheSummaryListsEveryRefusalAndRefusedGroup) {
   channel.Publish("alpha", "1.0.0", MakeSet(2, 'a'), {{1, "dll"}});
   channel.Publish("beta", "1.0.0", MakeSet(2, 'b'));
@@ -1192,6 +1262,20 @@ TEST_F(MapRunOnDemandTest, OnlyTheNamedMapOfAGroupIsFetched) {
   EXPECT_TRUE(Mounted(boot, "beta"));
   EXPECT_FALSE(Mounted(boot, "alpha"));
   EXPECT_EQ(TokenOf(boot, "alpha"), "not_cached");
+}
+
+// An on-demand pass fetches a stock override unasked: every player loads the level it replaces.
+TEST_F(MapRunOnDemandTest, AnOfficialStockOverrideIsFetchedByAPassThatNamesNoMap) {
+  TestKey official{1, true, true};
+  config.keys = {official.pin};
+  channel.Publish("mpl_lobby_b2", "1.0.0", MakeSet(4, 'a'));
+  channel.maps["mpl_lobby_b2"]["overrides"] = true;
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'b'));
+  channel.Sign(1);
+  const FetchReport fetched = FetchOnDemand({});
+  EXPECT_EQ(fetched.reason, "");
+  EXPECT_EQ(IndexGets("mpl_lobby_b2"), 1u);
+  EXPECT_EQ(IndexGets("alpha"), 0u);
 }
 
 TEST_F(MapRunOnDemandTest, ACachedCurrentMapIsMountedWithNoPieceFetched) {

@@ -227,6 +227,7 @@ struct Listing {
   bool official = false;           // the trust group the manifest verified under (logged)
   bool compiled_official = false;  // verified under a compiled-in key: what -require-signed-plugins accepts (ADR 0048 decision 7)
   bool expired = false;
+  bool overrides = false;  // MapEntry::overrides: honoured only when compiled_official
 };
 
 class MountRun {
@@ -314,6 +315,7 @@ class MountRun {
       l.official = parsed.official;
       l.compiled_official = parsed.compiled_official;
       l.expired = expired;
+      l.overrides = map.overrides;
       listings_[id].push_back(l);
     }
     env_.Event(EventLevel::kInfo, "map_mount_group",
@@ -425,7 +427,9 @@ class MountRun {
     // not stored yet: offline, or the fetch failed) is refused, never mounted in its place; the next fetch stores the listed one.
     const Listing* pinning = Pinning(listings, cached.index_sha256);
     if (pinning == nullptr) return Refuse(id, kStaleToken);
-    if (only_ != nullptr && !Contains(*only_, id)) return Skip(id, kNotAskedToken);
+    if (pinning->overrides && !pinning->compiled_official) return Refuse(id, kOverrideUnofficialToken);
+    // The game loads a stock level with no session asking for it (the menu loads first), so its override is never left for one.
+    if (only_ != nullptr && !Contains(*only_, id) && !pinning->overrides) return Skip(id, kNotAskedToken);
     const Listing selected = *pinning;
     const std::string version_dir = Join(config_.dir, cached.dir);
 
@@ -539,6 +543,14 @@ class MountRun {
       if (!grant.ok) return refuse_scripts(grant.reason);
     }
 
+    if (selected.overrides) {
+      const Grant override_grant = mounter_.StockOverride(owner);
+      if (!override_grant.ok) {
+        mounter_.Withdraw(owner);
+        CloseUngranted(opened);
+        return Refuse(id, override_grant.reason);
+      }
+    }
     const Grant set_grant =
         mounter_.Set(owner, opened[0].handle, owner + "@" + cached.version, set->sha256, set->frames_checked);
     if (!set_grant.ok) {
@@ -1378,7 +1390,12 @@ class FetchRun {
         env_.Event(level, "map_plan", {{"group", group_}, {"id", id}, {"reason", reason}});
       };
       const auto cached = index_.maps.find(key);
-      if (scope_.on_demand && cached == index_.maps.end() && !Contains(scope_.ids, id)) {
+      if (map.overrides && !parsed_.compiled_official) {
+        plan(kOverrideUnofficialToken, EventLevel::kWarn);
+        continue;
+      }
+      // A stock override replaces a level every player loads, so an on-demand pass fetches it unasked.
+      if (scope_.on_demand && cached == index_.maps.end() && !Contains(scope_.ids, id) && !map.overrides) {
         plan("not_needed");
         continue;
       }

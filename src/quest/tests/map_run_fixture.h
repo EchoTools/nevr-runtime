@@ -341,6 +341,7 @@ class FakeMounter : public Mounter {
   std::vector<std::string> calls;
   std::set<std::uint64_t> refuse_scripts;
   std::set<std::string> refuse_sets;    // owners whose Set is refused "collides"
+  std::set<std::string> refuse_overrides;  // owners whose StockOverride is refused "override_unsupported"
   std::map<std::string, Grant> alias;   // owner -> the StageAliases result (default ok)
   std::map<std::string, bool> verified;  // owner -> verified_stamp of its Set
   std::map<std::string, std::string> labels, set_sha;
@@ -374,6 +375,10 @@ class FakeMounter : public Mounter {
                       const std::string&, bool) override {
     calls.push_back("derived " + owner + " " + std::to_string(hash));
     return Take(owner, held, !refuse_scripts.count(hash), "pe_rules");
+  }
+  Grant StockOverride(const std::string& owner) override {
+    calls.push_back("override " + owner);
+    return Ok(!refuse_overrides.count(owner), "override_unsupported");
   }
   void Withdraw(const std::string& owner) override {
     calls.push_back("withdraw " + owner);

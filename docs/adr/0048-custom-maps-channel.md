@@ -216,3 +216,40 @@ makes the join leave ("could not be loaded this run"); the mounted pins name onl
   enumerates.
 - An attacker who can rewrite `%LOCALAPPDATA%\nevr` and restore file stamps can already replace nevr (ADR 0010): not defended.
 - Expiry blocks scripted maps only, so script-free maps keep working offline.
+
+## Amendment proposed: stock overrides
+
+Status: proposed, in its own commit. The maintainer may drop that commit; decisions 5 and 8 above are unchanged until this is
+accepted.
+
+The owner wants to push an update to a stock level, such as `mpl_lobby_b2` or `mnu_master`, and have the client load it over the
+original. Decision 5 ("maps only add resources") and decision 8 ("a map never replaces a stock name") refuse that today, in two
+places: `Registry::Mount` refuses a set holding a key the game has (`stock_key`), and the resolver (`ManagerFor`) answers from the
+game whenever the game holds the key. The proposal changes both decisions for one signed case only:
+
+1. **The permission is signed, per map.** A map entry may carry `"overrides": true`. It is honoured only when the manifest
+   verified under a key compiled into the build (`compiled_official`, decision 7). Under any other key the entry is refused
+   `override_unofficial`: it is never fetched, and a copy fetched earlier is never mounted.
+2. **The override is a shadow layer the stock lookup consults first.** The channel grants the map a stock override
+   (`Mounter::StockOverride`) before its set. The registry then lets that set hold keys the game has, but never a key another set
+   of the run serves, so two mounts still never answer one key. The resolver serves an override's keys before the game's copy.
+   Every other set still yields to the game.
+3. **When it takes effect.** A mounted set is never replaced in the process, so:
+   - `mnu_master` takes effect at the next start. The boot mount runs before the first level load, and the level stays loaded.
+   - `mpl_lobby_b2` takes effect the next time the lobby loads, when the override was fetched this run and mounted by a later
+     mount. An update to an override that is already mounted takes effect at the next start (`mounted_other_version`).
+   - An on-demand pass fetches an official override unasked, and a mount on demand mounts it unasked, because every player loads
+     the level it replaces.
+4. **Never a stale copy; the stock level is the fallback.** A cached override that no verified manifest lists is refused `stale`.
+   Any refusal (`override_unofficial`, `override_unsupported`, `stale`, a failed fetch, a `stock_key` clash) registers no set, so
+   the game's own level loads. The menu can never be lost.
+5. **Version agreement.** The session pin (decision 9) is keyed by level, so a server that mounted the `mpl_lobby_b2` override
+   pins it, and a client at another version is handled as for any map. The gap: a server without the override writes no pin. A
+   client that holds the override then sees `kUnpinned` and plays its own copy. It cannot fall back to stock mid-run, because a
+   mounted set is never replaced. This is left open: closing it needs a pin for "stock" that servers write.
+6. **Platforms.** The PC serves overrides. The Quest mounter does not implement `StockOverride`, so the Quest refuses an override
+   `override_unsupported` and loads stock. The Quest still fetches the entry when its manifest lists a Quest platform; publish
+   overrides for the PC platform only until the Quest serves them.
+
+Not verified in game: what the engine does when one level key is held twice (stock package and shadow), on load, unload and
+reload of the lobby, and with the menu at boot.

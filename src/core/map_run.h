@@ -70,6 +70,13 @@ class Mounter {
   virtual Grant DerivedScript(const std::string& owner, std::uint64_t hash, std::int64_t held,
                               const std::string& sha256, const std::string& stock_sha256, bool official) = 0;
   virtual void Withdraw(const std::string& owner) = 0;  // undo every grant of `owner`
+  // Before its Set: the map's set may hold keys the game has and is served before them (a signed stock override). A platform
+  // that cannot serve one refuses, the map is not mounted, and the game's level loads.
+  virtual Grant StockOverride(const std::string& /*owner*/) {
+    Grant grant;
+    grant.reason = "override_unsupported";
+    return grant;
+  }
 };
 
 // ADR 0048 decision 5, on both platforms: a map whose aliases are not all staged keeps nothing it registered (set, scripts,
@@ -127,6 +134,8 @@ inline constexpr const char* kStaleToken = "stale";
 inline constexpr const char* kMountedOtherVersionToken = "mounted_other_version";
 // The skip token of a cached, current map no session has asked for yet (ChannelConfig::mount_on_demand).
 inline constexpr const char* kNotAskedToken = "not_asked";
+// The refusal token of a stock override (MapEntry::overrides) whose manifest no compiled-in key verified: the game's level loads.
+inline constexpr const char* kOverrideUnofficialToken = "override_unofficial";
 
 struct MountedMap {
   std::string id, version, index_sha256, platform, source_sha256, title, group;
