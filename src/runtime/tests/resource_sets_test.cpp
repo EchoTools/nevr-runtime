@@ -343,8 +343,18 @@ TEST(MapFileSetRegistry, TheOldRefusalsKeepTheirNames) {
   EXPECT_EQ(static_cast<int>(Refusal::kHash), static_cast<int>(Refusal::kFrameSize) + 1) << "appended";
 }
 
-TEST_F(MapFileSetTest, ARegistrationAfterTheMountIsTooLateAndTheCallerKeepsTheFile) {
-  Mount();  // nothing held: registration ends at once
+// Hot load: after the boot mount a map's set is held for the next later mount, so it is not too late.
+TEST_F(MapFileSetTest, ARegistrationAfterTheMountIsHeldForTheLaterMount) {
+  Mount();  // nothing held
+  ASSERT_TRUE(Register(Held(MapLevel().Build())).ok());
+  EXPECT_FALSE(LevelMounted(kMapLevel)) << "not served before the later mount";
+}
+
+// A run whose sets were never mounted (no resolver hook) has no later mount: a registration after it is too late.
+TEST_F(MapFileSetTest, ARegistrationAfterAnAbandonedMountIsTooLateAndTheCallerKeepsTheFile) {
+  sets::SetNoResolverHookForTest(true);
+  ASSERT_TRUE(Register(Held(MapLevel(kMapLevel + 1).Build()), "map:first", "map:first@1").ok());
+  Mount();
   const std::int64_t file = Held(MapLevel().Build());
   const Outcome outcome = Register(file);
   EXPECT_EQ(outcome.refusal, Refusal::kTooLate);

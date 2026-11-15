@@ -1000,8 +1000,17 @@ void ResetForTest() {
   std::lock_guard<std::mutex> lock(g_mutex);
   std::vector<std::int64_t> handles;
   for (const Set* set : g_registry.HeldSets()) handles.push_back(set->handle);
-  CloseHandles(handles);  // the files the registry holds; the callers closed the refused and dropped sets' files
+  if (g_laterPending) {
+    for (const Set* set : g_laterPending->HeldSets()) handles.push_back(set->handle);
+  }
+  for (const std::unique_ptr<Registry>& later : g_later) {
+    for (const Set* set : later->HeldSets()) handles.push_back(set->handle);
+  }
+  CloseHandles(handles);  // the files the registries hold; the callers closed the refused and dropped sets' files
   g_registry = Registry();
+  g_laterPending.reset();
+  g_later.clear();
+  g_abandoned = false;
   g_published.store(nullptr);
   g_mountDeferred.store(false);
   g_deferSaid = false;
