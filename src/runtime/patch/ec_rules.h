@@ -4,7 +4,8 @@
 // hide (its decision, the selection settle and its write). The hooks that feed it are runtime/combat/veilnet.cpp on PC (Hooked_recvfrom,
 // Hooked_sendto, Handle's client branch, Tick's use watcher, PickServer, SawLog, TacModsGuarded) and quest/combat/ec.cpp on Quest (the
 // recvfrom / sendto / WriteLogV handlers, Step); each keeps its own sockets, locks, clock, reads of the game, hooks and log lines. Not here:
-// PC's server half and its match-control branches ('L', 'R', 'G'), PC's LOADOUTS CLASSIC cap and StationView (which run between the
+// PC's server half and the match-control branches ('L', 'R', 'G': their word and a client's mailbox writes are
+// runtime/combat/match_control_rules.h, which both builds call), PC's LOADOUTS CLASSIC cap and StationView (which run between the
 // decision and the write), the Quest's gear gate, its words and its page layout past the EC rules' own words. The PC GTest
 // (runtime/tests/test_ec_rules.cpp) and the Quest host test (quest/tests/ec_test.cpp) both compile this one definition.
 //

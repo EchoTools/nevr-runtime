@@ -16,6 +16,10 @@
 //  +0x2E         PAUSE shown (u8: 0 off, 1 paused, 2 the 5 s resume countdown; VeilNet writes, on server and client)
 //  +0x2F         match live (u8: 1 once the spawn orbs read a set spawn_access other than pre_match; the orb hook
 //                writes, VeilNet reads for TEAM READY -> PAUSE)
+// The bytes a client takes from the server's 'G' word (runtime/combat/match_control_rules.h Apply): +0x11 LOADOUTS, +0x2C
+// SERIES-10 ONLY, +0x2D POINT RATE, +0x2E PAUSE, +0x30 payload map, +0x31 PAYLOAD SPEED, +0x32 checkpoint used, +0x33 driving to
+// the checkpoint, +0x34 PAUSE queued; and T at +0x08 from its 'R'. The mailbox is kMailboxSize bytes: the EC page's veil use
+// counter follows it (runtime/patch/ec_rules.h kVeilUse, page +0xF00 = mailbox +0x40).
 // Every byte field is written and read whole by one store or load, as VeilNet's code does; the two scores are floats,
 // each one aligned 4-byte store or load.
 
@@ -24,6 +28,7 @@
 namespace nevr_combat::rules {
 
 inline constexpr std::uintptr_t kMailboxRva = 0x2104ec0;
+inline constexpr std::uint32_t kMailboxSize = 0x40;
 inline constexpr std::uint32_t kBlueStartScore = 0x00;
 inline constexpr std::uint32_t kOrangeStartScore = 0x04;
 inline constexpr std::uint32_t kRoundTotal = 0x08;
@@ -38,6 +43,9 @@ inline constexpr std::uint32_t kClassicShown = 0x11;
 inline constexpr std::uint32_t kChassisShown = 0x2C;
 inline constexpr std::uint32_t kPspeedShown = 0x31;
 inline constexpr std::uint32_t kPauseQueuedShown = 0x34;
+inline constexpr std::uint32_t kPayloadMap = 0x30;
+inline constexpr std::uint32_t kCheckpointShown = 0x32;
+inline constexpr std::uint32_t kSkipShown = 0x33;
 inline constexpr std::uint8_t kLoadoutAll = 0;
 inline constexpr std::uint8_t kRateDefault = 4;
 

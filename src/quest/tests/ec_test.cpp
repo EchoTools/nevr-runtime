@@ -721,7 +721,8 @@ static void WrapperTests() {
   g_in.push_back(Plain(16));
   fl = sizeof from;
   CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 16, "a 16-byte foreign datagram swallowed");
-  // #2358: both magics and a type the wire does not carry is the game's; a PC server's match control ('G') is ours, taken out, nothing done
+  // #2358: both magics and a type the wire does not carry is the game's; a PC server's match control ('G') is ours and taken out; from a
+  // sender that is not the picked server (none is picked here) it writes nothing (#2242, MatchControlTests)
   g_in.clear();
   g_in_next = 0;
   g_recv_calls = 0;
@@ -737,6 +738,7 @@ static void WrapperTests() {
   CHECK(GameRecv(7, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 31 && g_recv_calls == 2 && StatsNow().consumed == 1 &&
             StatsNow().tokens == 0,
         "a G from a PC server reached the game: calls %d", g_recv_calls);
+  CHECK(!HasLine("\"event\":\"combat_ec_rules\""), "a G from no picked server was applied");
   ResetAll();
   InstallOk();
   // ours: a first-time T is consumed; the real recvfrom is called again and the NEXT datagram is returned
@@ -1778,6 +1780,124 @@ static void OneLookTests() {
         "the scope line does not name the look that decided (a second read named another look)");
 }
 
+// ---- #2242: the server's match control into the RULES mailbox ----
+// Where the scripts look and the bytes a client writes, stated here (echovr.exe RVA 0x2104ec0 = page +0xec0; veilnet.cpp's 'G' branch),
+// so a moved offset in a header fails here.
+constexpr std::uint32_t kMailboxAt = 0xec0;
+constexpr std::uint32_t kLoadoutsAt = 0x11, kChassisAt = 0x2C, kRateAt = 0x2D, kPauseAt = 0x2E, kPayloadMapAt = 0x30, kSpeedAt = 0x31,
+                        kRoundTotalAt = 0x08;
+// LOADOUTS NEW (2), PAUSE on (1 << 3), POINT RATE 6 quarters (6 << 8), PAYLOAD SPEED 3 quarters (3 << 16)
+constexpr std::uint32_t kRulesWord = 0x2u | 0x8u | 0x600u | 0x30000u;
+constexpr std::uint8_t kLoadoutNew = 2, kPauseOn = 1, kRate6 = 6, kSpeed3 = 3;
+constexpr std::uint32_t kOtherAddr = 0x0a000002;
+constexpr float kTwoMinutesFive = 125.0f;  // POINT UNLOCK 2 min, CAPTURE TIME 5 s
+constexpr std::uint32_t kFission = 2, kNoMap = 9;
+constexpr int kGameFd = 7;
+constexpr std::uint64_t kScopeStepMs = 300;  // past the ec thread's 250 ms between looks
+constexpr std::size_t kBufBytes = 256;
+constexpr std::size_t kNextBytes = 32;  // the plain datagram queued after each one: its length says the game got it, not ours
+
+static uint8_t* MailboxByte(std::uint32_t at) { return EcPage() + kMailboxAt + at; }
+static int CountLines(const char* needle) {
+  int n = 0;
+  for (const auto& l : g_lines) n += l.text.find(needle) != std::string::npos ? 1 : 0;
+  return n;
+}
+// One datagram through the game's recvfrom; true when it was taken out (the next one, a plain datagram, is what the game got).
+static bool Deliver(const Dgram& d) {
+  g_in.clear();
+  g_in_next = 0;
+  g_in.push_back(d);
+  g_in.push_back(Plain(kNextBytes));
+  uint8_t buf[kBufBytes];
+  sockaddr_in from{};
+  socklen_t fl = sizeof from;
+  return GameRecv(kGameFd, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == static_cast<ssize_t>(kNextBytes);
+}
+static uint32_t BitsOf(float f) {
+  uint32_t u = 0;
+  std::memcpy(&u, &f, sizeof u);
+  return u;
+}
+
+static void MatchControlTests() {
+  CHECK(kRulesMailbox == kMailboxAt, "the mailbox is not at page +0xec0: +%x", kRulesMailbox);
+  ResetAll();
+  InstallOk();
+  ServerStates(true);
+  GameTalks(kGameFd);
+  Step(g_now100);
+  // a 'G' from the server: the shown bytes, one record
+  CHECK(Deliver(Veil('G', kRulesWord)), "a G from the server was not taken out");
+  CHECK(*MailboxByte(kLoadoutsAt) == kLoadoutNew && *MailboxByte(kPauseAt) == kPauseOn && *MailboxByte(kRateAt) == kRate6 &&
+            *MailboxByte(kSpeedAt) == kSpeed3 && *MailboxByte(kPayloadMapAt) == 0 && *MailboxByte(kChassisAt) == 0,
+        "the G did not reach the mailbox: loadouts %u pause %u rate %u speed %u", *MailboxByte(kLoadoutsAt), *MailboxByte(kPauseAt),
+        *MailboxByte(kRateAt), *MailboxByte(kSpeedAt));
+  CHECK(CountLines("\"event\":\"combat_ec_rules\"") == 1 && HasLine("\"changed\":\"rate payload pause loadout\"", 1) &&
+            HasLine("\"loadouts\":\"NEW\"") && HasLine("\"pause\":\"on\""),
+        "no one Info rules record naming the change");
+  // the same word every 2 s: nothing changes, no record
+  CHECK(Deliver(Veil('G', kRulesWord)), "a repeated G was not taken out");
+  CHECK(CountLines("\"event\":\"combat_ec_rules\"") == 1, "a repeated G wrote a record");
+  // a 'G' from another sender: taken out, nothing written
+  CHECK(Deliver(Veil('G', 0, kOtherAddr)) && *MailboxByte(kPauseAt) == kPauseOn, "a G from another sender reached the mailbox");
+  // a 'G' from the server on another port is not the server's
+  CHECK(Deliver(Veil('G', 0, Server(), SPort() + 1)) && *MailboxByte(kPauseAt) == kPauseOn, "a G from another port reached the mailbox");
+  // 'R': T into +0x08, one record with its two rows
+  CHECK(Deliver(Veil('R', BitsOf(kTwoMinutesFive))), "an R was not taken out");
+  float t = 0;
+  std::memcpy(&t, MailboxByte(kRoundTotalAt), sizeof t);
+  CHECK(t == kTwoMinutesFive, "T not in the mailbox: %f", static_cast<double>(t));
+  CHECK(HasLine("\"event\":\"combat_ec_round_time\"") && HasLine("\"point_unlock_min\":2") && HasLine("\"capture_time_s\":5"),
+        "no round time record");
+  CHECK(Deliver(Veil('R', BitsOf(kTwoMinutesFive))) && CountLines("combat_ec_round_time") == 1, "a repeated R wrote a record");
+  // 'L': one record per change of map; an index past the four is nothing
+  CHECK(Deliver(Veil('L', kFission)) && HasLine("\"map\":\"FISSION\""), "no map record");
+  CHECK(Deliver(Veil('L', kFission)) && CountLines("combat_ec_map") == 1, "a repeated L wrote a record");
+  CHECK(Deliver(Veil('L', kNoMap)) && CountLines("combat_ec_map") == 1, "an L past the four maps wrote a record");
+  // the game stops sending to the server: its 'G' is no longer the current server's
+  AdvanceMs(::nevr_combat::gate::kDestQuietMs + 1);
+  CHECK(Deliver(Veil('G', 0)) && *MailboxByte(kPauseAt) == kPauseOn, "a G from a server the game has left reached the mailbox");
+  // a server that does not state EchoCombat: the G bytes back to zero, T kept, one record
+  GameTalks(kGameFd);
+  ServerStates(false);
+  Step(g_now100);
+  CHECK(*MailboxByte(kLoadoutsAt) == 0 && *MailboxByte(kPauseAt) == 0 && *MailboxByte(kRateAt) == 0 && *MailboxByte(kSpeedAt) == 0,
+        "the server's RULES stayed on a server that does not state EchoCombat");
+  std::memcpy(&t, MailboxByte(kRoundTotalAt), sizeof t);
+  CHECK(t == kTwoMinutesFive, "T was cleared with the G bytes");
+  CHECK(HasLine("\"changed\":\"cleared\"", 1), "no record for the clear");
+  const int cleared = CountLines("\"changed\":\"cleared\"");
+  Step(g_now100);
+  CHECK(CountLines("\"changed\":\"cleared\"") == cleared, "the clear wrote a record on a step that changed nothing");
+  // out of scope a 'G' is the game's and the mailbox is not touched
+  ResetAll();
+  InstallOk();
+  ServerStates(true);
+  GameTalks(kGameFd);
+  Step(g_now100);
+  ForceScopeForTest(0);
+  RefreshScope(static_cast<std::uint64_t>(ScopeClock()));
+  CHECK(!Deliver(Veil('G', kRulesWord)) && *MailboxByte(kPauseAt) == 0, "a G out of scope was taken out or applied");
+  // the switch ends when the client is on another level (PC: ApplyMapSwitch clears g_map_target): the same 'L' then is recorded again
+  ResetAll();
+  ForceScopeForTest(-1);
+  InstallOk();
+  LoadLevels({"mpl_combat_dyson"});
+  AdvanceMs(kScopeStepMs);
+  CHECK(LookAndAsk(), "a combat map is not in scope");
+  GameTalks(kGameFd);
+  ServerStates(true);
+  Step(g_now100);
+  CHECK(Deliver(Veil('L', kFission)) && CountLines("combat_ec_map") == 1, "no map record on dyson");
+  CHECK(Deliver(Veil('L', kFission)) && CountLines("combat_ec_map") == 1, "a repeated L on the same level wrote a record");
+  LoadLevels({"mpl_combat_fission"});
+  AdvanceMs(kScopeStepMs);
+  CHECK(LookAndAsk(), "the new combat map is not in scope");
+  GameTalks(kGameFd);
+  CHECK(Deliver(Veil('L', kFission)) && CountLines("combat_ec_map") == 2, "the L after the level changed wrote no record: the switch never ended");
+}
+
 static void PageTests() {
   ResetAll();
   uint8_t* p = EcPage();
@@ -1813,6 +1933,7 @@ int main() {
   ArenaTests();
   OneLookTests();
   PageTests();
+  MatchControlTests();
   sentinel::SetLogSink(nullptr);
   if (g_fail == 0) std::printf("ec_test: all checks passed\n");
   return g_fail == 0 ? 0 : 1;

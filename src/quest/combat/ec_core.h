@@ -23,6 +23,7 @@
 #include <cstring>
 
 #include "quest/combat/safe_read.h"
+#include "runtime/combat/rules_state.h"
 #include "runtime/patch/ec_rules.h"
 
 namespace nevr_quest::combat::ec::core {
@@ -60,6 +61,19 @@ constexpr std::uint64_t kDroneSpawnEntry = 0xb8d0;  // re33_ecent_221a0a_13720
 constexpr std::uint64_t kDroneSoundEntry = 0xbb14;  // re33_ecent_221a0a_13920
 // the EQUIP block's +10 u32 = guarded nodes skipped (+14 is the server flag, never set by a client)
 constexpr std::uint32_t kEquipSkips = 0xe90;
+// The RULES mailbox (#2242): echovr.exe RVA rules::kMailboxRva, so page +0xec0, with PC's layout (runtime/combat/rules_state.h, the one
+// definition). Why a script would find it there (an inference from the address arithmetic, not a measured access): the reference build's
+// lift of lib4b65d1b009973281.so (kotorvr/echoquest-combat c5a67e8, wave 2; the lift's sha256 3d887c46..., not the store file) translates
+// an echovr.exe address as `re33_ec_page - 0x2104000` (execute_node_52a8d314: 0x2793c `mov x10, #0xffffffffffffc000`, 0x27948
+// `movk x10, #0xfdef, lsl #16`, 0x27954 `add x9, x9, x10`) and accepts it only inside [page + 0xc00, page + 0x1000) (0x27944, 0x27960),
+// so RVA 0x2104ec0 maps to page +0xec0 and the whole mailbox lies in the window. No wave-2 lift reads [page + 0xec0, page + 0xf00) today:
+// the readers come with the script work (KNOWN-WRONG #2242). The ec client writes the fields a PC client writes from the server's 'G' and
+// 'R' (runtime/combat/match_control_rules.h). Not written on the Quest (KNOWN-WRONG #2242): the RULES page's text pointer at +0x24, and
+// PAUSE allowed at +0x35, which a PC client derives from the match-live byte +0x2F that the orb script hook writes.
+constexpr std::uint32_t kRulesMailbox = static_cast<std::uint32_t>(::nevr_combat::rules::kMailboxRva) - ::nevr_ec::kPageRva;
+static_assert(kRulesMailbox + ::nevr_combat::rules::kMailboxSize <= ::nevr_ec::kVeilUse, "the mailbox ends where the veil counter starts");
+static_assert(kRulesMailbox >= kEquipSkips + sizeof(std::uint64_t), "the mailbox starts past the EQUIP block's words");
+static_assert(kRulesMailbox >= ::nevr_ec::kEquipReruns + sizeof(std::uint32_t), "the mailbox starts past the controller's re-run counter");
 
 // The words of the switch file (one line, space separated). A whole word: preceded by start / space, followed by end / space / EOL.
 inline bool WholeWord(const char* words, const char* word) {

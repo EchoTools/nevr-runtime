@@ -92,8 +92,20 @@ first. The platform library's slot may hold its own WriteLogV or libr15's (which
   network's and is not handed to the game: recvfrom is called again with the same arguments (a non-blocking socket gives the game the next
   datagram or EAGAIN). One call swallows at most 256 in a row. 'K', 'M' and the carried types come from any sender, de-duplicated by id
   (a ring of 32, which an 'M' takes a slot of, as on PC); 'A' (a server of an older build answering the hello) and a first-time 'M' are
-  counted and open nothing; C L R G are taken out and ignored. These rules are `src/runtime/patch/ec_rules.h`, which PC's
+  counted and open nothing; C L R G are taken out. These rules are `src/runtime/patch/ec_rules.h`, which PC's
   `src/runtime/combat/veilnet.cpp` follows too.
+- **Match control** (#2242): a 'G', 'R' or 'L' from the current server (the picked one, while the game still sends to it, at its address and
+  port; from any other sender it does nothing) goes through `src/runtime/combat/match_control_rules.h`, which PC's client branch calls too.
+  'G' writes the RULES mailbox's shown bytes (page +0xec0, the layout `src/runtime/combat/rules_state.h`: LOADOUTS +0x11, SERIES-10 ONLY
+  +0x2C, POINT RATE +0x2D, PAUSE +0x2E, the payload map, PAYLOAD SPEED, the checkpoint and its two progress bytes +0x30 to +0x34), 'R' writes
+  T at +0x08, 'L' is recorded only. The step puts the 'G' bytes back to zero while the server does not state EchoCombat. One record per
+  change: `combat_ec_rules` (`changed`, and the rules), `combat_ec_round_time`, `combat_ec_map`; the map record again once the client is on
+  another level. A script would find the mailbox there by inference from the address arithmetic: the reference build's lifted libraries
+  translate an echovr.exe address as `re33_ec_page - 0x2104000` and accept only [page + 0xc00, page + 0x1000), so RVA 0x2104ec0 maps to
+  page +0xec0. No wave-2 lift reads [page + 0xec0, page + 0xf00) today; the readers come with the script work. Not on the Quest
+  (KNOWN-WRONG #2242): the script hooks that read the mailbox on PC (clock and orb pause, the capture point's rules), the RULES page's
+  text pointer at +0x24, and PAUSE allowed at +0x35, which a PC client derives from the match-live byte +0x2F that the orb script hook
+  writes.
 - **The server's statement** (#2333): `CR15NetGame::LobbySettingsCB(SMsg)` (its GLOB_DAT word, which `BeginMultiplayer` registers) reads the
   `nevr_server` key of the lobby settings the server gives its clients (`src/runtime/compat/server_features.h`). A server that states
   `echocombat` opens the gate the tac-mod hide follows; any other document, or none, keeps it closed. A session in another lobby clears it

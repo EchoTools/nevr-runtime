@@ -21,6 +21,7 @@
 #include "quest/sentinel/ec_page.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
+#include "runtime/combat/match_control_rules.h"  // the server's 'G' word, a client's 'G' / 'R' mailbox writes, the maps (#2242)
 #include "runtime/combat/veilnet_gate.h"  // the decisions PC and Quest share: Recent, SendAllowed, HelloTries, ServerKey, PickFromSlot (#2242)
 #include "runtime/compat/server_features.h"
 
@@ -67,7 +68,8 @@ State g_st;  // under g_mu
 // server is the server only while the game still sends to it.
 ::nevr_combat::gate::SentTo<int> g_sentTo;  // under g_mu
 std::atomic<std::uint64_t> g_sends{0}, g_passed{0}, g_consumed{0}, g_capped{0};
-std::atomic<int> g_killLines{0}, g_tokenLines{0}, g_selLines{0};
+std::atomic<int> g_killLines{0}, g_tokenLines{0}, g_selLines{0}, g_rulesLines{0};
+std::atomic<std::uint32_t> g_mapTarget{0};  // #2242: the map index + 1 the server last said it switches to ('L'; 0 none)
 std::atomic<DroneKilledFn> g_droneKilled{nullptr};
 constexpr int kNetTicks = 4;
 std::atomic<NetTickFn> g_netTick[kNetTicks] = {};
@@ -90,6 +92,7 @@ std::atomic<bool> g_inScope{false};
 std::atomic<int> g_forceScope{-1};
 std::uint64_t g_nextScopeMs = 0;  // the ec thread only (and tests)
 scope::LookClass g_lastClass = scope::LookClass::kNoLook;
+std::uint64_t g_lastLevel = 0;  // #2242: the level of the last look; another one ends a map switch (g_mapTarget)
 bool g_scopeLogged = false;
 
 std::atomic<sentinel::ImageLookup> g_lookup{nullptr};
@@ -161,6 +164,57 @@ void LogToken(std::uint8_t type, std::uint32_t id, std::uint64_t tokens) noexcep
   sentinel::LogFields(LogLevel::kInfo, "combat_ec_token", {{"type", t}, {"id", sentinel::HexString(idText, id)}, {"tokens", tokens}});
 }
 
+// ---- the server's match control (#2242, PC: veilnet.cpp Handle's 'L', 'R' and 'G' client branches) ----
+namespace mc = ::nevr_combat::match_control;
+
+bool IsMatchControl(std::uint8_t type) noexcept { return type == 'G' || type == 'R' || type == 'L'; }
+
+// Under g_mu: the datagram is from the current server, as PC's ServerDest + Same reads it (the picked server, while the game still
+// sends to it, at the same address and port).
+bool FromServerLocked(const sockaddr_in& from, std::uint64_t now100) noexcept {
+  Dest d{};
+  return g_st.Server(&d) && g_sentTo.SentRecently(d, now100 / kMsIn100ns) && d.addr == from.sin_addr.s_addr && d.port == from.sin_port;
+}
+
+constexpr std::size_t kChangedText = 48;  // room for "rate payload pause loadout chassis " (35 bytes) and its NUL
+
+bool RulesLine() noexcept { return g_rulesLines.fetch_add(1, std::memory_order_relaxed) < kLineCap; }
+
+// The RULES mailbox on the EC page (ec_core.h kRulesMailbox).
+std::uint8_t* Mailbox() noexcept { return sentinel::EcPage() + kRulesMailbox; }
+
+// A 'G', 'R' or 'L' from the current server: the mailbox writes are the shared header's, one record per change.
+void ServerRules(const Packet& p) noexcept {
+  if (p.type == 'G') {
+    const mc::Applied a = mc::Apply(Mailbox(), p.id);
+    if (!a.Any() || !RulesLine()) return;
+    const mc::RulesWord w = mc::Decode(p.id);
+    char changed[kChangedText];
+    std::snprintf(changed, sizeof changed, "%s%s%s%s%s", a.rate ? "rate " : "", a.payload ? "payload " : "", a.pause ? "pause " : "",
+                  a.loadout ? "loadout " : "", a.chassis ? "chassis " : "");
+    const std::size_t n = std::strlen(changed);
+    if (n > 0) changed[n - 1] = 0;
+    sentinel::LogFields(LogLevel::kInfo, "combat_ec_rules",
+                        {{"changed", changed}, {"loadouts", mc::LoadoutName(w.loadout)}, {"series10_only", w.chassis ? "true" : "false"},
+                         {"pause", mc::PauseName(w.paused)}, {"point_rate_quarters", w.pointRate}, {"payload_map", w.payloadMap ? "true" : "false"},
+                         {"payload_speed_quarters", w.payloadSpeed}, {"checkpoint_used", w.checkpoint},
+                         {"msg", "ec: the server's RULES are in the mailbox (page +0xec0) for the EC scripts to read"}});
+  } else if (p.type == 'R') {
+    if (!mc::ApplyRoundTotal(Mailbox(), p.id) || !RulesLine()) return;
+    const mc::RoundParts t = mc::Parts(p.id);
+    sentinel::LogFields(LogLevel::kInfo, "combat_ec_round_time",
+                        {{"point_unlock_min", t.unlockMinutes}, {"capture_time_s", t.captureSeconds},
+                         {"msg", "ec: the server's POINT UNLOCK and CAPTURE TIME are in the mailbox (+0x08) for the capture point script"}});
+  } else if (p.type == 'L') {
+    if (!mc::MapIndexValid(p.id)) return;
+    const std::uint32_t target = p.id + 1;
+    if (g_mapTarget.exchange(target, std::memory_order_relaxed) == target || !RulesLine()) return;
+    sentinel::LogFields(LogLevel::kInfo, "combat_ec_map",
+                        {{"map", mc::kMapNames[p.id]},
+                         {"msg", "ec: the server switches the map: recorded only, this client follows the server's own level change"}});
+  }
+}
+
 // The real recvfrom; a datagram the shared rules take out (ec_rules.h TakeOut: exactly 16 bytes with both magics and a known type, not
 // peeked, into a buffer that holds it, at most kMaxConsumePerCall in one call) is ours and is NOT returned: the real recvfrom is called
 // again with the same arguments (a non-blocking socket gives the game the next datagram or EAGAIN, a blocking one waits as the game's own
@@ -202,13 +256,16 @@ __attribute__((noinline)) ssize_t RecvInScope(RecvThunk::Fn real, int fd, void* 
     if (*fl >= sizeof(sockaddr_in) && f->sa_family == AF_INET) {
       std::uint32_t killed;
       std::uint64_t tokensBefore, tokensAfter;
+      bool fromServer = false;
       {
         LockG l;
         tokensBefore = g_st.tokens;
         const std::uint64_t now = Now100();
         killed = g_st.Handle(sentinel::EcPage(), p, now);
         tokensAfter = g_st.tokens;
+        if (IsMatchControl(p.type)) fromServer = FromServerLocked(*reinterpret_cast<const sockaddr_in*>(f), now);
       }
+      if (fromServer) ServerRules(p);  // #2242: the server's match control, outside the lock
       if (killed != 0) {  // outside the lock: the handler is another module's
         const DroneKilledFn handler = g_droneKilled.load(std::memory_order_acquire);
         if (handler != nullptr) handler(killed - 1);
@@ -544,6 +601,12 @@ bool RefreshScope(std::uint64_t nowMs) noexcept {
   const bool in = forced >= 0 ? forced != 0 : scope::InCombatOrLobby(look);
   const scope::LookClass cls = forced >= 0 ? (in ? scope::LookClass::kCombatOrLobby : scope::LookClass::kOther) : scope::ClassOf(look);
   const bool was = g_inScope.exchange(in, std::memory_order_acq_rel);
+  // #2242 (PC: veilnet.cpp ApplyMapSwitch clears g_map_target when the switch ends): the client on another level, or out of scope, ends
+  // the switch the server announced, so a later 'L' to the same map is recorded again
+  if (look.level != g_lastLevel || !in) {
+    g_lastLevel = look.level;
+    g_mapTarget.store(0, std::memory_order_relaxed);
+  }
   if (in != was || cls != g_lastClass || !g_scopeLogged) {
     g_scopeLogged = true;
     g_lastClass = cls;
@@ -831,6 +894,12 @@ void Step(std::uint64_t now100) noexcept {
     L.pageAns = ans;
     Store32(page + kQuestEcServer, ans ? 1 : 0);
   }
+  // #2242 (PC: veilnet.cpp UpdateGearLists): a server that does not state EchoCombat has no RULES: the 'G' bytes back to ALL, off, not set
+  if (!ans && mc::ClearServerRules(page + kRulesMailbox) && RulesLine()) {
+    sentinel::LogFields(LogLevel::kInfo, "combat_ec_rules",
+                        {{"changed", "cleared"},
+                         {"msg", "ec: the server does not state EchoCombat: the mailbox's RULES are back to ALL, off and not set"}});
+  }
   if (ans != L.answered && StepLine()) {
     L.answered = ans;
     sentinel::LogFields(LogLevel::kInfo, "combat_ec_server_features",
@@ -965,6 +1034,8 @@ void ResetForTest() noexcept {
   g_killLines = 0;
   g_tokenLines = 0;
   g_selLines = 0;
+  g_rulesLines = 0;
+  g_mapTarget = 0;
   g_droneKilled = nullptr;
   for (auto& t : g_netTick) t = nullptr;
   g_gameFd = -1;
@@ -981,6 +1052,7 @@ void ResetForTest() noexcept {
   g_forceScope = -1;
   g_nextScopeMs = 0;
   g_lastClass = scope::LookClass::kNoLook;
+  g_lastLevel = 0;
   g_scopeLogged = false;
   g_lookup = nullptr;
   g_pinsOverride = nullptr;

@@ -70,6 +70,7 @@
 #include "runtime/combat/write_gate.h"  // nEVR port
 #include "runtime/combat/equip_cell.h"  // nEVR port (#600): the cell the script guards read
 #include "runtime/combat/rules_state.h"  // nEVR port (#600): the RULES mailbox fields, in one place
+#include "runtime/combat/match_control_rules.h"  // nEVR port (#2242): the 'G' word, a client's 'G' / 'R' writes, the maps, shared with the Quest
 #include "runtime/combat/match_type.h"  // nEVR port (#2289)
 #include "runtime/combat/payload_speed_rules.h"  // nEVR port (#2242): PAYLOAD SPEED, the payload PAUSE rule, the third row's text
 #include "runtime/combat/veilnet_gate.h"  // nEVR port (#2242): the send gate, the destination recency, the hello tries
@@ -475,13 +476,13 @@ float *g_rules_total = nullptr;
 //: then the RULES page 2 state (tools/fix_rules_pages.py): +10 page shown, +11 LOADOUTS shown (0 ALL, 1 CLASSIC, 2 NEW),
 //: +12 requests, +13 the value asked for.
 constexpr uint32_t RULES_BELOW_PAGE_END = 0x140;
-constexpr uint32_t CLASSIC_SHOWN = 0x11, CLASSIC_REQUESTS = 0x12, CLASSIC_WANT = 0x13;
+constexpr uint32_t CLASSIC_SHOWN = nevr_combat::rules::kClassicShown, CLASSIC_REQUESTS = 0x12, CLASSIC_WANT = 0x13;
 constexpr uint32_t STATION_CELLS = nevr_combat::rules::kStationCells;  // +14..+16: equipment station cells shown per gear type
 constexpr uint64_t CLASSIC_ITEMS = 4;           // each gear list's stock items come first
 uint8_t *g_rules = nullptr;                     // the RULES mailbox
 volatile LONG g_classic = 0;                    // server: LOADOUTS (LOADOUT_*)
 volatile LONG g_chassis = 0;                    // server: SERIES-10 ONLY
-constexpr uint32_t CHASSIS_SHOWN = 0x2C;        // mailbox +2C: SERIES-10 ONLY shown (client)
+constexpr uint32_t CHASSIS_SHOWN = nevr_combat::rules::kChassisShown;   // mailbox +2C: SERIES-10 ONLY shown (client)
 constexpr uint32_t WANT_CHASSIS = 0x80;         // in +13 (the value asked for): a SERIES-10 ONLY ask, bit 0 the value
 //: RULES page 2 row 3, POINT RATE: a multiplier on how fast a held capture point's points rise
 //: (tools/fix_point_rate.py scales the capture-point script's time step by mailbox +2D / 4).
@@ -517,13 +518,14 @@ char g_page_text[4][PAGE_TEXT];
 //: was dropped 2026-11-05: its bytes +32 / +33 and 'G' bits 6 / 24-25 stay unused)
 //: (0..3 at +32; asked as 10h | 1 up / 10h down, sent as 10h | target << 8). +33 = the server is
 //: driving the payload to the chosen checkpoint right now.
-constexpr uint32_t PAYLOAD_MAP = 0x30, PSPEED_SHOWN = 0x31, CHECKPOINT_SHOWN = 0x32, SKIP_SHOWN = 0x33;
+constexpr uint32_t PAYLOAD_MAP = nevr_combat::rules::kPayloadMap, PSPEED_SHOWN = nevr_combat::rules::kPspeedShown,
+                   CHECKPOINT_SHOWN = nevr_combat::rules::kCheckpointShown, SKIP_SHOWN = nevr_combat::rules::kSkipShown;
 constexpr uint32_t WANT_CHECKPOINT = 0x10;
 volatile LONG g_pspeed = 4;                     // server: PAYLOAD SPEED in quarters (4 = x1)
 volatile LONG g_payload_map = 0;                // server: the payload update ran in the last second
 volatile LONG g_skipping = 0;                   // server: driving the payload to the checkpoint
 volatile LONG g_pause_queued = 0;               // server: PAUSE asked, waiting for a checkpoint
-constexpr uint32_t PAUSE_QUEUED_SHOWN = 0x34;   // mailbox +34: that, on clients (TEAM READY label)
+constexpr uint32_t PAUSE_QUEUED_SHOWN = nevr_combat::rules::kPauseQueuedShown;   // mailbox +34: that, on clients (TEAM READY label)
 uint32_t g_payload_flags = 0;                   // server: the payload's flags last seen (2 autodrive)
 volatile ULONGLONG g_payload_seen = 0;         // when the payload update last ran
 volatile LONG g_payload_moved = 0;              // server: it moved since this round's start
@@ -610,12 +612,12 @@ nevr_combat::MatchPrivacy SessionPrivacy() {
 // the owner JSON's level when the server is in game again.
 constexpr uint32_t WANT_MAP = 0x20000000;        // | map index 0..3
 constexpr uint32_t WANT_KIND_MASK = 0xF0000000;  // the top nibble of a 'C' ask names the ask (WANT_MAP)
-constexpr int MAP_COUNT = 4;
+constexpr int MAP_COUNT = nevr_combat::match_control::kMapCount;   // nEVR port (#2242): shared with the Quest
 constexpr uint64_t EVT_MAPSWITCH[MAP_COUNT] = {
     0xc60e17c86d1f3df0ull, 0x63093755a2c24ebeull, 0x3d77042c79604528ull, 0xc60e17cb751921edull};   // mapswitch_<map>
 constexpr uint64_t LEVEL_SYM[MAP_COUNT] = {
     0x43e2da7914642604ull, 0x42670f2bed45703cull, 0xdf5ca7b7dfa383d4ull, 0x43e2da7a0c623a19ull};   // mpl_combat_<map>
-const char *const kMapNames[MAP_COUNT] = {"DYSON", "COMBUSTION", "FISSION", "SURGE"};   // SURGE = mpl_combat_gauss
+const char *const *const kMapNames = nevr_combat::match_control::kMapNames;   // nEVR port (#2242): shared with the Quest
 // The map buttons' button actors (fix_map_terminal.py: symbol64("mapswitch_<map>_0")). Once a
 // switch is under way every client greys them (the podium's own way: evt_btn_disable to the
 // button actor, which its prp_itt_screen_button_logic script handles), so nobody presses again.
@@ -737,13 +739,25 @@ void MapSwitchEvent(uint64_t event) {
 // What the server's 'G' carries: LOADOUTS in bits 0-1, SERIES-10 ONLY in bit 2, PAUSE state in
 // bits 3-4, payload map bit 5, driving to the checkpoint bit 6, POINT RATE (quarters) in bits
 // 8-15, PAYLOAD SPEED (quarters) in bits 16-23.
+// nEVR port (#2242): the word is runtime/combat/match_control_rules.h's, which the Quest's client decodes too.
 uint32_t RulesWord() {
-    return (uint32_t)g_classic | ((uint32_t)g_chassis & 1) << 2 | ((uint32_t)g_paused & 3) << 3 |
-           nevr_combat::payload_speed::PackWord(g_payload_map != 0, (uint8_t)g_pspeed) | ((uint32_t)g_skipping & 1) << 6 |
-           ((uint32_t)g_pause_queued & 1) << 7 | ((uint32_t)g_rate & 0xff) << 8;
+    nevr_combat::match_control::RulesWord r;
+    r.loadout = static_cast<uint8_t>(g_classic);
+    r.chassis = (g_chassis & 1) != 0;
+    r.paused = static_cast<nevr_combat::rules::Pause>(g_paused & nevr_combat::match_control::kPauseMask);
+    r.payloadMap = g_payload_map != 0;
+    r.skipping = (g_skipping & 1) != 0;
+    r.pauseQueued = (g_pause_queued & 1) != 0;
+    r.pointRate = static_cast<uint8_t>(g_rate);
+    r.payloadSpeed = static_cast<uint8_t>(g_pspeed);
+    return nevr_combat::match_control::Pack(r);
 }
-enum : uint32_t { LOADOUT_ALL = 0, LOADOUT_CLASSIC = 1, LOADOUT_NEW = 2 };
-const char *LoadoutName(uint32_t m) { return m == LOADOUT_CLASSIC ? "CLASSIC" : m == LOADOUT_NEW ? "NEW" : "ALL"; }
+enum : uint32_t {
+    LOADOUT_ALL = nevr_combat::match_control::kLoadoutAll,
+    LOADOUT_CLASSIC = nevr_combat::match_control::kLoadoutClassic,
+    LOADOUT_NEW = nevr_combat::match_control::kLoadoutNew
+};
+const char *LoadoutName(uint32_t m) { return nevr_combat::match_control::LoadoutName(m); }
 
 // LOADOUTS in force here: the server's own rule, or on a client what its server said.
 uint32_t LoadoutMode() {
@@ -891,7 +905,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
         }
     } else if (p.type == 'L') {   // nEVR port (#2333): an 'A' is no longer read (the server sends none)
         Dest d;
-        if (ServerDest(d) && Same(d.addr, from) && p.id < (uint32_t)MAP_COUNT && g_map_target != (LONG)p.id + 1) {
+        if (ServerDest(d) && Same(d.addr, from) && nevr_combat::match_control::MapIndexValid(p.id) && g_map_target != (LONG)p.id + 1) {
             g_map_target = (LONG)p.id + 1;
             g_map_target_since = GetTickCount64();
             g_map_grey = 1;
@@ -899,47 +913,26 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
         }
     } else if (p.type == 'R') {
         Dest d;
-        if (g_rules_total && ServerDest(d) && Same(d.addr, from) && *(volatile uint32_t *)g_rules_total != p.id) {
-            *(volatile uint32_t *)g_rules_total = p.id;
-            float t;
-            memcpy(&t, &p.id, 4);
-            Log("RULES from the server: point unlock %d s, capture time %d s", (int)t / 60, (int)t % 60);
+        // nEVR port (#2242): the write is match_control_rules.h's, shared with the Quest (g_rules_total is g_rules + 8)
+        if (g_rules_total && g_rules && ServerDest(d) && Same(d.addr, from) &&
+            nevr_combat::match_control::ApplyRoundTotal(g_rules, p.id)) {
+            const nevr_combat::match_control::RoundParts t = nevr_combat::match_control::Parts(p.id);
+            Log("RULES from the server: point unlock %d min, capture time %d s", t.unlockMinutes, t.captureSeconds);
         }
     } else if (p.type == 'G') {
         Dest d;
-        uint8_t m = (p.id & 3) <= LOADOUT_NEW ? (uint8_t)(p.id & 3) : (uint8_t)LOADOUT_ALL;
-        uint8_t c = (uint8_t)(p.id >> 2 & 1);
-        uint8_t q = (uint8_t)(p.id >> 8);
         if (g_rules && ServerDest(d) && Same(d.addr, from)) {
-            if (g_rules[RATE_SHOWN] != q) {
-                g_rules[RATE_SHOWN] = q;
-                Log("POINT RATE from the server: %d/4", (int)q);
-            }
-            uint8_t pm = nevr_combat::payload_speed::WordMap(p.id) ? 1 : 0, sk = (uint8_t)(p.id >> 6 & 1);
-            uint8_t ps = nevr_combat::payload_speed::WordQuarters(p.id), cp = (uint8_t)(p.id >> 24 & 3);
-            if (g_rules[PAYLOAD_MAP] != pm || g_rules[PSPEED_SHOWN] != ps || g_rules[CHECKPOINT_SHOWN] != cp) {
-                g_rules[PAYLOAD_MAP] = pm;
-                g_rules[PSPEED_SHOWN] = ps;
-                g_rules[CHECKPOINT_SHOWN] = cp;
-                Log("PAYLOAD from the server: %s map, speed %d/4, checkpoint used %d", pm ? "payload" : "other",
-                    (int)ps, (int)cp);
-            }
-            g_rules[SKIP_SHOWN] = sk;
-            g_rules[PAUSE_QUEUED_SHOWN] = (uint8_t)(p.id >> 7 & 1);
-            uint8_t z = (uint8_t)(p.id >> 3 & 3);
-            if (z > PAUSE_RESUMING) z = PAUSE_OFF;
-            if (g_rules[PAUSED_SHOWN] != z) {
-                g_rules[PAUSED_SHOWN] = z;
-                Log("PAUSE from the server: %s", z == PAUSE_ON ? "on" : z == PAUSE_RESUMING ? "resuming" : "off");
-            }
-            if (g_rules[CLASSIC_SHOWN] != m) {
-                g_rules[CLASSIC_SHOWN] = m;
-                Log("LOADOUTS from the server: %s", LoadoutName(m));
-            }
-            if (g_rules[CHASSIS_SHOWN] != c) {
-                g_rules[CHASSIS_SHOWN] = c;
-                Log("SERIES-10 ONLY from the server: %s", c ? "on" : "off");
-            }
+            // nEVR port (#2242): the decode and the mailbox writes are match_control_rules.h's, shared with the Quest
+            namespace mc = nevr_combat::match_control;
+            const mc::Applied a = mc::Apply(g_rules, p.id);
+            const mc::RulesWord w = mc::Decode(p.id);
+            if (a.rate) Log("POINT RATE from the server: %d/4", static_cast<int>(w.pointRate));
+            if (a.payload)
+                Log("PAYLOAD from the server: %s map, speed %d/4, checkpoint used %d", w.payloadMap ? "payload" : "other",
+                    static_cast<int>(w.payloadSpeed), static_cast<int>(w.checkpoint));
+            if (a.pause) Log("PAUSE from the server: %s", mc::PauseName(w.paused));
+            if (a.loadout) Log("LOADOUTS from the server: %s", LoadoutName(w.loadout));
+            if (a.chassis) Log("SERIES-10 ONLY from the server: %s", w.chassis ? "on" : "off");
             PageTexts();
         }
     } else {   // nEVR port (#2358): 'M', 'K' and the carried types through ecr::BasicState::Client, each once per id
@@ -2006,10 +1999,7 @@ void UpdateGearLists() {
     // nEVR port (#2333): the current server states EchoCombat in its lobby settings (server_features.h).
     bool answered = ::nevr_server_features::Client().Current().echoCombat;
     if (g_rules && !answered) {                                  // no EchoCombat server: ALL, off, 1.0x
-        g_rules[CLASSIC_SHOWN] = g_rules[CHASSIS_SHOWN] = 0;
-        g_rules[RATE_SHOWN] = g_rules[PAUSED_SHOWN] = 0;
-        g_rules[PAYLOAD_MAP] = g_rules[PSPEED_SHOWN] = g_rules[CHECKPOINT_SHOWN] = g_rules[SKIP_SHOWN] = 0;
-        g_rules[PAUSE_QUEUED_SHOWN] = 0;
+        nevr_combat::match_control::ClearServerRules(g_rules);   // nEVR port (#2242): shared with the Quest
         PageTexts();
     }
     TacModsFor(answered);

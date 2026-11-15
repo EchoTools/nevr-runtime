@@ -8,8 +8,9 @@
 // FUN_140d84ff0; the name CR15NetPayloadCS::UpdatePreTrackMover is from EchoCombat's notes, agent.md:719 and plugin/veilnet.cpp:2715),
 // `movss [rax+rdx*8], xmm3` followed by `mov r9d, [r14+30h]`, 9 bytes.
 //
-// KNOWN-WRONG #2242: the Quest has none of this. Match control (the RULES page, PAUSE, the server's 'G') is PC only, there is no
-// payload speed hook in src/quest/combat, and a Quest client neither shows the row nor scales the payload.
+// KNOWN-WRONG #2242: the Quest has none of this. Its client takes the server's 'G' into the RULES mailbox (PAYLOAD SPEED at +0x31,
+// PAUSE at +0x2E; match_control_rules.h, quest/combat/ec.cpp), but there is no payload speed hook in src/quest/combat, and a Quest
+// client neither shows the row nor scales the payload.
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>

@@ -54,13 +54,17 @@ func TestVeilnetPayloadSpeedTakesItsDecisionsFromTheHeader(t *testing.T) {
 	}
 	for _, want := range []string{
 		"nevr_combat::payload_speed::RowText(",
-		"nevr_combat::payload_speed::PackWord(",
-		"nevr_combat::payload_speed::WordMap(",
-		"nevr_combat::payload_speed::WordQuarters(",
 		"nevr_combat::payload_speed::PauseWaitsForCheckpoint(",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("veilnet.cpp does not use %q", want)
+		}
+	}
+	// #2242: the 'G' word's payload bits are packed and read through match_control_rules.h, which veilnet.cpp and the Quest call
+	shared := code(t, matchControlRules)
+	for _, want := range []string{"payload_speed::PackWord(", "payload_speed::WordMap(", "payload_speed::WordQuarters("} {
+		if !strings.Contains(shared, want) {
+			t.Errorf("%s does not use %q", matchControlRules, want)
 		}
 	}
 }
