@@ -143,7 +143,7 @@ class Channel {
   // Stops early when keep_going turns false. Empty when the channel does not run or Boot has not run.
   std::vector<nevr_maps::FetchReport> FetchPass(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_maps::Deriver* deriver,
                                                 const std::vector<std::string>& groups, const std::string& now_utc,
-                                                const std::function<bool()>& keep_going);
+                                                const std::function<bool()>& keep_going, bool on_demand = false);
 
   // Mounts the given groups' cached maps now, in this process, through the boot's own CacheMount (one per process, so a map Boot
   // mounted at a version is not granted again). A server mounts the group it fetched this way, at once (ADR 0048 decision 13).

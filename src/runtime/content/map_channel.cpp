@@ -409,8 +409,10 @@ void StartFetchUnguarded() {
       [st](const std::function<bool()>& keep_going) {
         try {
           const Seams seams = RecordedGroupSeams(*st->env, st->channel->config().dir);
+          // On demand: the pass refreshes the maps the cache holds at a version their group no longer lists; a map the player
+          // lacks is fetched when a session asks for it (the request entry below), never because its group lists it.
           st->channel->FetchPass(*st->env, *st->fs, st->deriver.get(), FetchGroups(Ask(seams.recorded_groups)), NowUtc(),
-                                 keep_going);
+                                 keep_going, /*on_demand=*/true);
           // The hot mount: what a request fetched is registered now and mounted on the next frame, beside the earlier sets.
           st->channel->ServeRequests(
               *st->env, *st->fs, st->deriver.get(), *st->requests, [] { return NowUtc(); }, keep_going, nullptr,

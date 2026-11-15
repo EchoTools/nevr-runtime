@@ -342,6 +342,25 @@ TEST_F(MapRequestTest, AMapTheManifestDoesNotListIsRefusedAndNothingIsFetched) {
 }
 
 // A server fetches its whole group whatever is asked; a client only what it names.
+TEST_F(MapRequestTest, AnOnDemandPassUpdatesTheHeldMapAndFetchesNoOtherMapOfTheGroup) {
+  channel.Publish("arena_c", "1.0.0", MakeSet(4, 'c'));
+  channel.Sign(1);
+  BootClient();
+  ASSERT_TRUE(requests->RequestGroup(kGroup, &reason)) << reason;
+  ASSERT_TRUE(requests->RequestMap("arena_c", &reason)) << reason;
+  Serve();
+  ASSERT_EQ(IndexGets("arena_c"), 1u);
+
+  channel.Publish("arena_c", "1.1.0", MakeSet(4, 'd'));
+  channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+  channel.Sign(2);
+  const std::vector<FetchReport> pass = client->FetchPass(env, fs, nullptr, {kGroup}, kNow, keep_going, /*on_demand=*/true);
+  ASSERT_EQ(pass.size(), 1u);
+  EXPECT_NE(pass[0].outcome, FetchOutcome::kFailed);
+  EXPECT_EQ(IndexGets("arena_c"), 1u);  // the held map's new version (IndexSha names the listed one)
+  EXPECT_EQ(IndexGets("beta"), 0u);     // listed, never asked for: not downloaded
+}
+
 TEST_F(MapRequestTest, AServerRequestTakesTheWholeGroup) {
   channel.Publish("arena_c", "1.0.0", MakeSet(4, 'c'));
   channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));

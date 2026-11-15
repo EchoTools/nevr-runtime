@@ -323,10 +323,11 @@ void Channel::ServeRequests(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_maps:
 
 std::vector<nevr_maps::FetchReport> Channel::FetchPass(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_maps::Deriver* deriver,
                                                        const std::vector<std::string>& groups, const std::string& now_utc,
-                                                       const std::function<bool()>& keep_going) {
+                                                       const std::function<bool()>& keep_going, bool on_demand) {
   std::vector<nevr_maps::FetchReport> reports;
   if (start_ != Start::kRun || !booted_) return reports;
   nevr_maps::FetchScope scope;
+  scope.on_demand = on_demand;
   if (mount_) scope.in_use = mount_->MountedIds();
   for (const std::string& group : groups) {
     if (!keep_going()) break;
