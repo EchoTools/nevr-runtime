@@ -299,16 +299,20 @@ class HeldMapFile {
 Outcome RegisterMapFile(const MapFileRequest& request, HeldMapFile& file, const std::function<bool()>& mounted,
                         const std::function<Outcome(const void* view, std::uint64_t size)>& add);
 
-// The mount observer both platforms offer: the map channel's code is told which sets the run's one mount mounted and refused, after
+// The mount observer both platforms offer: the map channel's code is told which sets the run's mount mounted and refused, after
 // Registry::Mount and before the first request is answered from the shadow, with none of the platform's locks held. A run whose
-// registration ends without a mount (the resolver hook missing, a mount that failed) calls it with an empty report. Thread-safe.
+// registration ends without a mount (the resolver hook missing, a mount that failed) calls it with an empty report. A platform that
+// mounts sets fetched later in the run (PC) tells it of each later mount too. Thread-safe.
 class MountObserver {
  public:
   using Fn = void (*)(const MountReport& report);
   void Set(Fn fn) { fn_.store(fn); }
   bool Armed() const { return fn_.load() != nullptr; }
-  // Calls the observer once per run: true when it was called now, false when none is set or it was already called.
+  // The run's mount, abandon or failed mount: calls the observer once per run; true when it was called now, false when none is set
+  // or the run's mount was already reported.
   bool Notify(const MountReport& report);
+  // A later mount: calls the observer every time; false when none is set.
+  bool NotifyLaterMount(const MountReport& report);
   // Test support: no observer, never called.
   void Reset();
 

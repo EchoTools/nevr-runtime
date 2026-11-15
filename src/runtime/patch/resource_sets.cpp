@@ -407,11 +407,15 @@ bool MountedNow() {
   return g_registry.mounted();
 }
 
-// The mount observer, once a run, with no lock of this file held. It is the map channel's code, not a plugin's: a throw from it is
-// logged and the mount goes on.
-void NotifyMountObserver(const MountReport& report) {
+// The mount observer, with no lock of this file held: the run's mount once (boot, abandon or failure), and every later mount. It is
+// the map channel's code, not a plugin's: a throw from it is logged and the mount goes on.
+void NotifyMountObserver(const MountReport& report, bool laterMount = false) {
   try {
-    g_observer.Notify(report);
+    if (laterMount) {
+      g_observer.NotifyLaterMount(report);
+    } else {
+      g_observer.Notify(report);
+    }
   } catch (const std::exception&) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.MAPS] map mount observer threw (the mount goes on: every set it mounted is served)");
@@ -844,11 +848,16 @@ namespace {
 void MountLaterNow() {
   MountReport report;
   std::vector<const Set*> mounted;
-  std::unique_ptr<Registry> registry;
+  Registry* registry = nullptr;
   bool hooked = true;
   {
     std::lock_guard<std::mutex> lock(g_mutex);
-    registry = std::move(g_laterPending);
+    if (g_laterPending) {
+      // Listed before the observer runs: it reads ReportJson and HoldsKey for what this mount served (a join held for one of
+      // these maps is released from that). The shadow is published after it, as the boot mount's is.
+      registry = g_laterPending.get();
+      g_later.push_back(std::move(g_laterPending));
+    }
     if (registry) {
 #ifdef NEVR_TEST_HOOKS
       if (g_testNoResolverHook) {
@@ -861,7 +870,8 @@ void MountLaterNow() {
 #endif
       if (hooked) {
         std::vector<const Registry*> earlier{&g_registry};
-        for (const std::unique_ptr<Registry>& r : g_later) earlier.push_back(r.get());
+        for (const std::unique_ptr<Registry>& r : g_later)
+          if (r.get() != registry) earlier.push_back(r.get());
         const LaterMountView view(StockView{&StockHasThunk, nullptr, StockRecordsNow()}, earlier);
         report = registry->Mount(view.stock());
         mounted = registry->MountedSets();
@@ -876,7 +886,7 @@ void MountLaterNow() {
         "[NEVR.MAPS] map resource set refused at later mount owner=%s reason=%s detail=\"%s\" (the map is not served this run)",
         Printable(refused.plugin.c_str()).c_str(), RefusalName(refused.outcome.refusal), refused.outcome.detail.c_str());
   }
-  NotifyMountObserver(report);
+  NotifyMountObserver(report, /*laterMount=*/true);
   if (!registry) return;
   std::lock_guard<std::mutex> lock(g_mutex);
   if (const nevr_shadow::Shadow* shadow = registry->shadow()) {
@@ -886,11 +896,18 @@ void MountLaterNow() {
       "[NEVR.MAPS] map later mount sets=%zu refused=%zu records=%zu chunk_base=%u hooked=%s (sets fetched this run are served "
       "with no restart; a level already loaded is never replaced)",
       report.sets, report.refused, report.records, report.chunk_base, hooked ? "true" : "false");
-  g_later.push_back(std::move(registry));
 }
 }  // namespace
 
 void MountLaterSets() { g_laterRequested.store(true, std::memory_order_release); }
+
+bool AwaitsLaterMount(const std::string& owner) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (!g_laterPending) return false;
+  for (const Set* set : g_laterPending->HeldSets())
+    if (set->plugin == owner) return true;
+  return false;
+}
 
 // Per frame, inside the game's own hook (DispatchPerFrameWork): nothing here may throw into the game.
 void OnFrame(bool onLoopThread) {

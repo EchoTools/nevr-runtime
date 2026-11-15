@@ -147,8 +147,11 @@ class Channel {
 
   // Mounts the given groups' cached maps now, in this process, through the boot's own CacheMount (one per process, so a map Boot
   // mounted at a version is not granted again). A server mounts the group it fetched this way, at once (ADR 0048 decision 13).
-  // Empty when Boot did not run the channel. Worker thread only, after Boot.
+  // The mount is folded into run(). Empty when Boot did not run the channel. Worker thread only, after Boot.
   nevr_maps::MountReport MountGroups(const std::vector<std::string>& groups, const std::string& now_utc);
+  // Every mount of the run, folded: the boot's, then each later one (MountGroups, ServeRequests). Its staged maps are the ones a
+  // server pins. Worker thread only, after Boot.
+  const nevr_maps::MountReport& run() const { return run_; }
   // A dedicated server's scope for the group a session names: the whole group, every map this process mounted kept from eviction
   // (the game reads their files), and the group stored whole even past the cap (FetchScope::server_group).
   nevr_maps::FetchScope ServerGroupScope() const;

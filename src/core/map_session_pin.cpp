@@ -608,15 +608,27 @@ bool JoinHeldFor(std::uint64_t level, std::uint64_t nowMs) {
 }
 
 bool WaitWhileJoinHeld(std::uint64_t level, bool on_loop_thread, const std::function<std::uint64_t()>& now_ms,
-                       const std::function<void(std::uint64_t)>& sleep_ms) {
+                       const std::function<void(std::uint64_t)>& sleep_ms, const std::function<std::uint64_t()>& loop_frames) {
   if (!JoinHeldFor(level, now_ms())) return false;
-  if (on_loop_thread) {
-    std::lock_guard<std::mutex> lock(g_mutex());
-    g_hold().unholdable = true;
-    return false;
+  if (!on_loop_thread) {
+    std::uint64_t frames = loop_frames();
+    std::uint64_t frame_seen_ms = now_ms();
+    while (JoinHeldFor(level, now_ms())) {
+      sleep_ms(kJoinHoldPollMs);
+      const std::uint64_t now = now_ms();
+      const std::uint64_t seen = loop_frames();
+      if (seen != frames) {
+        frames = seen;
+        frame_seen_ms = now;
+      } else if (now - frame_seen_ms >= kJoinHoldStallMs) {
+        break;
+      }
+    }
+    if (!JoinHeldFor(level, now_ms())) return true;
   }
-  while (JoinHeldFor(level, now_ms())) sleep_ms(kJoinHoldPollMs);
-  return true;
+  std::lock_guard<std::mutex> lock(g_mutex());
+  g_hold().unholdable = true;
+  return false;
 }
 
 void NoteFetchFailed(const std::string& id, const std::string& consequence) {

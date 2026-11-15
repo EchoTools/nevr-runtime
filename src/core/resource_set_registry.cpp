@@ -556,6 +556,13 @@ bool MountObserver::Notify(const MountReport& report) {
   return true;
 }
 
+bool MountObserver::NotifyLaterMount(const MountReport& report) {
+  const Fn fn = fn_.load();
+  if (fn == nullptr) return false;
+  fn(report);
+  return true;
+}
+
 void MountObserver::Reset() {
   fn_.store(nullptr);
   notified_.store(false);

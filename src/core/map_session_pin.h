@@ -41,6 +41,8 @@ inline constexpr std::int32_t kFirstSessionState = 6;
 inline constexpr std::int32_t kLastSessionState = 9;
 // How often a held level load asks whether its join is still held (JoinHeldFor).
 inline constexpr std::uint64_t kJoinHoldPollMs = 50;
+// A held load stops once the game's loop has run no frame for this long: the loop is waiting for the load's thread.
+inline constexpr std::uint64_t kJoinHoldStallMs = 250;
 
 // One map as the session pin sees it: its id, version and the two hashes that tie the PC and Quest packages of one version.
 struct MapPin {
@@ -191,11 +193,12 @@ void TickWith(GameAccess& game);
 bool JoinHeldFor(std::uint64_t level, std::uint64_t nowMs);
 
 // The level load's side of the hold, on the thread that runs the load. Off the game's loop thread it waits (`sleep_ms`,
-// kJoinHoldPollMs at a time) while JoinHeldFor reads true. On the loop thread it never waits, since the frame that mounts the map
-// and ticks the hold runs there: the hold is marked unholdable instead, and the next tick leaves with a "join again" notice while
-// the download goes on. Returns true when it waited.
+// kJoinHoldPollMs at a time) while JoinHeldFor reads true and the loop's frames (`loop_frames`, a count the loop thread advances)
+// keep coming. On the loop thread it never waits, since the frame that mounts the map and ticks the hold runs there; and once no
+// frame came for kJoinHoldStallMs the loop is waiting on this thread, so it stops. Either way the hold is marked unholdable, and
+// the next tick leaves with a "join again" notice while the download goes on. Returns true when it waited the hold out.
 bool WaitWhileJoinHeld(std::uint64_t level, bool on_loop_thread, const std::function<std::uint64_t()>& now_ms,
-                       const std::function<void(std::uint64_t)>& sleep_ms);
+                       const std::function<void(std::uint64_t)>& sleep_ms, const std::function<std::uint64_t()>& loop_frames);
 
 // The worker: a fetch that named `id` failed, with the request's plain-words consequence. A join held for `id` leaves on the
 // next tick; any other id is ignored.

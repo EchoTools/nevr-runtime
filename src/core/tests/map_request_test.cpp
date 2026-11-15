@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "core/map_channel.h"
+#include "core/map_server_hold.h"
 #include "core/map_session_pin.h"
 #include "quest/tests/cdn_fake_env.h"
 #include "quest/tests/map_fake_fs.h"
@@ -440,6 +441,67 @@ TEST_F(MapRequestTest, AServerGroupScopeKeepsEveryMountedMapAndTakesTheWholeGrou
   EXPECT_TRUE(scope.server_group);
   EXPECT_FALSE(scope.on_demand);
   EXPECT_EQ(scope.in_use, std::vector<std::string>{"arena_c"});
+}
+
+// A server allocated for a group it does not hold fetches it at the first session create and mounts it mid-run
+// (runtime/content/map_channel.cpp FetchServerGroup). The mount is folded into the run the lobby pin comes from, so the lobby
+// is pinned at the version it mounted: a client without arena_c downloads it, and a client on another version never loads.
+TEST_F(MapRequestTest, AGroupAServerFetchesMidRunIsPinnedAtTheVersionItMounted) {
+  channel.Publish("arena_c", "1.0.0", MakeSet(4, 'c'));
+  channel.Sign(1);
+  BootClient();  // the server's boot: nothing cached, nothing mounted
+  ASSERT_TRUE(client->run().staged.empty());
+  ASSERT_EQ(FetchGroup(env, fs, config, kGroup, {}, nullptr, kNow, keep_going, nullptr, client->ServerGroupScope()).reason, "");
+  ASSERT_TRUE(Mounted(client->MountGroups({kGroup}, kNow), "arena_c"));
+  run = client->run();
+  ASSERT_TRUE(Mounted(run, "arena_c"));
+  sp::SetMountedPins(sp::PinsMounted(run, {"arena_c"}));  // the observer's pins, once the registry served the set
+  const std::uint64_t server_pin = sp::ServerPinFor(sp::SessionLevelOf("arena_c"));
+  ASSERT_NE(server_pin, 0u) << "an unpinned lobby lets every client in on whatever it holds";
+  EXPECT_EQ(server_pin, ServerPinOfMounted("arena_c"));
+
+  // A client process without arena_c: its channel lists the map but its cache lacks it (nothing staged, "not_cached"). The pin
+  // sends it to download, never into a level it does not hold.
+  sp::ResetForTest();
+  sp::SetFetchRequest(&RecordPinRequest);
+  MountReport lacks = run;
+  lacks.staged.clear();
+  lacks.not_mounted = {{"arena_c", "not_cached"}};
+  sp::SetChannelView(sp::ViewFromMount(lacks));
+  const sp::ClientDecision lacking = Join("arena_c", server_pin);
+  EXPECT_EQ(lacking.action, sp::ClientAction::kLeave);
+  EXPECT_TRUE(lacking.request_fetch);
+
+  // A client process holding another version of arena_c never loads the server's.
+  MountReport other = run;
+  other.staged[0].version = "0.9.0";
+  other.staged[0].source_sha256 = std::string(64, 'e');
+  sp::SetChannelView(sp::ViewFromMount(other));
+  EXPECT_EQ(Join("arena_c", server_pin).action, sp::ClientAction::kLeave);
+  EXPECT_EQ(Join("arena_c", ServerPinOfMounted("arena_c")).action, sp::ClientAction::kLeave);
+}
+
+// The same server, still running, finds arena_c updated at a later session create: the new version is stored, the mounted one
+// is never replaced, the lobby keeps the pin of the version it serves, and the update holds the joins until the server restarts.
+TEST_F(MapRequestTest, AGroupAServerMountedMidRunAndThenUpdatedKeepsItsPinAndHoldsForTheRestart) {
+  channel.Publish("arena_c", "1.0.0", MakeSet(4, 'c'));
+  channel.Sign(1);
+  BootClient();
+  ASSERT_EQ(FetchGroup(env, fs, config, kGroup, {}, nullptr, kNow, keep_going, nullptr, client->ServerGroupScope()).reason, "");
+  ASSERT_TRUE(Mounted(client->MountGroups({kGroup}, kNow), "arena_c"));
+  run = client->run();
+  const std::uint64_t first_pin = ServerPinOfMounted("arena_c");
+
+  channel.Publish("arena_c", "1.1.0", MakeSet(4, 'd'));
+  channel.Sign(2);
+  ASSERT_EQ(FetchGroup(env, fs, config, kGroup, {}, nullptr, kNow, keep_going, nullptr, client->ServerGroupScope()).reason, "");
+  const MountReport again = client->MountGroups({kGroup}, kNow);
+  EXPECT_EQ(TokenOf(again, "arena_c"), kMountedOtherVersionToken);
+  EXPECT_EQ(nevr_maps::UpdatedWhileMounted(again.not_mounted), std::vector<std::string>{"arena_c"});
+  run = client->run();
+  ASSERT_EQ(run.staged.size(), 1u);
+  EXPECT_EQ(run.staged[0].version, "1.0.0");
+  EXPECT_EQ(ServerPinOfMounted("arena_c"), first_pin);
 }
 
 // One map's failure fails the hold of that map only: the asked map that stored is not told it failed when another map's update

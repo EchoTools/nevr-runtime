@@ -350,7 +350,9 @@ nevr_maps::FetchScope Channel::ServerGroupScope() const {
 
 nevr_maps::MountReport Channel::MountGroups(const std::vector<std::string>& groups, const std::string& now_utc) {
   if (start_ != Start::kRun || !booted_ || !mount_) return nevr_maps::MountReport();
-  return mount_->Mount(groups, now_utc);
+  const nevr_maps::MountReport mounted = mount_->Mount(groups, now_utc);
+  MergeMountReport(run_, mounted);
+  return mounted;
 }
 
 // ---- FetchWorker -------------------------------------------------------------------------------------------------------------------

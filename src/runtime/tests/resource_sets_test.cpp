@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <set>
@@ -16,7 +17,10 @@
 #include <utility>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "core/logging.h"
+#include "core/map_session_pin.h"
 #include "core/resource_shadow.h"
 #include "nevr/plugin_interface.h"
 #include "quest/data/sha256.h"
@@ -54,13 +58,13 @@ std::uint64_t g_now = 1000000;
 std::uint64_t Now() { return g_now; }
 
 // A level: its root, its archive listing the map's mesh and `listed`, and the map's mesh. One chunk.
-SetBuilder MapLevel(std::uint64_t level = kMapLevel, std::uint64_t listed = kStockMesh) {
+SetBuilder MapLevel(std::uint64_t level = kMapLevel, std::uint64_t listed = kStockMesh, std::uint64_t mesh = kMapMesh) {
   SetBuilder b;
   const std::uint32_t c = b.AddChunk();
   b.AddRecord(sets::kLevelRootType, level, Bytes(64, 0x11), c);
   b.AddRecord(sets::kArchiveType, level,
-              Archive({}, {{kMeshType, kMapMesh}, {kMeshType, listed}, {sets::kLevelRootType, level}}), c);
-  b.AddRecord(kMeshType, kMapMesh, Bytes(200, 0x22), c);
+              Archive({}, {{kMeshType, mesh}, {kMeshType, listed}, {sets::kLevelRootType, level}}), c);
+  b.AddRecord(kMeshType, mesh, Bytes(200, 0x22), c);
   return b;
 }
 
@@ -515,6 +519,85 @@ TEST_F(MapFileSetTest, WithNoObserverTheMountTraceIsUnchanged) {
   EXPECT_FALSE(traces[0].empty());
   EXPECT_EQ(traces[0], traces[1]);
   EXPECT_EQ(g_observed.calls, 1);
+}
+
+// What the map channel's observer (runtime/content/map_channel.cpp OnMount) reads inside a mount: the registry's report, whose
+// "map:" owners are the maps it pins and releases held joins into.
+std::vector<std::string> g_reportedOwners;
+void ObserveOwners(const nevr_resource_sets::MountReport& report) {
+  Observe(report);
+  g_reportedOwners.clear();
+  const nlohmann::json doc = nlohmann::json::parse(nevr_resource_sets::ReportJson());
+  for (const nlohmann::json& set : doc) {
+    const std::string owner = set.value("plugin", "");
+    if (owner.rfind(nevr_resource_sets::kMapOwnerPrefix, 0) == 0) g_reportedOwners.push_back(owner);
+  }
+}
+
+void LaterMount() {
+  sets::MountLaterSets();
+  sets::OnFrame(true);
+}
+
+// Hot load with a map cached at boot: the later mount's own set is in the report its observer reads, before it is served.
+TEST_F(MapFileSetTest, ALaterMountsObserverSeesTheSetItMountedBeforeItIsServed) {
+  sets::SetMountObserver(&ObserveOwners);
+  // Its own level and mesh: a later set may not take a key an earlier mount serves.
+  ASSERT_TRUE(Register(Held(MapLevel(kMapLevel + 1, kStockMesh, kMapMesh + 1).Build()), "map:first", "map:first@1").ok());
+  Mount();
+  ASSERT_EQ(g_observed.calls, 1);
+  EXPECT_EQ(g_reportedOwners, std::vector<std::string>{"map:first"});
+
+  ASSERT_TRUE(Register(Held(MapLevel().Build())).ok());
+  EXPECT_TRUE(sets::AwaitsLaterMount("map:arena")) << "registered, not yet mounted: the observer keeps its grant";
+  EXPECT_FALSE(sets::AwaitsLaterMount("map:first"));
+  LaterMount();
+  ASSERT_EQ(g_observed.calls, 2);
+  EXPECT_TRUE(g_observed.refusals.empty());
+  EXPECT_FALSE(sets::AwaitsLaterMount("map:arena"));
+  EXPECT_EQ(g_reportedOwners, (std::vector<std::string>{"map:first", "map:arena"}));
+  EXPECT_TRUE(g_observed.mapLevelListed);
+  EXPECT_FALSE(g_observed.servedYet) << "the observer runs before the later set is answered from its shadow";
+  EXPECT_NE(sets::ManagerFor(&g_manager, sets::kLevelRootType, kMapLevel), nullptr) << "served after it";
+}
+
+// Mount on demand (the PC boot mounts no map): every map mounts later, and the pin the observer publishes from the report is
+// the session's, so a join held for the map is released.
+TEST_F(MapFileSetTest, OnDemandEveryMapMountsLaterAndItsObserverPublishesItsPin) {
+  namespace sp = nevr_map_session_pin;
+  sp::ResetForTest();
+  sets::SetMountObserver(&ObserveOwners);
+  Mount();  // nothing held at boot
+  EXPECT_TRUE(g_reportedOwners.empty());
+  ASSERT_TRUE(Register(Held(MapLevel().Build())).ok());
+  LaterMount();
+  ASSERT_EQ(g_observed.calls, 2);
+  ASSERT_EQ(g_reportedOwners, std::vector<std::string>{"map:arena"});
+
+  nevr_maps::MountReport run;
+  nevr_maps::MountedMap arena;
+  arena.id = "arena";
+  arena.version = "3";
+  arena.level = kMapLevel;
+  run.staged.push_back(arena);
+  std::vector<std::string> ids;
+  for (const std::string& owner : g_reportedOwners) ids.push_back(owner.substr(std::strlen(nevr_resource_sets::kMapOwnerPrefix)));
+  sp::SetMountedPins(sp::PinsMounted(run, ids));
+  EXPECT_NE(sp::ServerPinFor(kMapLevel), 0u);
+  sp::ResetForTest();
+}
+
+// A later set the mount refuses is never in its observer's report, so no join is released into it.
+TEST_F(MapFileSetTest, ALaterSetTheMountRefusesIsNotInItsObserversReport) {
+  sets::SetMountObserver(&ObserveOwners);
+  Mount();
+  g_stock.insert({kMeshType, kMapMesh});
+  ASSERT_TRUE(Register(Held(MapLevel().Build())).ok());
+  LaterMount();
+  ASSERT_EQ(g_observed.calls, 2);
+  EXPECT_EQ(g_observed.refusals, (std::vector<std::pair<std::string, std::string>>{{"map:arena", "stock_key"}}));
+  EXPECT_TRUE(g_reportedOwners.empty());
+  EXPECT_FALSE(LevelMounted(kMapLevel));
 }
 
 }  // namespace

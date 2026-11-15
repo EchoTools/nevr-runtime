@@ -868,7 +868,8 @@ TEST_F(MapJoinHold, ALoadOnTheGameLoopThreadNeverWaitsAndTheJoinLeavesToJoinAgai
   JoinArenaC();
   int sleeps = 0;
   EXPECT_FALSE(sp::WaitWhileJoinHeld(
-      Level("arena_c"), /*on_loop_thread=*/true, [&] { return game.now; }, [&](std::uint64_t) { ++sleeps; }));
+      Level("arena_c"), /*on_loop_thread=*/true, [&] { return game.now; }, [&](std::uint64_t) { ++sleeps; },
+      [] { return std::uint64_t{0}; }));
   EXPECT_EQ(sleeps, 0);
   sp::TickWith(game);
   const sp::PinEvent* leave = game.First(sp::PinEventKind::kHoldLeave);
@@ -885,24 +886,51 @@ TEST_F(MapJoinHold, ALoadOnTheGameLoopThreadNeverWaitsAndTheJoinLeavesToJoinAgai
 TEST_F(MapJoinHold, ALoadOffTheLoopThreadWaitsUntilTheFramesMountReleasesIt) {
   JoinArenaC();
   int sleeps = 0;
+  std::uint64_t frames = 0;
   const bool waited = sp::WaitWhileJoinHeld(
       Level("arena_c"), /*on_loop_thread=*/false, [&] { return game.now; },
       [&](std::uint64_t ms) {
         game.now += ms;
-        if (++sleeps == 3) {
+        if (++sleeps == 8) {
           Stored();
           sp::SetMountedPins({Pin("arena_c", "1.0", kSourceA)});
         }
         sp::TickWith(game);  // the frame, which another thread runs meanwhile
-      });
+        ++frames;
+      },
+      [&] { return frames; });
   EXPECT_TRUE(waited);
-  EXPECT_EQ(sleeps, 3);
+  EXPECT_EQ(sleeps, 8) << "a hold longer than the stall window goes on while the frames come";
   EXPECT_EQ(game.Count(sp::PinEventKind::kHoldReleased), 1u);
   EXPECT_EQ(game.Count(sp::PinEventKind::kHoldLeave), 0u);
   EXPECT_EQ(game.schedule_calls, 0);
   EXPECT_FALSE(sp::WaitWhileJoinHeld(
-      Level("arena_c"), false, [&] { return game.now; }, [&](std::uint64_t) { ++sleeps; }));
-  EXPECT_EQ(sleeps, 3);
+      Level("arena_c"), false, [&] { return game.now; }, [&](std::uint64_t) { ++sleeps; }, [&] { return frames; }));
+  EXPECT_EQ(sleeps, 8);
+}
+
+// Off the loop thread, a loop that runs no frame is waiting for the load's thread: the load stops waiting within the stall
+// window, never the hold's 120 s, and the join leaves to be joined again while the download goes on.
+TEST_F(MapJoinHold, ALoadWhoseLoopStopsRunningFramesStopsWaitingAndTheJoinLeaves) {
+  JoinArenaC();
+  int sleeps = 0;
+  const std::uint64_t armed_at = game.now;
+  EXPECT_FALSE(sp::WaitWhileJoinHeld(
+      Level("arena_c"), /*on_loop_thread=*/false, [&] { return game.now; },
+      [&](std::uint64_t ms) {
+        game.now += ms;
+        ++sleeps;
+      },
+      [] { return std::uint64_t{7}; }));
+  EXPECT_EQ(game.now - armed_at, sp::kJoinHoldStallMs);
+  EXPECT_EQ(sleeps, static_cast<int>(sp::kJoinHoldStallMs / sp::kJoinHoldPollMs));
+  sp::TickWith(game);
+  const sp::PinEvent* leave = game.First(sp::PinEventKind::kHoldLeave);
+  ASSERT_NE(leave, nullptr);
+  EXPECT_EQ(leave->reason, "load_not_holdable");
+  ASSERT_EQ(game.notices.size(), 1u);
+  EXPECT_EQ(game.notices[0].second, "Downloading arena_c; join again when it is ready.");
+  EXPECT_EQ(g_fetches, std::vector<std::string>{"arena_c"});
 }
 
 TEST_F(MapJoinHold, LeavingTheSessionDropsTheHold) {

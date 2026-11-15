@@ -195,6 +195,9 @@ struct State {
   std::mutex granted_mutex;                           // guards granted: the mount observer reads it on the thread that mounts
   std::vector<std::string> granted;                   // the owners this run's mounts granted ("map:<id>")
   nevr_maps::MountReport run;                         // guarded by granted_mutex: every mount of the run, folded
+  // Guarded by granted_mutex: a server's groups mounted since the last registry mount, with their mount; OnMount releases their
+  // joins once it has published their pins.
+  std::vector<std::pair<std::string, nevr_maps::MountReport>> groups_to_release;
   std::unique_ptr<nevr_maps::MapRequests> requests;   // a client's session requests, answered on demand by the worker
 };
 State* g_state = nullptr;
@@ -228,11 +231,16 @@ void OnMount(const nevr_resource_sets::MountReport& report) {
   if (st == nullptr) return;
   std::vector<std::string> granted;
   nevr_maps::MountReport run;
+  std::vector<std::pair<std::string, nevr_maps::MountReport>> groups_to_release;
   {
     std::lock_guard<std::mutex> lock(st->granted_mutex);
     granted = st->granted;
     run = st->run;
+    groups_to_release.swap(st->groups_to_release);
   }
+  // A map the worker registered while this mount ran waits for the next one, whose observer call decides it: withdrawing it now
+  // would strip the scripts of a map about to be served.
+  granted.erase(std::remove_if(granted.begin(), granted.end(), &nevr_resource_sets::AwaitsLaterMount), granted.end());
   const std::size_t prefix = std::strlen(nevr_resource_sets::kMapOwnerPrefix);
   for (const nevr_resource_sets::MountReport::Refused& refused : report.refusals) {
     if (refused.plugin.rfind(nevr_resource_sets::kMapOwnerPrefix, 0) == 0)
@@ -255,6 +263,7 @@ void OnMount(const nevr_resource_sets::MountReport& report) {
   Log(decision.withdrawn.empty() ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
       "[NEVR.MAPS] map_summary stage=mount mounted=%zu withdrawn=%s armed=%zu", decision.mounted.size(),
       Join(decision.withdrawn).c_str(), decision.armed);
+  for (const auto& [group, mounted] : groups_to_release) nevr_map_hold::NoteGroupMounted(group, mounted);
 }
 
 // The root lock: the name's existence is the lock (one process per cache root). The handle is never closed, so the name lives as long
@@ -315,9 +324,18 @@ nevr_maps::FetchReport FetchServerGroup(State* st, const std::string& group, con
     Log(EchoVR::LogLevel::Warning, "%s", nevr_maps::MapGroupPartialLine(group, report.failed_maps).c_str());
   const nevr_maps::MountReport mounted = st->channel->MountGroups({group}, now);
   GrantMounted(st, mounted);
+  const nevr_maps::MountReport& run = st->channel->run();
+  {
+    std::lock_guard<std::mutex> lock(st->granted_mutex);
+    st->run = run;
+    st->groups_to_release.emplace_back(group, mounted);
+  }
   if (st->mounter->any_script()) nevr_map_scripts::InstallMapScriptsRewriter();
   nevr_config_alias::InstallIfStaged();
-  nevr_map_hold::NoteGroupMounted(group, mounted);
+  nevr_map_session_pin::SetChannelView(nevr_map_session_pin::ViewFromMount(run));
+  // The joins wait for the registry's mount of what was registered: its observer (OnMount) publishes the group's lobby pins,
+  // then releases them. A set registered after the boot mount is served only by a later mount.
+  nevr_resource_sets::MountLaterSets();
   return report;
 }
 
