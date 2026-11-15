@@ -111,6 +111,8 @@ inline constexpr std::uint64_t kDescriptorShareForMaps = 4;
 // The refusal token of a cached version that no verified manifest lists now (`refused` of map_mounted, a Warning): the map does not
 // mount until the listed version is stored, so an old version never plays in its place.
 inline constexpr const char* kStaleToken = "stale";
+// The skip token of a map an earlier mount of this process holds at another version: a mounted set is never replaced in the process.
+inline constexpr const char* kMountedOtherVersionToken = "mounted_other_version";
 
 struct MountedMap {
   std::string id, version, index_sha256, platform, source_sha256, title, group;

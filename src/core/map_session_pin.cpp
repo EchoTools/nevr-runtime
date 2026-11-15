@@ -1,5 +1,6 @@
 #include "core/map_session_pin.h"
 
+#include <atomic>
 #include <cstring>
 #include <mutex>
 
@@ -36,12 +37,14 @@ std::vector<MapPin>& g_mounted() {
   return instance;
 }
 FetchRequestFn g_fetch = nullptr;
+// Moves with every SetChannelView: a client decides its session again once the view changed (a map fetched and mounted mid-run).
+std::atomic<std::uint64_t> g_viewGeneration{0};
 
 // The tick's state: game thread only (TickWith), and ResetForTest.
 struct TickState {
   std::uint64_t server_set = 0;  // the pin this server wrote into the lobby's owner JSON; the only value it clears
   bool have_key = false;
-  std::uint64_t key_lobby = 0, key_level = 0, key_pin = 0;
+  std::uint64_t key_lobby = 0, key_level = 0, key_pin = 0, key_view = 0;
   bool local_warned = false;
   bool leave_pending = false;
   std::uint64_t leave_deadline = 0;
@@ -182,11 +185,14 @@ void ClientTick(GameAccess& game, std::uint64_t lobby, std::uint64_t now) {
 
   const std::uint64_t level = SessionLevelWith(game);
   const std::uint64_t pin = game.OwnerSymbol(lobby, kOwnerPinKey);
-  if (g_tick().have_key && g_tick().key_lobby == lobby && g_tick().key_level == level && g_tick().key_pin == pin) return;
+  const std::uint64_t view = g_viewGeneration.load(std::memory_order_acquire);
+  TickState& tick = g_tick();
+  if (tick.have_key && tick.key_lobby == lobby && tick.key_level == level && tick.key_pin == pin && tick.key_view == view) return;
   g_tick().have_key = true;
   g_tick().key_lobby = lobby;
   g_tick().key_level = level;
   g_tick().key_pin = pin;
+  g_tick().key_view = view;
 
   const ClientDecision decision = DecideClient(level, pin);
   PinEvent event;
@@ -324,6 +330,7 @@ ChannelView ViewFromMount(const nevr_maps::MountReport& report) {
 void SetChannelView(ChannelView view) {
   std::lock_guard<std::mutex> lock(g_mutex());
   g_view() = std::move(view);
+  g_viewGeneration.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void SetMountedPins(std::vector<MapPin> pins) {
@@ -364,6 +371,15 @@ ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin) {
     decision.reason = "map_unpinned";
     return decision;
   }
+  // The channel lists a newer version than the one this run mounted: a mounted set is never replaced, so the old version is not
+  // played, whatever the server runs; the new one is stored and mounts at the next launch.
+  const std::string* token = SecondOf(g_view().not_mounted, id);
+  if (token != nullptr && *token == nevr_maps::kMountedOtherVersionToken) {
+    decision.action = ClientAction::kLeave;
+    decision.reason = "updated";
+    decision.notice_line = FitLine({{"Map "}, {id, true}, {" was updated; restart the game to play it."}});
+    return decision;
+  }
   // A staged map has not mounted yet (the login and the lobby can come before the first resource request) but will.
   const MapPin* mounted = PinById(g_mounted(), id);
   const MapPin* staged = PinById(g_view().staged, id);
@@ -377,8 +393,14 @@ ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin) {
   }
   decision.action = ClientAction::kLeave;
   // The pin is a hash, so the client cannot name the server's version; it names its own when it has one.
-  if (const std::string* token = SecondOf(g_view().not_mounted, id)) {
+  if (token != nullptr) {
     decision.reason = "not_mounted";
+    // Not cached, or cached at a version the channel no longer lists: fetched on demand and mounted with no restart.
+    if (*token == "not_cached" || *token == nevr_maps::kStaleToken) {
+      decision.request_fetch = true;
+      decision.notice_line = FitLine({{"Downloading "}, {id, true}, {"; join again when it is ready."}});
+      return decision;
+    }
     decision.notice_line = FitLine({{"Map "}, {id, true}, {" did not load: "}, {*token, true}, {". See the nevr log."}});
     decision.request_fetch = *token == "stock_changed";
     return decision;
@@ -388,9 +410,9 @@ ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin) {
   const MapPin* have = mounted != nullptr ? mounted : staged;
   // An if, not a ?: over two braced lists: GCC 15 reads the ?: as keeping the list past the call (-Wdangling-pointer).
   if (have != nullptr) {
-    decision.notice_line = FitLine({{"Needs "}, {id, true}, {" (not your "}, {have->version, true}, {"); updating for next launch."}});
+    decision.notice_line = FitLine({{"Server's "}, {id, true}, {" is not your "}, {have->version, true}, {"; checking for update."}});
   } else {
-    decision.notice_line = FitLine({{"Needs map "}, {id, true}, {"; updating for your next launch."}});
+    decision.notice_line = FitLine({{"Needs map "}, {id, true}, {"; downloading, join again soon."}});
   }
   return decision;
 }

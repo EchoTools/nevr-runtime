@@ -202,7 +202,7 @@ TEST_F(MapSessionPin, AnotherVersionOfAListedMapLeavesAndRequestsAFetch) {
   EXPECT_EQ(decision.action, sp::ClientAction::kLeave);
   EXPECT_EQ(decision.reason, "version");
   EXPECT_TRUE(decision.request_fetch);
-  EXPECT_EQ(decision.notice_line, "Needs arena2 (not your 1.0); updating for next launch.");
+  EXPECT_EQ(decision.notice_line, "Server's arena2 is not your 1.0; checking for update.");
 }
 
 TEST_F(MapSessionPin, AListedMapWithNoCopyLeavesAndRequestsAFetch) {
@@ -213,7 +213,7 @@ TEST_F(MapSessionPin, AListedMapWithNoCopyLeavesAndRequestsAFetch) {
   EXPECT_EQ(decision.action, sp::ClientAction::kLeave);
   EXPECT_EQ(decision.reason, "version");
   EXPECT_TRUE(decision.request_fetch);
-  EXPECT_EQ(decision.notice_line, "Needs map arena2; updating for your next launch.");
+  EXPECT_EQ(decision.notice_line, "Needs map arena2; downloading, join again soon.");
 }
 
 TEST_F(MapSessionPin, ALocalCopyStaysWithoutAFetch) {
@@ -380,7 +380,7 @@ TEST_F(MapSessionPin, AClientLeavesBeforeTheLoad) {
   EXPECT_EQ(game.schedule_calls, 1);
   ASSERT_EQ(game.notices.size(), 1u);
   EXPECT_EQ(game.notices[0].first, "Map version mismatch");
-  EXPECT_EQ(game.notices[0].second, "Needs arena2 (not your 1.0); updating for next launch.");
+  EXPECT_EQ(game.notices[0].second, "Server's arena2 is not your 1.0; checking for update.");
   EXPECT_EQ(g_fetches, std::vector<std::string>{"arena2"});
   const sp::PinEvent* skew = game.First(sp::PinEventKind::kSkew);
   ASSERT_NE(skew, nullptr);
@@ -402,7 +402,7 @@ TEST_F(MapSessionPin, AClientThatSeesThePinAfterTheLoadLeavesThroughTheSamePath)
   for (int i = 0; i < 5; ++i) sp::TickWith(game);
   EXPECT_EQ(game.schedule_calls, 1);
   ASSERT_EQ(game.notices.size(), 1u);
-  EXPECT_EQ(game.notices[0].second, "Needs arena2 (not your 1.0); updating for next launch.");
+  EXPECT_EQ(game.notices[0].second, "Server's arena2 is not your 1.0; checking for update.");
 }
 
 TEST_F(MapSessionPin, AFailingLeaveIsRetriedForTenSecondsThenLeaveFailed) {
@@ -627,6 +627,63 @@ TEST(MapSessionPinRecord, ACheckPassesOnAgreementAndFillsTheRefusalOnDisagreemen
 TEST(MapSessionPinRecord, TheLineQuotesTheConsequenceAndNothingElse) {
   const sp::PinFields fields = sp::PinOffFields("no_game_module", nullptr, 0, nullptr, nullptr, 0);
   EXPECT_EQ(sp::FormatFields(fields), "status=off reason=no_game_module consequence=\"a mismatched server is not left\"");
+}
+
+// The request entry's rows (owner: a map the player lacks is downloaded, mounted and loaded; a stale copy is never loaded).
+TEST_F(MapSessionPin, AListedMapNotCachedLeavesWithADownloadNoticeAndRequestsIt) {
+  sp::ChannelView view;
+  view.listed = {{Level("arena_c"), "arena_c"}};
+  view.not_mounted = {{"arena_c", "not_cached"}};
+  sp::SetChannelView(view);
+  const sp::ClientDecision decision = sp::DecideClient(Level("arena_c"), sp::PinValue(Pin("arena_c", "1.0", kSourceA)));
+  EXPECT_EQ(decision.action, sp::ClientAction::kLeave);
+  EXPECT_EQ(decision.reason, "not_mounted");
+  EXPECT_TRUE(decision.request_fetch);
+  EXPECT_EQ(decision.notice_line, "Downloading arena_c; join again when it is ready.");
+}
+
+TEST_F(MapSessionPin, AStaleCopyLeavesAndRequestsTheCurrentVersion) {
+  sp::ChannelView view;
+  view.listed = {{Level("arena_c"), "arena_c"}};
+  view.not_mounted = {{"arena_c", "stale"}};
+  sp::SetChannelView(view);
+  const sp::ClientDecision decision = sp::DecideClient(Level("arena_c"), sp::PinValue(Pin("arena_c", "1.1", kSourceA)));
+  EXPECT_EQ(decision.action, sp::ClientAction::kLeave);
+  EXPECT_TRUE(decision.request_fetch);
+}
+
+// The run mounted 1.0, and the channel now lists another version: even a server on the mounted 1.0 is left, so the old version
+// is never played once a newer one is listed.
+TEST_F(MapSessionPin, AMountedVersionTheChannelReplacedIsLeftEvenWhenTheServerMatchesIt) {
+  sp::ChannelView view;
+  view.listed = {{Level("arena2"), "arena2"}};
+  view.not_mounted = {{"arena2", "mounted_other_version"}};
+  sp::SetChannelView(view);
+  sp::SetMountedPins({Pin("arena2", "1.0", kSourceA)});
+  const sp::ClientDecision decision = sp::DecideClient(Level("arena2"), sp::PinValue(Pin("arena2", "1.0", kSourceA)));
+  EXPECT_EQ(decision.action, sp::ClientAction::kLeave);
+  EXPECT_EQ(decision.reason, "updated");
+  EXPECT_FALSE(decision.request_fetch);
+  EXPECT_EQ(decision.notice_line, "Map arena2 was updated; restart the game to play it.");
+}
+
+// The view changed mid-session (a fetch mounted the group's manifest): the client decides the same session again.
+TEST_F(MapSessionPin, ANewViewDecidesTheSameSessionAgain) {
+  sp::SetFetchRequest(&RecordFetch);
+  FakeGame game;
+  game.state = 6;
+  game.owner["level"] = Level("arena_c");
+  game.owner["nevr_map_pin"] = sp::PinValue(Pin("arena_c", "1.0", kSourceA));
+  sp::SetMountedPins({Pin("other", "1.0", kSourceA)});  // something mounted, so the tick runs
+  for (int i = 0; i < 3; ++i) sp::TickWith(game);
+  EXPECT_EQ(game.schedule_calls, 0);  // nothing lists arena_c yet
+  sp::ChannelView view;
+  view.listed = {{Level("arena_c"), "arena_c"}};
+  view.not_mounted = {{"arena_c", "not_cached"}};
+  sp::SetChannelView(view);
+  for (int i = 0; i < 3; ++i) sp::TickWith(game);
+  EXPECT_EQ(game.schedule_calls, 1);
+  EXPECT_EQ(g_fetches, std::vector<std::string>{"arena_c"});
 }
 
 }  // namespace

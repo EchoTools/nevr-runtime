@@ -394,7 +394,7 @@ class MountRun {
         report_.kept.push_back(id);
         return;
       }
-      return Skip(id, "mounted_other_version");
+      return Skip(id, kMountedOtherVersionToken);
     }
     if (revoked_sha_.count(cached.index_sha256)) return Refuse(id, "revoked");
     // A map plays only at a version a verified manifest lists now. A cached version its manifest moved past (the new version is

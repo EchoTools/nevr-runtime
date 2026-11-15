@@ -54,6 +54,7 @@ target_sources(nevr_core PRIVATE ${_maps_derive_sources})
 set(_maps_run_sources
   "${CMAKE_CURRENT_LIST_DIR}/map_run.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/map_fetch_queue.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/map_request.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/map_local_precedence.cpp")
 set_source_files_properties(${_maps_run_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 target_sources(nevr_core PRIVATE ${_maps_run_sources})
