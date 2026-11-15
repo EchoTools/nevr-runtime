@@ -334,6 +334,126 @@ func TestAVersionRunLinksTheLibraryTheCoreLibraryJobBuilt(t *testing.T) {
 	}
 }
 
+// workflowStep returns one step of a job, from its `- name:` line to the next step.
+func workflowStep(t *testing.T, job, name string) string {
+	t.Helper()
+	at := strings.Index(job, "    - name: "+name+"\n")
+	if at < 0 {
+		t.Fatalf("no step %q", name)
+	}
+	rest := job[at+len("    - "):]
+	if end := strings.Index(rest, "\n    - "); end >= 0 {
+		return rest[:end]
+	}
+	return rest
+}
+
+// runBlock returns the `run: |` body of a step.
+func runBlock(t *testing.T, step string) string {
+	t.Helper()
+	at := strings.Index(step, "run: |\n")
+	if at < 0 {
+		t.Fatalf("step has no run block: %q", step)
+	}
+	return step[at+len("run: |\n"):]
+}
+
+// lineBefore fails unless a and b are each a whole line of s (indentation aside) and a comes first: a line commented out,
+// or one with more commands after it (`|| true`), is not the line.
+func lineBefore(t *testing.T, s, a, b, why string) {
+	t.Helper()
+	at := func(line string) int {
+		loc := regexp.MustCompile(`(?m)^[ ]*` + regexp.QuoteMeta(line) + `$`).FindStringIndex(s)
+		if loc == nil {
+			return -1
+		}
+		return loc[0]
+	}
+	ia, ib := at(a), at(b)
+	if ia < 0 || ib < 0 || ia >= ib {
+		t.Errorf("want the line %q before the line %q (at %d and %d): %s", a, b, ia, ib, why)
+	}
+}
+
+// afterName returns a step without its `name:` line: its shell, its environment and its run block.
+func afterName(t *testing.T, step string) string {
+	t.Helper()
+	at := strings.Index(step, "\n")
+	if at < 0 {
+		t.Fatalf("step has one line: %q", step)
+	}
+	return step[at+1:]
+}
+
+const (
+	pcCoreTarget    = "--target x86_64-pc-windows-gnu"
+	questCoreTarget = "--target aarch64-linux-android"
+	questToolchain  = "Install the Rust toolchain for the Quest core"
+	questBuild      = "Build and test the Quest library"
+	questAsset      = "Name and check the release asset"
+	questConfigure  = "(cd src/quest && cmake --preset android-arm64 -DNEVR_UPDATE_CORE=ON)"
+	questTestRecipe = `"$HOME/.local/bin/just" test-android`
+)
+
+// A tag run of build.yml publishes nevr-runtime-vX.Y.Z-quest-runtime.so with the core install method linked in, or fails (ADR 0024
+// section 3; ADR 0023 section 7): the quest job installs the core-library job's pinned toolchain with the Android target, configures
+// with NEVR_UPDATE_CORE=ON before test-android builds, and refuses to name the asset unless cargo wrote the core the runtime links.
+func TestATagRunLinksTheCoreIntoTheQuestRuntime(t *testing.T) {
+	t.Parallel()
+	wf := read(t, ".github/workflows/build.yml")
+	pc := regexp.MustCompile(`(?s)\n  core-library:\n.*?\n  build:\n`).FindString(wf)
+	quest := regexp.MustCompile(`(?s)\n  quest:\n.*?\n  seal:\n`).FindString(wf)
+	if pc == "" || quest == "" {
+		t.Fatal("build.yml has no core-library job before the build job, or no quest job before the seal job")
+	}
+
+	// The same pins as the PC core: the whole step but its name is the core-library job's, with the Android target in place of
+	// the Windows one, so no line of it (the shell, the homes, the digest, the toolchain, the hand-over through GITHUB_ENV) can drift.
+	pcRun := afterName(t, workflowStep(t, pc, "Install the Rust toolchain for the core library"))
+	if strings.Count(pcRun, pcCoreTarget) != 1 {
+		t.Fatalf("the core-library job's toolchain step does not name %q exactly once", pcCoreTarget)
+	}
+	want := strings.Replace(pcRun, pcCoreTarget, questCoreTarget, 1)
+	if got := afterName(t, workflowStep(t, quest, questToolchain)); got != want {
+		t.Errorf("the quest job's toolchain step is not the core-library job's with %q:\ngot:\n%s\nwant:\n%s", questCoreTarget, got, want)
+	}
+	cmake := regexp.MustCompile(`\s+`).ReplaceAllString(read(t, "src/quest/sentinel/CMakeLists.txt"), " ")
+	if !strings.Contains(cmake, "build --locked --release "+questCoreTarget+" --lib") {
+		t.Errorf("src/quest/sentinel/CMakeLists.txt does not build the core for %q, the target the job installs", questCoreTarget)
+	}
+	if strings.Contains(quest, "GITHUB_PATH") {
+		t.Error("the quest job edits PATH; the toolchain reaches the configure through CARGO_HOME (find_program's first HINT)")
+	}
+	before(t, quest, "    - name: "+questToolchain+"\n", "    - name: "+questBuild+"\n", "the toolchain must be there when the Quest build configures")
+
+	// ON, not the default AUTO: a configure that finds no cargo stops instead of building a runtime that never updates itself.
+	build := runBlock(t, workflowStep(t, quest, questBuild))
+	lineBefore(t, build, questConfigure, questTestRecipe, "the ON configure must make the cache that test-android's configure keeps")
+	recipe := regexp.MustCompile(`(?s)\nconfigure-android:[^\n]*\n.*?\n\n`).FindString(read(t, "justfile"))
+	if !strings.Contains(recipe, "cd src/quest && ") || !strings.HasSuffix(strings.TrimSpace(recipe), "cmake --preset android-arm64") {
+		t.Errorf("configure-android does not reconfigure the android-arm64 preset in src/quest, the tree the ON configure made:\n%s", recipe)
+	}
+	mustMatch(t, `elseif\(NEVR_UPDATE_CORE STREQUAL "ON"\) message\(FATAL_ERROR `, cmake, "ON with no cargo is a configure error")
+
+	// The asset step refuses a runtime the core is not linked into: the core's archive, at the path CMake gives it in the
+	// preset's tree, exists only when the configure linked the core.
+	preset := read(t, "src/quest/CMakePresets.json")
+	if !strings.Contains(preset, `"binaryDir": "${sourceDir}/../../build/android-arm64",`) {
+		t.Fatal("src/quest/CMakePresets.json: the android-arm64 preset does not build in build/android-arm64")
+	}
+	for _, want := range []string{
+		`set(NEVR_QUEST_INSTALL_DIR "${CMAKE_BINARY_DIR}/installer-lib")`,
+		`set(NEVR_QUEST_INSTALL_LIB "${NEVR_QUEST_INSTALL_DIR}/aarch64-linux-android/release/libnevr_install.a")`,
+	} {
+		if !strings.Contains(cmake, want) {
+			t.Errorf("src/quest/sentinel/CMakeLists.txt: no %q", want)
+		}
+	}
+	asset := runBlock(t, workflowStep(t, quest, questAsset))
+	check := "test -s build/android-arm64/installer-lib/aarch64-linux-android/release/libnevr_install.a"
+	lineBefore(t, asset, check, `cp "$runtime" "$runtime_out"`, "the runtime is published only after the core it links is found")
+}
+
 // F5 (ADR 0024): a release the verifier refused is recorded by the core, so the next launch does not fetch it again.
 func TestARefusedReleaseIsRecordedByTheCore(t *testing.T) {
 	run := code(t, "src/core/update/engine_check.cpp")

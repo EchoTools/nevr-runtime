@@ -766,6 +766,22 @@ jobs:
         echo "sha=$(git -C "$HOME/.vcpkg" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         echo "VCPKG_ROOT=$HOME/.vcpkg" >> "$GITHUB_ENV"
 
+    # libnevr-runtime.so links the core install method (installer/, ADR 0024 section 3) and the runner has no pinned Rust, so the job
+    # installs it as the core-library job does: the same rustup-init, digest and toolchain, with the Android target in place of the
+    # Windows one. The homes reach the configure through GITHUB_ENV, where find_program looks first ($CARGO_HOME/bin); PATH is not edited.
+    - name: Install the Rust toolchain for the Quest core
+      shell: bash
+      run: |
+        set -euo pipefail
+        export RUSTUP_HOME="$RUNNER_TEMP/rustup" CARGO_HOME="$RUNNER_TEMP/cargo" RUSTUP_INIT_SKIP_SUDO_CHECK=yes
+        curl --proto '=https' --tlsv1.2 -fsSL -o rustup-init https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init
+        echo "20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  rustup-init" | sha256sum -c -
+        chmod +x rustup-init
+        ./rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.99.1 --target aarch64-linux-android
+        rm rustup-init
+        echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
+        echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+
     - name: Restore the vcpkg binary cache
       id: vcpkg_cache
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -784,6 +800,10 @@ jobs:
         set -euo pipefail
         mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
         export VCPKG_BINARY_SOURCES="clear;files,$GITHUB_WORKSPACE/.vcpkg-binary-cache,readwrite"
+        # A tag run links the core into libnevr-runtime.so, and must: ON makes a missing cargo a configure error, where the default
+        # (AUTO) builds a runtime that never updates itself. The tree is fresh, so this configure sets the cache that the
+        # configure-android recipe inside test-android then keeps.
+        (cd src/quest && cmake --preset android-arm64 -DNEVR_UPDATE_CORE=ON)
         "$HOME/.local/bin/just" test-android
 
     - name: Name and check the release asset
@@ -814,6 +834,9 @@ jobs:
         # so `stamp` does not apply to it).
         runtime=build/android-arm64/sentinel/libnevr-runtime.so
         test -s "$runtime"
+        # The core the runtime links: cargo writes it only when the configure linked the core (NEVR_QUEST_INSTALL_LIB in
+        # src/quest/sentinel/CMakeLists.txt), so a runtime built without it stops the run here.
+        test -s build/android-arm64/installer-lib/aarch64-linux-android/release/libnevr_install.a
         python3 tools/package_release.py quest-runtime --lib "$runtime" --version "$version" --commit "$GITHUB_SHA"
         runtime_out="quest-asset/$(release_quest_runtime_asset_name "$version")"
         cp "$runtime" "$runtime_out"
