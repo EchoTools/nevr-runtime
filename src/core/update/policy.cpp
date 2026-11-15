@@ -192,7 +192,7 @@ std::string BuildCurrentJson(const std::string& version, const std::string& runt
   return json{{"version", version}, {"runtime_sha256", runtime_sha256}, {"quarantine", q}}.dump();
 }
 
-bool ParseStageResult(const std::string& text, StageResult* out, std::string* error) {
+bool ParseStageResult(const std::string& text, StageResult* out, std::string* error, std::string_view runtime_file) {
   const auto fail = [error](const char* why) {
     if (error != nullptr) *error = why;
     return false;
@@ -211,6 +211,7 @@ bool ParseStageResult(const std::string& text, StageResult* out, std::string* er
   if (doc->contains("direction") && (*doc)["direction"].is_string()) r.direction = (*doc)["direction"].get<std::string>();
   if (doc->contains("reason") && (*doc)["reason"].is_string()) r.reason = (*doc)["reason"].get<std::string>();
   if (!IsWord(r.direction) || !IsWord(r.reason)) return fail("the stage result's direction or reason is not a plain word");
+  int runtimes = 0;
   if (doc->contains("files")) {
     if (!(*doc)["files"].is_array()) return fail("the stage result's files is not a list");
     for (const json& f : (*doc)["files"]) {
@@ -223,13 +224,12 @@ bool ParseStageResult(const std::string& text, StageResult* out, std::string* er
       file.path = f["path"].get<std::string>();
       file.size = f["size"].get<std::uint64_t>();
       file.sha256 = f["sha256"].get<std::string>();
-      if (!names::ParseMember(file.path, &member)) return fail("a file of the stage result is outside the member vocabulary");
+      if (!names::ParseMemberOf(runtime_file, file.path, &member)) return fail("a file of the stage result is outside the platform's member vocabulary");
       if (!IsSha256Hex(file.sha256)) return fail("a file of the stage result has a sha256 that is not 64 lowercase hex characters");
+      runtimes += member.runtime ? 1 : 0;
       r.files.push_back(std::move(file));
     }
   }
-  int runtimes = 0;
-  for (const StagedFile& f : r.files) runtimes += f.path == names::kRuntimeMember ? 1 : 0;
   if (r.action == "staged" && runtimes != 1) return fail("a staged result must list exactly one runtime");
   *out = std::move(r);
   return true;

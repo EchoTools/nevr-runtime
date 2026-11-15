@@ -91,21 +91,14 @@ bool HasMember(const std::vector<names::Member>& members, const names::Member& m
 }
 
 // The runtime's file in this start's root is the one name the start treats as its runtime: nevr-runtime.dll on PC, libnevr-runtime.so
-// on Quest (StartContext::runtime_file). The other platform's runtime name is refused, as names.h refuses it. A Quest release is the
-// runtime file alone, so a plugin name is refused in a Quest start.
+// on Quest (StartContext::runtime_file). The rule is names.h's (ParseMemberOf), the same one the check reads a stage result with: the
+// other platform's runtime name is refused, and a Quest release is the runtime file alone.
 bool ParseFileMember(std::string_view runtime_file, std::string_view path, names::Member* out) {
-  if (path == runtime_file) {
-    *out = names::Member{true, {}};
-    return true;
-  }
-  if (runtime_file == names::kQuestRuntimeMember) return false;
-  return names::ParseMember(path, out) && !out->runtime;
+  return names::ParseMemberOf(runtime_file, path, out);
 }
 
 // The path of a member relative to the root, in the spelling of this start's runtime file.
-std::string MemberFile(std::string_view runtime_file, const names::Member& member) {
-  return member.runtime ? std::string(runtime_file) : names::MemberPath(member);
-}
+std::string MemberFile(std::string_view runtime_file, const names::Member& member) { return names::MemberPathOf(runtime_file, member); }
 
 // staged.json: {"version", "files": [{"path", "size", "sha256"}]}, the spelling of NevrPcStage's result. Every name in
 // the vocabulary, no file twice (in any case), exactly one runtime.

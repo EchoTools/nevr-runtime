@@ -14,7 +14,10 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
+
+#include "core/update/names.h"
 
 namespace nevr_update {
 
@@ -99,7 +102,7 @@ std::string BuildCurrentJson(const std::string& version, const std::string& runt
                              const std::vector<QuarantineEntry>& quarantine);
 
 struct StagedFile {
-  std::string path;  ///< "nevr-runtime.dll" or "plugins/<name>.dll"
+  std::string path;  ///< the platform's runtime ("nevr-runtime.dll", "libnevr-runtime.so") or "plugins/<name>.dll" (PC only)
   std::uint64_t size = 0;
   std::string sha256;
 };
@@ -114,8 +117,11 @@ struct StageResult {
 };
 
 /// False, with `error`, when the text is not a result of that shape or names a version, path or hash outside the
-/// vocabulary the host accepts (core/update/names.h): such a result is never published.
-bool ParseStageResult(const std::string& text, StageResult* out, std::string* error);
+/// vocabulary the host accepts (core/update/names.h): such a result is never published. The members are those of the
+/// platform whose runtime is `runtime_file` (names.h ParseMemberOf: nevr-runtime.dll and its plugins on PC, libnevr-runtime.so
+/// alone on Quest), and a staged result lists that runtime exactly once.
+bool ParseStageResult(const std::string& text, StageResult* out, std::string* error,
+                      std::string_view runtime_file = nevr_update_names::kRuntimeMember);
 
 /// update\staged.json: {"version", "files": [{"path", "size", "sha256"}]}, the spelling the host reads.
 std::string BuildStagedJson(const StageResult& staged);

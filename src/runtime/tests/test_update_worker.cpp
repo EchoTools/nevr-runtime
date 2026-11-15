@@ -46,6 +46,7 @@
 
 #include "core/update/engine_check.h"
 #include "core/update/fs.h"
+#include "core/update/names.h"
 #include "core/update/policy.h"
 #include "core/update/worker.h"
 
@@ -278,6 +279,9 @@ struct FakeCore {
   std::string runtime_bytes = "NEW-RUNTIME";
   bool discard_ok = true;
   bool with_plugin = false;  // the release also lists plugins/a.dll
+  /// The runtime's member in the result: nevr-runtime.dll (the PC's windows-zip) or libnevr-runtime.so (the Quest's quest-runtime
+  /// profile, installer/src/stage.rs QUEST_PROFILE).
+  std::string runtime_member = "nevr-runtime.dll";
   int open_calls = 0, manifest_calls = 0, stage_calls = 0, end_calls = 0, close_calls = 0, discard_calls = 0;
   std::string discard_version, discard_sha, discard_reason;
   std::string open_config, current_json, end_state, end_reason;
@@ -307,8 +311,8 @@ struct FakeCore {
       }
       json files = json::array();
       if (action == "staged") {
-        root->Write("update\\staging\\" + version + "\\nevr-runtime.dll", runtime_bytes);
-        files.push_back({{"path", "nevr-runtime.dll"}, {"size", runtime_bytes.size()}, {"sha256", kNewSha}});
+        root->Write("update\\staging\\" + version + "\\" + runtime_member, runtime_bytes);
+        files.push_back({{"path", runtime_member}, {"size", runtime_bytes.size()}, {"sha256", kNewSha}});
         if (with_plugin) {
           root->Write("update\\staging\\" + version + "\\plugins\\a.dll", kPluginBytes);
           files.push_back({{"path", "plugins/a.dll"}, {"size", sizeof(kPluginBytes) - 1}, {"sha256", kOldSha}});
@@ -586,6 +590,26 @@ TEST(UpdatePolicy, AStageResultOutsideTheHostsVocabularyIsNeverPublished) {
       << "none and blocked carry no files";
 }
 
+// The Quest's result (installer/src/stage.rs QUEST_PROFILE) read with the Quest's runtime file: one member, libnevr-runtime.so, counted
+// as the one runtime. The same text read as a PC result is refused, and a Quest result that lists the runtime twice is refused.
+TEST(UpdatePolicy, AQuestStageResultIsReadWithTheQuestsMemberSet) {
+  const std::size_t size = std::string("NEW-RUNTIME").size();
+  const std::string quest = json{{"action", "staged"}, {"version", "6.18.0"}, {"direction", "upgrade"}, {"reason", ""},
+                                 {"files", json::array({{{"path", "libnevr-runtime.so"}, {"size", size}, {"sha256", kNewSha}}})}}
+                                .dump();
+  StageResult r;
+  std::string err;
+  ASSERT_TRUE(ParseStageResult(quest, &r, &err, nevr_update_names::kQuestRuntimeMember)) << err;
+  ASSERT_EQ(r.files.size(), 1u);
+  EXPECT_EQ(r.files[0].path, "libnevr-runtime.so");
+  EXPECT_FALSE(ParseStageResult(quest, &r, &err)) << "the PC's member set does not hold the .so";
+  json twice = json::parse(quest);
+  twice["files"].push_back(twice["files"][0]);
+  EXPECT_FALSE(ParseStageResult(twice.dump(), &r, &err, nevr_update_names::kQuestRuntimeMember)) << "the runtime is listed once";
+  EXPECT_STREQ(nevr_update_names::RuntimeMemberFor("quest"), "libnevr-runtime.so");
+  EXPECT_STREQ(nevr_update_names::RuntimeMemberFor("pc"), "nevr-runtime.dll");
+}
+
 TEST(UpdatePolicy, StagedJsonIsTheSpellingTheHostReads) {
   StageResult r;
   r.action = "staged";
@@ -841,6 +865,78 @@ TEST(UpdateCheck, AVerifiedReleaseIsPublishedLastAndEveryDecisionIsALine) {
   // Nothing outside update\ and the core's own folders is written.
   for (const std::string& p : root.List()) {
     EXPECT_EQ(p.rfind("update", 0), 0u) << p << " is outside update\\";
+  }
+}
+
+// The Quest's stage (installer/src/stage.rs QUEST_PROFILE: one member, libnevr-runtime.so) with the platform word "quest": the result
+// is accepted, its one runtime is verified where the core staged it, and staged.json names it, as the Quest start reads it
+// (core/update/engine_start.cpp, StartContext::runtime_file).
+TEST(UpdateCheck, AQuestStageOfTheQuestRuntimeIsVerifiedAtItsPathAndPublished) {
+  Root root;
+  Lines lines;
+  FakeCore core;
+  core.runtime_member = "libnevr-runtime.so";
+  CheckEnv env = MakeEnv(root, core, lines);
+  env.platform = "quest";
+  std::vector<std::string> seen;
+  const auto inner = env.verify;
+  env.verify = [&seen, inner](const std::string& path, const ExpectedFile& expected) {
+    seen.push_back(path);
+    return inner(path, expected);
+  };
+  const CheckOutcome out = RunCheck(env);
+
+  EXPECT_EQ(out.action, CheckAction::kStaged) << lines.Dump();
+  EXPECT_EQ(out.reason, "") << lines.Dump();
+  ASSERT_EQ(seen.size(), 1u) << lines.Dump();
+  EXPECT_EQ(seen[0], root.File("update\\staging\\5.99.0\\libnevr-runtime.so"));
+  EXPECT_NE(lines.Find("update verify", {"path=libnevr-runtime.so", "version=5.99.0", "ok=true"}), "") << lines.Dump();
+  EXPECT_NE(lines.Find("update published", {"version=5.99.0", "files=1"}), "") << lines.Dump();
+  ASSERT_TRUE(root.Exists("update\\staged.json"));
+  const json staged = json::parse(root.Read("update\\staged.json"));
+  ASSERT_EQ(staged["files"].size(), 1u);
+  EXPECT_EQ(staged["files"][0]["path"], "libnevr-runtime.so");
+  EXPECT_EQ(staged["files"][0]["sha256"], kNewSha);
+}
+
+// A Quest release the verifier refuses is discarded by its runtime's sha256: the .so's, never an empty one.
+TEST(UpdateCheck, AQuestRuntimeTheVerifierRefusesIsDiscardedByItsOwnSha) {
+  Root root;
+  Lines lines;
+  FakeCore core;
+  core.runtime_member = "libnevr-runtime.so";
+  core.runtime_bytes = "BAD-RUNTIME";
+  CheckEnv env = MakeEnv(root, core, lines);
+  env.platform = "quest";
+  const CheckOutcome out = RunCheck(env);
+
+  EXPECT_EQ(out.reason, "verify_failed") << lines.Dump();
+  EXPECT_EQ(core.discard_calls, 1) << lines.Dump();
+  EXPECT_EQ(core.discard_sha, kNewSha);
+  EXPECT_FALSE(root.Exists("update\\staged.json"));
+}
+
+// The member set is the platform's (ADR 0024 section 4.9; the start's rule, core/update/engine_start.cpp ParseFileMember): a PC
+// result naming the Quest runtime, and a Quest result naming the PC runtime or a plugin, are bad results and publish nothing.
+TEST(UpdateCheck, EachPlatformAcceptsOnlyItsOwnRuntimeMember) {
+  struct Case {
+    const char* platform;
+    const char* member;
+    bool plugin;
+  };
+  for (const Case c : {Case{"pc", "libnevr-runtime.so", false}, Case{"quest", "nevr-runtime.dll", false},
+                       Case{"quest", "libnevr-runtime.so", true}}) {
+    Root root;
+    Lines lines;
+    FakeCore core;
+    core.runtime_member = c.member;
+    core.with_plugin = c.plugin;
+    CheckEnv env = MakeEnv(root, core, lines);
+    env.platform = c.platform;
+    const CheckOutcome out = RunCheck(env);
+    EXPECT_EQ(out.action, CheckAction::kFailed) << c.platform << " " << c.member << " plugin=" << c.plugin << "\n" << lines.Dump();
+    EXPECT_EQ(out.reason, "bad_result") << c.platform << " " << c.member << " plugin=" << c.plugin;
+    EXPECT_FALSE(root.Exists("update\\staged.json")) << c.platform << " " << c.member;
   }
 }
 

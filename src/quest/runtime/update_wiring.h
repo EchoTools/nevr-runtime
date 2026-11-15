@@ -21,12 +21,14 @@
 
 #include "core/update/engine_check.h"
 #include "core/update/fs.h"
+#include "core/update/names.h"
 #include "core/update/worker.h"
 
 namespace nevr_quest::update_wiring {
 
-/// The core's platform word for Quest (the PC's is "pc"): ADR 0024, section 3.
-inline constexpr char kPlatformWord[] = "quest";
+/// The core's platform word for Quest (the PC's is "pc"): ADR 0024, section 3. The one spelling is names.h's, which also picks the
+/// Quest's member set (libnevr-runtime.so alone) for the check from it (RuntimeMemberFor).
+inline constexpr const char* kPlatformWord = nevr_update_names::kQuestPlatform;
 
 /// The stage profile of the Quest runtime: the artifact kind and the one member, the same text as installer/src/stage.rs QUEST_PROFILE.
 /// A release lists the runtime as `quest-runtime`, one file with no zip (installer/include/nevr_install.h, NevrStage).

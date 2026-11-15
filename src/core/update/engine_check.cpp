@@ -33,8 +33,9 @@ struct Paths {
   std::string UpdateFile(const char* name) const { return Join(Update(), name); }
   std::string Staging() const { return Join(Update(), names::kStagingDir); }
   // A member's path inside a release's folder, written with the fs's separator ("plugins/<name>.dll" has a slash in the files).
-  std::string MemberIn(const std::string& folder, const names::Member& member) const {
-    std::string rel = names::MemberPath(member);
+  // `member_path` is a path ParseStageResult accepted (names.h ParseMemberOf), so it never leaves the folder.
+  std::string MemberIn(const std::string& folder, const std::string& member_path) const {
+    std::string rel = member_path;
     std::replace(rel.begin(), rel.end(), '/', fs.Separator());
     return Join(folder, rel);
   }
@@ -201,8 +202,10 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
       return done(CheckAction::kFailed, "stage_failed", "", "");
     }
 
+    // The member set is the platform's: libnevr-runtime.so alone on Quest, nevr-runtime.dll and its plugins on PC.
+    const char* runtime_file = names::RuntimeMemberFor(env.platform);
     StageResult staged;
-    if (!ParseStageResult(result_text, &staged, &error)) {
+    if (!ParseStageResult(result_text, &staged, &error, runtime_file)) {
       run.Finish("unchanged", "bad_result");
       return done(CheckAction::kFailed, "bad_result", "", "");
     }
@@ -229,9 +232,7 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
     bool all_ok = true;
     bool refused = false;
     for (const StagedFile& file : staged.files) {
-      names::Member member;
-      names::ParseMember(file.path, &member);  // parsed once already (ParseStageResult)
-      const std::string path = paths.MemberIn(folder, member);
+      const std::string path = paths.MemberIn(folder, file.path);
       VerifyOutcome v;
       if (env.verify) v = env.verify(path, ExpectedFile{file.size, file.sha256});
       Emit(env.log, v.ok ? kInfo : kWarning, "update verify",
@@ -247,7 +248,7 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
         // could not be read is not a refusal (a scanner's lock): nothing is recorded, and the next launch tries again.
         std::string runtime_sha;
         for (const StagedFile& f : staged.files) {
-          if (f.path == names::kRuntimeMember) runtime_sha = f.sha256;
+          if (f.path == runtime_file) runtime_sha = f.sha256;
         }
         std::string discard_error;
         const bool recorded = env.core.discard && env.core.discard(env.root, staged.version, runtime_sha, "verify_failed", &discard_error);
