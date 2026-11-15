@@ -20,6 +20,7 @@
 #include "runtime/combat/clock_pause.h"
 #include "runtime/combat/combat_settings.h"
 #include "runtime/combat/dot_script.h"
+#include "runtime/combat/drone_script.h"
 #include "runtime/combat/equip_cell.h"
 #include "runtime/combat/orb_pause.h"
 #include "runtime/combat/point_rate.h"
@@ -158,6 +159,9 @@ void Install(std::uintptr_t gameBase, bool isServer) {
         guard ? " (Follow skips while its target is null)" : " reason=hook_not_installed (see the lines above)");
     LogGroup(spec(Group::kDrone), at(Group::kDrone), guard && drone,
              !cells ? cellsRefused : "follow_update_hook_not_installed");
+    // #2242: the drone's death explosion, from the stock drone script's dispatcher and two stubs (drone_script.h). It is
+    // gated on the condition that installed DroneFix's own hooks (guard && drone), so it is not installed when they failed.
+    if (guard && drone) drone_script::Register();
 
     const bool veilWanted = at(Group::kVeil).on && cells;
     const bool match = at(Group::kMatchControl).on && veilWanted;

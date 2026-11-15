@@ -103,6 +103,7 @@ set(PATCHES_SOURCES
     "combat/clock_pause.cpp"
     "combat/combat.cpp"
     "combat/dot_script.cpp"
+    "combat/drone_script.cpp"
     "combat/orb_pause.cpp"
     "combat/point_rate.cpp"
     "combat/rules_button.cpp"
@@ -1366,6 +1367,16 @@ if(BUILD_TESTING)
     target_include_directories(test_point_rate PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_point_rate PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_point_rate DISCOVERY_MODE PRE_TEST)
+
+    # #2242: the drone's death explosion from the stock drone script (runtime/combat/drone_script.h): the dispatcher's
+    # record, the stubs' node layout (run on the detonator's pinned constructors) and the pins.
+    add_executable(test_drone_script tests/test_drone_script.cpp combat/drone_script.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_drone_script.cpp combat/drone_script.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_drone_script PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_drone_script PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_drone_script PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_drone_script DISCOVERY_MODE PRE_TEST)
 
     # #600: the RULES page's starting scores on the capture points (runtime/combat/capture_scores.h), on two fake scripts.
     add_executable(test_capture_scores tests/test_capture_scores.cpp combat/capture_scores.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
