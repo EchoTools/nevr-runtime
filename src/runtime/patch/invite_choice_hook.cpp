@@ -51,16 +51,16 @@ void Observe(std::uint64_t space, std::uint64_t eventAddress) {
     std::memcpy(out, reinterpret_cast<const void*>(address), length);
     return true;
   };
-  // #1857: what every call carries (symbol, owner, component), so the plugin manager's press hook can filter on a press on
-  // its own card. Debug: the calls are about one per click (#906 measured 18 in 112 s), and an operator does not need them.
+  // #1857: a click on the PLUGINS card. This runs for every call of SendComponentEvent (about 25 callers, grab events
+  // included, constantly in a match), so the cost is the point: ReadPluginsPress reads the event symbol, the component of a
+  // card click, and walks the sender only for a press on this card. The line is built into a fixed buffer, only for that
+  // press, which is a click by the player and the first line an operator or a tester looks for.
   nevr_menu_press::Press press;
-  const nevr_menu_press::Sender sender =
-      nevr_menu_press::ReadPress(reader, static_cast<std::uintptr_t>(space), event, &press);
-  Log(EchoVR::LogLevel::Debug, "%s", nevr_menu_press::PressLine(press, sender, seen).c_str());
-  // #1857: a click on the PLUGINS card. One Info line per press: a press is a click by the player, about one per second at
-  // most, and it is the first line an operator or a tester looks for.
-  if (nevr_plugins_card::IsPluginsPress(press)) {
-    Log(EchoVR::LogLevel::Info, "%s", nevr_plugins_card::PluginsPressLine(press, seen).c_str());
+  nevr_menu_press::Sender sender = nevr_menu_press::Sender::Unreadable;
+  if (nevr_plugins_card::ReadPluginsPress(reader, static_cast<std::uintptr_t>(space), event, &press, &sender)) {
+    char line[nevr_plugins_card::kPluginsLineBytes];
+    nevr_plugins_card::PluginsPressLine(line, sizeof(line), press, sender, seen);
+    Log(EchoVR::LogLevel::Info, "%s", line);
   }
 
   nevr_invite_choices::Event e;
