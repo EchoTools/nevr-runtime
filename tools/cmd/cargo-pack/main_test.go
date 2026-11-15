@@ -116,9 +116,12 @@ func TestPackRefusesBadInputAndWritesNothing(t *testing.T) {
 	files := map[string][]byte{"a.bin": body(smallBytes, 3), "empty.bin": {}}
 	bad := entry("0x0000000000000003", "a.bin")
 	bad.Align = 24
+	huge := entry("0x0000000000000007", "a.bin")
+	huge.Align = 8192
 	dup := entry("0x0000000000000004", "a.bin")
 	cases := map[string][]specEntry{
 		"alignment": {bad},
+		"too large": {huge},
 		"duplicate": {dup, dup},
 		"empty":     {entry("0x0000000000000005", "empty.bin")},
 		"name":      {entry("0x5", "a.bin")},
@@ -144,6 +147,13 @@ func TestEncodeFrameStatesTheSizeAndKeepsTheWindow(t *testing.T) {
 		var h zstd.Header
 		if err := h.Decode(frame); err != nil || !h.HasFCS || h.FrameContentSize != uint64(n) {
 			t.Errorf("%d bytes: header %+v err %v", n, h, err)
+		}
+		w := h.WindowSize
+		if h.SingleSegment {
+			w = h.FrameContentSize
+		}
+		if w > testWindow {
+			t.Errorf("%d bytes: the frame asks for a window of %d, above %d", n, w, testWindow)
 		}
 		if h.HasCheckSum {
 			t.Errorf("%d bytes: frame carries a checksum", n)

@@ -141,7 +141,8 @@ func run(args []string, stdout, stderr io.Writer, log *slog.Logger) int {
 
 // encodeFrame is one zstd frame of data whose header states the content size. A file that fits the window is a
 // single-segment frame (its window is its size); a larger one has the window descriptor and, being 256 bytes or more,
-// states its size.
+// states its size (TestEncodeFrameStatesTheSizeAndKeepsTheWindow reads the header). The encoder is given the window, so no
+// frame asks for more.
 func encodeFrame(data []byte, window uint64) ([]byte, error) {
 	single := uint64(len(data)) <= window
 	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBestCompression), zstd.WithWindowSize(int(window)),
@@ -150,22 +151,7 @@ func encodeFrame(data []byte, window uint64) ([]byte, error) {
 		return nil, err
 	}
 	defer enc.Close()
-	frame := enc.EncodeAll(data, nil)
-	var h zstd.Header
-	if err := h.Decode(frame); err != nil {
-		return nil, fmt.Errorf("the frame header does not decode: %w", err)
-	}
-	w := h.WindowSize
-	if h.SingleSegment {
-		w = h.FrameContentSize
-	}
-	if !h.HasFCS || h.FrameContentSize != uint64(len(data)) {
-		return nil, fmt.Errorf("the frame header states content size %d (stated: %t), the file is %d bytes", h.FrameContentSize, h.HasFCS, len(data))
-	}
-	if w > window {
-		return nil, fmt.Errorf("the frame window is %d bytes, larger than %d", w, window)
-	}
-	return frame, nil
+	return enc.EncodeAll(data, nil), nil
 }
 
 // manifestWindow is the smallest power of two the encoder accepts that holds the whole manifest text.
