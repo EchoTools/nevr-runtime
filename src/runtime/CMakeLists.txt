@@ -1881,6 +1881,19 @@ if(BUILD_TESTING)
     target_link_libraries(test_map_session_pin PRIVATE nevr_core GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_map_session_pin DISCOVERY_MODE PRE_TEST)
 
+    # ADR 0048: the PC channel's mount glue (content/map_channel.cpp: the mount observer, a client's hot mount and a server's
+    # mid-run group), compiled from the production file without its Win32 boot (NEVR_MAP_CHANNEL_TESTING), over the core's Test
+    # edge. The registry, the script provider, the config-alias hook and the server's join hold are the test's recorders.
+    add_executable(test_map_channel_pc tests/test_map_channel_pc.cpp)
+    # The boot half's helpers are compiled and never called here.
+    set_source_files_properties(tests/test_map_channel_pc.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON
+      COMPILE_OPTIONS "-Wno-unused-function")
+    target_compile_definitions(test_map_channel_pc PRIVATE NEVR_MAP_CHANNEL_TESTING)
+    target_include_directories(test_map_channel_pc PRIVATE ${CMAKE_SOURCE_DIR}/src "${CMAKE_SOURCE_DIR}/third_party/monocypher/src")
+    target_link_libraries(test_map_channel_pc PRIVATE nevr_core nevr::plugin_sdk GTest::gtest GTest::gtest_main
+      nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_map_channel_pc DISCOVERY_MODE PRE_TEST)
+
     # #1845: the log level of a relative \\?\ path the CreateDirectoryW hook creates (platform-compat's nt_path_log.h): header only, pure.
     add_executable(test_nt_path_log tests/nt_path_log_test.cpp)
     set_source_files_properties(tests/nt_path_log_test.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

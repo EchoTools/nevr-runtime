@@ -292,6 +292,20 @@ void GrantMounted(State* st, const nevr_maps::MountReport& report) {
   for (const std::string& id : report.mounted) st->granted.push_back(std::string(nevr_resource_sets::kMapOwnerPrefix) + id);
 }
 
+// A client's hot mount, after the worker answered a request: what it fetched is registered now and mounted on the next frame,
+// beside the earlier sets (the worker's thread).
+void ServedRequest(State* st, const nevr_maps::MountReport& mounted, const nevr_maps::MountReport& run) {
+  GrantMounted(st, mounted);
+  {
+    std::lock_guard<std::mutex> lock(st->granted_mutex);
+    st->run = run;
+  }
+  if (st->mounter->any_script()) nevr_map_scripts::InstallMapScriptsRewriter();
+  nevr_config_alias::InstallIfStaged();
+  nevr_resource_sets::MountLaterSets();
+  nevr_map_session_pin::SetChannelView(nevr_map_session_pin::ViewFromMount(run));
+}
+
 // The request entry the join hold calls (runtime/server/map_hold.h): queues one group's fetch on the server's worker. The queue
 // refuses a path-unsafe group id; the join hold holds nothing for a refused request.
 bool RequestServerGroup(const std::string& group) {
@@ -449,19 +463,10 @@ void StartFetchUnguarded() {
           // lacks is fetched when a session asks for it (the request entry below), never because its group lists it.
           st->channel->FetchPass(*st->env, *st->fs, st->deriver.get(), FetchGroups(Ask(seams.recorded_groups)), NowUtc(),
                                  keep_going, /*on_demand=*/true);
-          // The hot mount: what a request fetched is registered now and mounted on the next frame, beside the earlier sets.
           st->channel->ServeRequests(
               *st->env, *st->fs, st->deriver.get(), *st->requests, [] { return NowUtc(); }, keep_going, nullptr,
               [st](const nevr_maps::FetchReport&, const nevr_maps::MountReport& mounted, const nevr_maps::MountReport& run) {
-                GrantMounted(st, mounted);
-                {
-                  std::lock_guard<std::mutex> lock(st->granted_mutex);
-                  st->run = run;
-                }
-                if (st->mounter->any_script()) nevr_map_scripts::InstallMapScriptsRewriter();
-                nevr_config_alias::InstallIfStaged();
-                nevr_resource_sets::MountLaterSets();
-                nevr_map_session_pin::SetChannelView(nevr_map_session_pin::ViewFromMount(run));
+                ServedRequest(st, mounted, run);
               });
         } catch (const std::exception& e) {
           Log(EchoVR::LogLevel::Warning,
@@ -474,6 +479,8 @@ void StartFetchUnguarded() {
 
 }  // namespace
 
+// test_map_channel_pc compiles the glue above from this file, without the Win32 boot these entries reach.
+#ifndef NEVR_MAP_CHANNEL_TESTING
 void Boot(std::uintptr_t game_base, bool is_server) {
   static bool s_booted = false;  // the boot thread, once
   if (s_booted) return;
@@ -503,5 +510,6 @@ void StopFetch() {
     Log(EchoVR::LogLevel::Warning, "[NEVR.MAPS] map_stop reason=join_timeout (the fetch ends at its next transfer bound)");
   }
 }
+#endif
 
 }  // namespace nevr_map_channel::pc
