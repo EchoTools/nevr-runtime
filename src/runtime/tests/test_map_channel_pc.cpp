@@ -37,12 +37,15 @@ struct Registry {
   bool mount_asked = false;
 };
 Registry g_registry;
+int g_rewriter_installs = 0;
+int g_alias_installs = 0;
 
 std::vector<std::string> g_script_withdrawals;
 std::vector<std::string> g_fetch_asks;
 
 constexpr const char* kArena = "arena_c";
 constexpr const char* kArenaOwner = "map:arena_c";
+constexpr std::uint64_t kArenaScript = 0xa4e7a5c41;
 
 std::uint64_t ArenaLevel() { return sp::SessionLevelOf(kArena); }
 
@@ -98,12 +101,18 @@ std::size_t Withdraw(const std::string& owner) {
   g_script_withdrawals.push_back(owner);
   return 0;
 }
-bool InstallMapScriptsRewriter() { return true; }
+bool InstallMapScriptsRewriter() {
+  ++g_rewriter_installs;
+  return true;
+}
 
 }  // namespace nevr_map_scripts
 
 namespace nevr_config_alias {
-bool InstallIfStaged() { return false; }
+bool InstallIfStaged() {
+  ++g_alias_installs;
+  return false;
+}
 }  // namespace nevr_config_alias
 
 namespace nevr_map_hold {
@@ -156,7 +165,9 @@ class ClientGame : public sp::GameAccess {
 constexpr const char* kServerDir = "C:/nevr/server/maps";
 constexpr const char* kClientDir = "C:/nevr/client/maps";
 
-class MapChannelGlue : public ::testing::Test, public fx::Fixture {
+// The parameter is the client's boot: false mounts every cached map at boot (main), true mounts a map only when a session
+// asks for it (ChannelConfig::mount_on_demand). A server always mounts at boot.
+class MapChannelGlue : public ::testing::TestWithParam<bool>, public fx::Fixture {
  protected:
   void SetUp() override {
     Reset();
@@ -172,7 +183,7 @@ class MapChannelGlue : public ::testing::Test, public fx::Fixture {
   }
 
   void Publish(const char* version, char fill, int sequence) {
-    channel.Publish(kArena, version, fx::MakeSet(4, fill));
+    channel.Publish(kArena, version, fx::MakeSet(4, fill), {{kArenaScript, std::string("dll ") + version}});
     channel.Sign(sequence);
   }
 
@@ -183,11 +194,13 @@ class MapChannelGlue : public ::testing::Test, public fx::Fixture {
     g_script_withdrawals.clear();
     g_fetch_asks.clear();
     g_releases.clear();
+    g_rewriter_installs = 0;
+    g_alias_installs = 0;
     pc::g_state = nullptr;
   }
 
   // One game process, left as BootUnguarded leaves it: the channel booted from its own cache folder, its view published and the
-  // boot mount run. The Env and MapFs are the fixture's, borrowed (TearDown releases them).
+  // boot mount run (for a client, in the parameter's mode). The Env and MapFs are the fixture's, borrowed (TearDown releases them).
   pc::State* StartProcess(bool server, const char* dir) {
     auto st = std::make_unique<pc::State>();
     st->server = server;
@@ -199,6 +212,7 @@ class MapChannelGlue : public ::testing::Test, public fx::Fixture {
     settings.keys = {key.pin};
     nevr_maps::ChannelConfig platform;
     platform.dir = dir;
+    platform.mount_on_demand = !server && GetParam();
     st->channel = std::make_unique<nevr_map_channel::Channel>(platform, settings);
     st->mounter = std::make_unique<pc::PcMounter>();
     pc::g_state = st.get();
@@ -279,7 +293,10 @@ class MapChannelGlue : public ::testing::Test, public fx::Fixture {
     EXPECT_EQ(g_fetch_asks, std::vector<std::string>{kArena});
     std::string reason;
     EXPECT_TRUE(client->requests->RequestMap(kArena, &reason)) << reason;
+    const int rewriter_before = g_rewriter_installs, alias_before = g_alias_installs;
     Serve(client);
+    EXPECT_EQ(g_rewriter_installs, rewriter_before + 1) << "the map's script needs the rewriter";
+    EXPECT_EQ(g_alias_installs, alias_before + 1) << "a staged config alias of the map is installed";
     EXPECT_TRUE(nevr_resource_sets::AwaitsLaterMount(kArenaOwner));
     EXPECT_TRUE(g_registry.mount_asked) << "the hot mount asks the registry for a later mount";
     return client;
@@ -290,7 +307,7 @@ class MapChannelGlue : public ::testing::Test, public fx::Fixture {
 
 // Owner: "if a player trys to load arena_C but doesnt have it it should download, then mount, and load". The hot mount asks for
 // the registry's later mount, that mount's observer publishes the session's pin, and the next tick releases the same join.
-TEST_F(MapChannelGlue, AClientThatLacksTheMapDownloadsItAndTheLaterMountReleasesTheHeldJoin) {
+TEST_P(MapChannelGlue, AClientThatLacksTheMapDownloadsItAndTheLaterMountReleasesTheHeldJoin) {
   ServerFetchesTheGroup();
   const std::uint64_t server_pin = sp::ServerPinFor(ArenaLevel());
   ASSERT_NE(server_pin, 0u);
@@ -317,7 +334,7 @@ TEST_F(MapChannelGlue, AClientThatLacksTheMapDownloadsItAndTheLaterMountReleases
 }
 
 // A later mount that refuses the map never releases the hold: no pin is published, and the next tick leaves with a plain notice.
-TEST_F(MapChannelGlue, ALaterMountThatRefusesTheMapNeverReleasesTheHeldJoin) {
+TEST_P(MapChannelGlue, ALaterMountThatRefusesTheMapNeverReleasesTheHeldJoin) {
   ServerFetchesTheGroup();
   const std::uint64_t server_pin = sp::ServerPinFor(ArenaLevel());
   ASSERT_NE(server_pin, 0u);
@@ -340,7 +357,7 @@ TEST_F(MapChannelGlue, ALaterMountThatRefusesTheMapNeverReleasesTheHeldJoin) {
 // Owner: "if a server has arena c loaded and arena c gets updated clients cant join the old arena c version". A group the server
 // fetches mid-run is mounted by the registry's later mount, and that mount's observer releases the group's joins only after it
 // published the lobby pin. A client still on the old version of the map is refused that pin.
-TEST_F(MapChannelGlue, AServerGroupFetchedMidRunIsMountedAndPinnedBeforeItsJoinsRelease) {
+TEST_P(MapChannelGlue, AServerGroupFetchedMidRunIsMountedAndPinnedBeforeItsJoinsRelease) {
   pc::State* client = StartProcess(false, kClientDir);  // a client that played arena_c 1.0.0 in an earlier run
   SessionSucceeded(client);
   std::string reason;
@@ -366,12 +383,30 @@ TEST_F(MapChannelGlue, AServerGroupFetchedMidRunIsMountedAndPinnedBeforeItsJoins
   EXPECT_TRUE(g_script_withdrawals.empty());
 
   Reset();
-  client = StartProcess(false, kClientDir);  // the old client's next start mounts the copy it holds
+  client = StartProcess(false, kClientDir);
+  if (!GetParam()) {
+    // The old client's next start mounts the copy it holds.
+    ASSERT_EQ(client->run.staged.size(), 1u);
+    EXPECT_EQ(client->run.staged[0].version, "1.0.0");
+    ASSERT_NE(sp::ServerPinFor(ArenaLevel()), 0u);
+    EXPECT_NE(sp::ServerPinFor(ArenaLevel()), server_pin);
+    EXPECT_EQ(sp::DecideClient(ArenaLevel(), server_pin).action, sp::ClientAction::kLeave);
+    return;
+  }
+  // On demand, the old client's next start mounts nothing; asked for the map, it checks the manifest and mounts 1.1.0.
+  EXPECT_TRUE(client->run.staged.empty());
+  EXPECT_EQ(sp::ServerPinFor(ArenaLevel()), 0u);
+  SessionSucceeded(client);
+  ASSERT_TRUE(client->requests->RequestMap(kArena, &reason)) << reason;
+  Serve(client);
+  Frame();
   ASSERT_EQ(client->run.staged.size(), 1u);
-  EXPECT_EQ(client->run.staged[0].version, "1.0.0");
-  ASSERT_NE(sp::ServerPinFor(ArenaLevel()), 0u);
-  EXPECT_NE(sp::ServerPinFor(ArenaLevel()), server_pin);
-  EXPECT_EQ(sp::DecideClient(ArenaLevel(), server_pin).action, sp::ClientAction::kLeave);
+  EXPECT_EQ(client->run.staged[0].version, "1.1.0");
+  EXPECT_EQ(sp::ServerPinFor(ArenaLevel()), server_pin);
+  EXPECT_NE(sp::DecideClient(ArenaLevel(), server_pin).action, sp::ClientAction::kLeave);
 }
+
+INSTANTIATE_TEST_SUITE_P(ClientBoot, MapChannelGlue, ::testing::Bool(),
+                         [](const ::testing::TestParamInfo<bool>& info) { return info.param ? "OnDemand" : "AtBoot"; });
 
 }  // namespace
