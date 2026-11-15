@@ -11,6 +11,7 @@
 #include <exception>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -20,6 +21,7 @@
 #include "core/config_alias.h"
 #include "core/logging.h"
 #include "core/map_channel.h"
+#include "core/map_fetch_queue.h"
 #include "core/map_manifest.h"
 #include "core/nevr_root.h"
 #include "core/resource_set_registry.h"
@@ -31,6 +33,7 @@
 #include "runtime/lifecycle/game_image_guard.h"
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/patch/resource_sets.h"
+#include "runtime/server/map_hold.h"
 
 namespace nevr_map_channel::pc {
 namespace {
@@ -38,18 +41,7 @@ namespace {
 constexpr const char* kEnvTag = "[NEVR.MAPS]";  // the tag the PC env writes its records under
 constexpr std::size_t kLockNameHexDigits = 16;  // the root lock's name: the first digits of sha256(root)
 constexpr std::uint32_t kStopWaitMs = 2000;     // the fetch's stop waits this long, then detaches (the fetch ends at its next transfer)
-
-// The run's channel, heap-owned and never freed: the worker and the mount observer use it for the process's life.
-struct State {
-  std::unique_ptr<nevr_cdn::Env> env;
-  std::unique_ptr<nevr_maps::MapFs> fs;
-  std::unique_ptr<nevr_maps::StockSource> stock;
-  std::unique_ptr<nevr_maps::ChannelDeriver> deriver;
-  std::unique_ptr<Channel> channel;
-  std::unique_ptr<FetchWorker> worker;
-  std::vector<std::string> granted;  // the owners this run's boot granted ("map:<id>")
-};
-State* g_state = nullptr;
+constexpr std::uint32_t kServerQueueWaitMs = 500;  // a dedicated server's worker checks for a stop this often while no group is requested
 
 std::string Flat(const char* key) {
   const char* value = NevrCfgGetFlat(key);
@@ -183,6 +175,24 @@ class PcMounter : public nevr_maps::Mounter {
   bool any_script_ = false;
 };
 
+// The run's channel, heap-owned and never freed: the worker and the mount observer use it for the process's life. The mounter is
+// kept here because the channel's mounts (the boot's and a server's) register through it for as long as the process runs.
+struct State {
+  std::unique_ptr<nevr_cdn::Env> env;
+  std::unique_ptr<nevr_maps::MapFs> fs;
+  std::unique_ptr<nevr_maps::StockSource> stock;
+  std::unique_ptr<nevr_maps::ChannelDeriver> deriver;
+  std::unique_ptr<Channel> channel;
+  std::unique_ptr<FetchWorker> worker;
+  std::unique_ptr<PcMounter> mounter;
+  std::unique_ptr<nevr_maps::GroupFetchQueue> queue;  // a dedicated server's requests: the groups its sessions name
+  bool server = false;                                // a dedicated server: its fetches are the groups its sessions name
+  std::vector<std::string> deferred;                  // the maps the boot mount deferred: the worker hashes them
+  std::mutex granted_mutex;                           // guards granted: the mount observer reads it on the thread that mounts
+  std::vector<std::string> granted;                   // the owners this run's mounts granted ("map:<id>")
+};
+State* g_state = nullptr;
+
 // The mounted owners and their levels, from the registry's report: the entries whose plugin is "map:<id>".
 nevr_config_alias::OwnerLevels MountedOwners(const std::string& report_json) {
   nevr_config_alias::OwnerLevels owners;
@@ -210,8 +220,13 @@ nevr_config_alias::OwnerLevels MountedOwners(const std::string& report_json) {
 void OnMount(const nevr_resource_sets::MountReport&) {
   State* st = g_state;
   if (st == nullptr) return;
+  std::vector<std::string> granted;
+  {
+    std::lock_guard<std::mutex> lock(st->granted_mutex);
+    granted = st->granted;
+  }
   const MountDecision decision = DecideMount(
-      st->granted, MountedOwners(nevr_resource_sets::ReportJson()),
+      granted, MountedOwners(nevr_resource_sets::ReportJson()),
       [](const std::string& owner) {
         nevr_map_scripts::Withdraw(owner);
         nevr_config_alias::Unstage(owner);
@@ -244,13 +259,64 @@ std::vector<std::string> Ask(const std::function<std::vector<std::string>()>& se
   return seam ? seam() : std::vector<std::string>();
 }
 
-void BootUnguarded(std::uintptr_t game_base, bool is_server) {
-  if (is_server) {
-    // The server's group fetch and its join hold are a later part of the channel (ADR 0048 decisions 13 and 17); until then a
-    // dedicated server runs without the channel, and says so once.
-    Log(EchoVR::LogLevel::Info, "[NEVR.MAPS] map_start reason=server_not_served (the server's group fetch is a later part)");
-    return;
+// Records the owners a mount granted, so the mount observer knows which withdrawals it must check (any thread).
+void GrantMounted(State* st, const nevr_maps::MountReport& report) {
+  std::lock_guard<std::mutex> lock(st->granted_mutex);
+  for (const std::string& id : report.mounted) st->granted.push_back(std::string(nevr_resource_sets::kMapOwnerPrefix) + id);
+}
+
+// The request entry the join hold calls (runtime/server/map_hold.h): queues one group's fetch on the server's worker. The queue
+// refuses a path-unsafe group id; the join hold holds nothing for a refused request.
+bool RequestServerGroup(const std::string& group) {
+  State* const st = g_state;
+  if (st == nullptr || !st->queue) return false;
+  std::string reason;
+  return st->queue->Request(group, [](const nevr_maps::FetchReport&) {}, &reason);
+}
+
+// One group for a dedicated server (ADR 0048 decisions 13 and 17). Its progress goes to the join hold. When the fetch did not fail,
+// its maps mount now, in this process, and the hold hears of the mount. A failed fetch mounts nothing: the hold runs to its timeout,
+// and the Warning there says the session started without the maps.
+nevr_maps::FetchReport FetchServerGroup(State* st, const std::string& group, const std::function<bool()>& keep_going) {
+  const std::string now = NowUtc();
+  const nevr_maps::FetchProgressFn progress = [](const nevr_maps::FetchProgress& p) { nevr_map_hold::NoteFetchProgress(p); };
+  const nevr_maps::FetchReport report = nevr_maps::FetchGroup(*st->env, *st->fs, st->channel->config(), group, st->deferred,
+                                                              st->deriver.get(), now, keep_going, progress);
+  if (report.outcome == nevr_maps::FetchOutcome::kFailed) return report;
+  const nevr_maps::MountReport mounted = st->channel->MountGroups({group}, now);
+  GrantMounted(st, mounted);
+  if (st->mounter->any_script()) nevr_map_scripts::InstallMapScriptsRewriter();
+  nevr_config_alias::InstallIfStaged();
+  nevr_map_hold::NoteGroupMounted(group, mounted);
+  return report;
+}
+
+// A dedicated server's worker: it waits for a group the join hold requested and fetches it, until the worker is stopped.
+void ServerPass(State* st, const std::function<bool()>& keep_going) {
+  while (keep_going()) {
+    if (!st->queue->WaitForRequest(kServerQueueWaitMs)) continue;
+    st->queue->RunNext([st, &keep_going](const std::string& group) { return FetchServerGroup(st, group, keep_going); });
   }
+}
+
+// Starts a dedicated server's worker and sets the request entry the join hold calls (the entry is set last, once the worker can take it).
+void StartServerWorker(State* st) {
+  st->queue = std::make_unique<nevr_maps::GroupFetchQueue>();
+  st->worker = std::make_unique<FetchWorker>(
+      [st](const std::function<bool()>& keep_going) {
+        try {
+          ServerPass(st, keep_going);
+        } catch (const std::exception& e) {
+          Log(EchoVR::LogLevel::Warning,
+              "[NEVR.MAPS] map_done reason=exception what=\"%s\" (the server's group is not mounted this run)", e.what());
+        }
+      },
+      [st] { return st->env->NowMs(); });
+  nevr_map_hold::SetRequestFetch(&RequestServerGroup);
+  st->worker->Start();
+}
+
+void BootUnguarded(std::uintptr_t game_base, bool is_server) {
   const std::wstring root = nevr_root::RootW();
   const Settings settings = ReadSettings([](const char* key) { return Flat(key); },
                                          [](const char* key) { return FlatList(key); }, CompiledOfficialKeys());
@@ -269,6 +335,7 @@ void BootUnguarded(std::uintptr_t game_base, bool is_server) {
   }
 
   State* const st = new State();
+  st->server = is_server;
   st->env = std::make_unique<nevr_cdn::WindowsEnv>(kEnvTag);
   st->fs = nevr_maps::MakeWinMapFs();
   const std::wstring exe_dir = ExeDir();
@@ -288,16 +355,18 @@ void BootUnguarded(std::uintptr_t game_base, bool is_server) {
     nevr_map_scripts::SetPolicy(config.signed_only, nevr_maps::MapDocumentBytes(facts));
   }
 
-  PcMounter mounter;
+  st->mounter = std::make_unique<PcMounter>();
   // The recorded groups are the session pin's requests and the cache index's groups (RecordedGroupSeams). No local copy is listed
   // here: this build has no reader of hand-installed copies, so local_map_ids is unset and the boot's local list is empty.
   const Seams seams = RecordedGroupSeams(*st->env, st->channel->config().dir);
-  const BootResult& boot = st->channel->Boot(*st->env, *st->fs, mounter, st->deriver.get(), NowUtc(), Ask(seams.local_map_ids));
+  const BootResult& boot =
+      st->channel->Boot(*st->env, *st->fs, *st->mounter, st->deriver.get(), NowUtc(), Ask(seams.local_map_ids));
   if (boot.start != Start::kRun) return;  // the core wrote why (not_configured, or the refusal)
   ArmSessionGroupRequest();  // a session success now queues its group for the fetch worker (ADR 0048 decision 15)
 
-  for (const std::string& id : boot.report.mounted) st->granted.push_back(std::string(nevr_resource_sets::kMapOwnerPrefix) + id);
-  if (mounter.any_script()) nevr_map_scripts::InstallMapScriptsRewriter();
+  st->deferred = boot.report.deferred;
+  GrantMounted(st, boot.report);
+  if (st->mounter->any_script()) nevr_map_scripts::InstallMapScriptsRewriter();
   nevr_resource_sets::SetMountObserver(&OnMount);
   nevr_config_alias::InstallIfStaged();
 }
@@ -308,6 +377,10 @@ void StartFetchUnguarded() {
   const std::string dir = st->channel->config().dir;
   if (!TryLockRoot(*st->env, dir)) {
     Log(EchoVR::LogLevel::Info, "[NEVR.MAPS] map_start reason=busy (another game process is fetching into %s)", dir.c_str());
+    return;
+  }
+  if (st->server) {
+    StartServerWorker(st);
     return;
   }
   st->worker = std::make_unique<FetchWorker>(

@@ -317,6 +317,21 @@ void TheFetchRunsOnlyOnTheWorkerAfterBoot() {
   if (env.requests.size() == 1) QCHECK(env.requests[0] == nevr_maps::GroupManifestUrl(kBase, kGroup));
 }
 
+// A server mounts the group it fetched at once, through the boot's own mount: MountGroups answers nothing before Boot ran the
+// channel, and after Boot with nothing cached it mounts nothing and reaches no network.
+void MountGroupsIsEmptyUntilBootAndMountsNothingUncached() {
+  FakeEnv env;
+  FakeMapFs fs(env);
+  CountingMounter mounter;
+  const mc::Settings s = mc::ReadSettings(Scalars(ConfiguredValues()), Items({}), mc::CompiledOfficialKeys());
+  mc::Channel channel(PlatformConfig(), s);
+  QCHECK(channel.MountGroups({kGroup}, kNow).mounted.empty());  // before Boot: no mount object exists
+  QCHECK(env.requests.empty());
+  channel.Boot(env, fs, mounter, nullptr, kNow, {});
+  QCHECK(channel.MountGroups({kGroup}, kNow).mounted.empty());  // after Boot: the group is not cached, so nothing mounts
+  QCHECK(env.requests.empty());
+}
+
 // ---- The mount observer's decision (both platforms call it) ------------------------------------------------------------------
 
 // An expected owner no mounted set belongs to is withdrawn; a mounted owner is kept and not withdrawn.
@@ -430,6 +445,7 @@ int main() {
   ABootOverAnEmptyCacheReachesNoNetworkAndHashesNothing();
   ASecondBootIsIdempotent();
   TheFetchRunsOnlyOnTheWorkerAfterBoot();
+  MountGroupsIsEmptyUntilBootAndMountsNothingUncached();
   AWorkerNeverStartedHasNoThread();
   AWorkerRefusesARequestInsideTheGap();
   TheMountDecisionWithdrawsTheUnmountedAndKeepsTheRest();

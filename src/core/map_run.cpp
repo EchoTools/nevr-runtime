@@ -12,6 +12,7 @@
 #include "core/device_memory.h"
 #include "core/map_groups.h"
 #include "core/map_index.h"
+#include "core/map_server_hold.h"
 #include "core/map_set_tables.h"
 #include "nevr/symbol_hash.h"
 
@@ -421,7 +422,8 @@ class MountRun {
     if (!StockManifestOk(package, config_)) return Refuse(id, "stock_mismatch");
     const bool scripts = HasScripts(package);
     if (scripts && selected.expired) return Refuse(id, "expired");
-    if (scripts && config_.signed_only && !selected.compiled_official) return Refuse(id, "signed_only");
+    // ADR 0048 decisions 7 and 18: a run's (and a server's) scripts mount only when the run is not signed-only or the manifest is official.
+    if (scripts && !nevr_maps::ServerMountsScripts(config_.signed_only, selected.compiled_official)) return Refuse(id, "signed_only");
     const bool derive = NeedsDerive(package);
     if ((derive || !cached.stock_stamps.empty()) && deriver_ == nullptr) return Refuse(id, "derived_unsupported");
     if (!cached.stock_stamps.empty() && !StockCurrent(cached.stock_stamps)) return Defer(id, "stock_changed");
@@ -1326,7 +1328,7 @@ class FetchRun {
         plan("unsupported_game", EventLevel::kWarn);
         continue;
       }
-      if (entry.scripts > 0 && config_.signed_only && !parsed_.compiled_official) {
+      if (entry.scripts > 0 && !nevr_maps::ServerMountsScripts(config_.signed_only, parsed_.compiled_official)) {
         plan("signed_only", EventLevel::kWarn);
         continue;
       }
