@@ -17,7 +17,7 @@ import (
 	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
 )
 
-// The content-pack tests (test_quest_repack_pack.py): stage-pack, pack-problems and verify-signed over a pack. Every
+// The content-pack tests (ported from the retired Python repack tests, #2132): stage-pack, pack-problems and verify-signed over a pack. Every
 // file of a pack gets every check, and a refusal writes nothing.
 
 const (

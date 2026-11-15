@@ -194,7 +194,6 @@ tools/tests/test_quest_quit_path.py	ported by its unit of #2132
 tools/tests/test_quest_release_base.py	ported by its unit of #2132
 tools/tests/test_quest_release_loader.py	ported by its unit of #2132
 tools/tests/test_quest_release_timer.py	ported by its unit of #2132
-tools/tests/test_quest_repack_version.py	ported by its unit of #2132
 tools/tests/test_quest_resource_request_wiring.py	ported by its unit of #2132
 tools/tests/test_quest_sentinel_link.py	ported by its unit of #2132
 tools/tests/test_quest_sentinel_no_namespace_mutex.py	ported by its unit of #2132

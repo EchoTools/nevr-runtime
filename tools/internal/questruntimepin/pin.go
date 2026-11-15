@@ -360,7 +360,7 @@ func hexTexts(data []byte) []int {
 }
 
 // KnownSites is the gated-module count of each reference runtime this project knows: 12 in the pinned reference APK's
-// runtime, 13 in the wave-2 runtime (quest_runtime_pin.py KNOWN_SITES).
+// runtime, 13 in the wave-2 runtime (the retired Python pin's KNOWN_SITES, #2132).
 var KnownSites = []int{12, 13}
 
 func isKnownSites(n int) bool {

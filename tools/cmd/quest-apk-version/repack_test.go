@@ -19,7 +19,7 @@ import (
 	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
 )
 
-// The Go twin of tools/tests/test_quest_repack_version.py: `just android-repack-apk` end to end (#923). The recipe runs for
+// `just android-repack-apk` end to end (#923). The recipe runs for
 // real over a fixture APK and a compiled fixture shim, signed through the real tools/quest_keystore.sh with a fixture key
 // made here (NEVR_QUEST_KEYSTORE and NEVR_QUEST_KEYSTORE_PASS name it; the real key is never touched). The versionCode is
 // read back from the SIGNED APK by aapt2, a reader that is not ours. The expected numbers are written out here, derived
@@ -216,7 +216,7 @@ func newRepackFixture(t *testing.T) *repackFixture {
 }
 
 // copyTestBinary replaces the link Fake made at path with a copy of this test binary. The recipe's patcher is resolved
-// with a path that follows links (quest_repack_libs.py, Path.resolve), so a link would start the test binary under its own
+// with a path that follows links (the retired Python repack resolved it with Path.resolve), so a link would start the test binary under its own
 // name, which is not a fake. A copy keeps the name the fake is found by.
 func copyTestBinary(t *testing.T, path string) {
 	t.Helper()
@@ -299,7 +299,7 @@ func (r *repackFixture) makeInputs(version string, manifest []byte, header bool,
 	}
 	buildLib(r.t, r.shim, shimSource, soNameLoader, shimVersion)
 	// The recipe stages the baseline runtime from beside the shim (the justfile's runtime parameter; stage-runtime refuses a
-	// missing or empty file), as tools/tests/test_quest_repack_version.py does.
+	// missing or empty file), as the retired Python repack fixture did.
 	if err := os.WriteFile(filepath.Join(filepath.Dir(r.shim), "libnevr-runtime.so"), []byte("\x7fELF fixture baseline runtime\x00"), 0o644); err != nil {
 		r.t.Fatal(err)
 	}

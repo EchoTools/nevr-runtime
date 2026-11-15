@@ -25,7 +25,7 @@ import (
 // The end-to-end tests: `just android-repack-apk` run for real over the fixture (repackfixture), with the stand-in
 // patcher, a fixture key and an AArch64 plugin made by clang, and the SIGNED APK read back with the standard zip reader.
 // They are the Python tests RepackWithAPluginTest, RepackNamesItsVariantTest, RepackPatchesLibr15Test and
-// RepackWithAPackTest (test_quest_repack_libs.py and test_quest_repack_pack.py).
+// RepackWithAPackTest (ported from the retired Python repack tests of the same names, #2132).
 
 const (
 	e2eGameID  = "b243509c08ce677aeb95fa348016949b3fc45230" // the fixture libr15's build ID (kLibR15BuildId)
