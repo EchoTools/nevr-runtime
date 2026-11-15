@@ -406,6 +406,9 @@ void BootUnguarded(std::uintptr_t game_base, bool is_server) {
 
   nevr_maps::ChannelConfig config;
   config.dir = Slashes(Utf8(nevr_root::MapsCacheDir(root)));
+  // A client mounts a map when a session asks for it (the later mount, patch/resource_sets.cpp MountLaterSets); a server mounts
+  // its cached groups at boot and its allocated group when the join hold fetches it (FetchServerGroup).
+  config.mount_on_demand = !is_server;
   config.signed_only = nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly;
   st->channel = std::make_unique<Channel>(config, settings);
   g_state = st;
