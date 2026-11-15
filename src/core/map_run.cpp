@@ -1305,7 +1305,8 @@ class FetchRun {
       const PlatformEntry* entry = nullptr;
     };
     std::vector<Planned> to_fetch;
-    for (const auto& [id, map] : manifest.maps) {
+    for (const auto& [map_id, map] : manifest.maps) {
+      const std::string& id = map_id;  // a lambda cannot capture a structured binding before C++20
       const auto platform = map.platforms.find(config_.platform);
       if (platform == map.platforms.end()) continue;
       const PlatformEntry& entry = platform->second;
