@@ -36,7 +36,9 @@ std::uint32_t Event(std::uint32_t stock) {
 }
 
 std::uint64_t NextNode(std::uint64_t node, std::uint64_t stock) {
-  return node == kSetupNode && stock == kFirstSceneSetNode ? kAfterSceneSetNodes : stock;
+  if (node == kSetupNode && stock == kFirstSceneSetNode) return kAfterSceneSetNodes;
+  if (node == kHideNode && stock == kHideStockNext) return kSoundStop;                      // hide, then the sound stops
+  return stock;
 }
 
 void Register() {
@@ -46,12 +48,13 @@ void Register() {
        reinterpret_cast<void*>(&PlaySoundExecute), reinterpret_cast<void**>(&g_execute),
        "DOT FIELD: the stun grenade's sound events"},
       {kScript, kNextNodeRva, kNextNodePrologue, sizeof kNextNodePrologue, reinterpret_cast<void*>(&NextNodeHook),
-       reinterpret_cast<void**>(&g_next_node), "DOT FIELD: setup skips the three scene-set nodes"},
+       reinterpret_cast<void**>(&g_next_node), "DOT FIELD: setup skips the three scene-set nodes; hide goes on to the sound stop"},
   };
   nevr_script_hooks::Register(rows, sizeof rows / sizeof rows[0]);
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.COMBAT] DOT FIELD fix registered script=%016llx hooks=2 (the field plays the stun grenade's sounds, and its "
-      "setup no longer runs three scene-set nodes on a model it does not have; installed when the DOT's script loads)",
+      "[NEVR.COMBAT] DOT FIELD fix registered script=%016llx hooks=2 (the field plays the stun grenade's sounds; its "
+      "setup skips three scene-set nodes on a model it does not have; its hide node goes on to the field sound's stop; "
+      "installed when the DOT's script loads)",
       static_cast<unsigned long long>(kScript));
 }
 

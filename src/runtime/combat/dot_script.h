@@ -14,6 +14,10 @@
 //    component the DOT does not have, logging "Scriptnode can't find actor/component" three times a spawn. next_node
 //    (RVA 0x10F30, next_node(node, port) -> the next node id) returns 0x9507DC91 after node 0x393F4ADA (ports `out` and
 //    0, at 0x116AF); the wrap returns 0x013166C6 there instead, the node after the three.
+// 3. The hide node (69412c20, ARC_SCENE off) goes on to the field sound's stop (5fefe254) instead of 0x169412C20
+//    (fix_dot_field.py LINKS[2]; next_node arm at VA 0x180011b5a of 97d0806e6ea89130.dll). The field's sound and show
+//    links (LINKS[0], LINKS[1]) wait for the scene-set half (the bubble's constant and flags): on a stock-data client the
+//    FIELD component is absent, and a show node reached now logs its missing component.
 
 #include <cstdint>
 
@@ -30,8 +34,14 @@ inline constexpr std::uint32_t kFieldStopEvent = 0xC9CD3996;   // stop_grenade_s
 inline constexpr std::uint32_t kStunStop = 0xBDE3209D;         // stop_grenade_stun
 
 inline constexpr std::uint64_t kSetupNode = 0x393f4ada;
-inline constexpr std::uint64_t kFirstSceneSetNode = 0x9507dc91;
+inline constexpr std::uint64_t kFirstSceneSetNode = 0x9507dc91;   // the setup chain's first scene-set node (skipped)
 inline constexpr std::uint64_t kAfterSceneSetNodes = 0x013166c6;
+
+// The field's hide chain (fix_dot_field.py LINKS[2]), keyed on the node and the game's own next for ports out and 0 of
+// next_node: the hide node's next in the game is 0x169412C20.
+inline constexpr std::uint64_t kHideNode = 0x69412c20;             // the hide node (ARC_SCENE off)
+inline constexpr std::uint64_t kHideStockNext = 0x169412c20;
+inline constexpr std::uint64_t kSoundStop = 0x5FEFE254;            // the field sound's stop
 
 // `mov [rsp+8],rbx; push rdi; sub rsp,0x20; cmp qword [rdx+0x18],0`
 inline constexpr std::uint8_t kPlaySoundPrologue[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83,
