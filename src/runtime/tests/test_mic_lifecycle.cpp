@@ -563,8 +563,9 @@ TEST(MicProviderPolicy, InstalledOnNativeWindowsAndUnderWine) {
 
 // #879: a dedicated server opens no capture device; a client keeps the provider's capture path.
 TEST(MicProviderPolicy, ServerProvidesNoCaptureAndAClientDoes) {
-  EXPECT_FALSE(nevr_mic_policy::ProvidesCapture(/*isServer=*/true));
-  EXPECT_TRUE(nevr_mic_policy::ProvidesCapture(/*isServer=*/false));
+  EXPECT_FALSE(nevr_mic_policy::ProvidesCapture(/*isServer=*/true, /*gameAudioOn=*/true));
+  EXPECT_TRUE(nevr_mic_policy::ProvidesCapture(/*isServer=*/false, /*gameAudioOn=*/true));
+  EXPECT_FALSE(nevr_mic_policy::ProvidesCapture(/*isServer=*/false, /*gameAudioOn=*/false));
 }
 
 TEST(MicProviderPolicy, BootLineNamesTheDecisionAndNeverClaimsAProviderThatIsNotInstalled) {

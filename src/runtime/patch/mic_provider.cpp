@@ -37,6 +37,8 @@
 #include "runtime/patch/mic_device_choice.h"
 #include "runtime/patch/mic_policy.h"
 #include "runtime/lifecycle/cli.h"
+#include "runtime/lifecycle/config.h"  // g_pGame
+#include "runtime/hook/addresses.h"  // GAME_ENGINE_FLAGS_OFFSET
 
 #ifdef _WIN32
 #include <windows.h>
@@ -46,6 +48,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <cstring>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -859,9 +863,31 @@ void RequestRecoveryAfterLoss() {
 // listening, so that read gets fresh audio. MicAvailable is only a poll: the game calls it from the moment
 // capture starts and makes its first MicRead hundreds of milliseconds later, so it neither drops nor counts
 // as a consumer (MicRingBuffer::NoteReaderActive).
-// #879: a dedicated server opens no capture device. Read at call time, because the lookup hook is installed
-// before the CLI sets g_isServer.
-static bool ServerHasNoCapture() { return !nevr_mic_policy::ProvidesCapture(g_isServer != FALSE); }
+// #879: a dedicated server opens no capture device, and neither does a game whose audio is off (-noaudio; engine flags at
+// game+0x1D4, mic_policy.h). Both are read at call time: the lookup hook is installed before the CLI sets g_isServer and
+// before the game reads its command line. A server is decided first, so its headless patch (which clears the audio bit
+// too) is never reported as -noaudio.
+static bool CaptureIsOff() {
+  if (!nevr_mic_policy::ProvidesCapture(g_isServer != FALSE, /*gameAudioOn=*/true)) return true;
+  const bool readable = g_pGame != nullptr;
+  std::uint32_t engineFlags = 0;
+  if (readable) {
+    std::memcpy(&engineFlags, static_cast<const char*>(g_pGame) + nevr_patch_addresses::GAME_ENGINE_FLAGS_OFFSET,
+                sizeof(engineFlags));
+  }
+  const bool audioOn = nevr_mic_policy::GameAudioOn(readable, engineFlags);
+  if (!audioOn) {
+    static std::atomic<bool> said{false};
+    if (!said.exchange(true)) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.MIC] capture off reason=game_audio_off (the game runs with its audio off, as -noaudio sets it: no capture "
+          "device is opened, and every Mic call answers no device)");
+      Log(EchoVR::LogLevel::Debug, "[NEVR.MIC] capture off detail engine_flags=0x%08x",
+          static_cast<unsigned>(engineFlags));
+    }
+  }
+  return !nevr_mic_policy::ProvidesCapture(g_isServer != FALSE, audioOn);
+}
 
 static void NoteGameReader() {
   const uint32_t stale = g_ring.NoteReaderActive();
@@ -874,7 +900,7 @@ static void NoteGameReader() {
 }
 
 uint64_t nevr_mic_provider::MicAvailable() {
-  if (ServerHasNoCapture()) return 0;
+  if (CaptureIsOff()) return 0;
   g_availableCalls.fetch_add(1, std::memory_order_relaxed);
   {
     const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -891,7 +917,7 @@ uint64_t nevr_mic_provider::MicAvailable() {
 }
 
 uint64_t nevr_mic_provider::MicCreate() {
-  if (ServerHasNoCapture()) return 1;
+  if (CaptureIsOff()) return 1;
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Create, &request)) return 1;
   if (!request.result) {
@@ -904,7 +930,7 @@ uint64_t nevr_mic_provider::MicCreate() {
 }
 
 uint64_t nevr_mic_provider::MicDetected() {
-  if (ServerHasNoCapture()) return 0;
+  if (CaptureIsOff()) return 0;
   if (g_lifecycle.IsCreated()) return 1;
   HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
@@ -930,7 +956,7 @@ uint64_t nevr_mic_provider::MicDetected() {
 }
 
 uint64_t nevr_mic_provider::MicRead(void* buffer, uint64_t sampleCount) {
-  if (ServerHasNoCapture()) return 0;
+  if (CaptureIsOff()) return 0;
   if (!buffer || sampleCount == 0) return 0;
   NoteGameReader();
   const uint32_t count = sampleCount > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(sampleCount);
@@ -941,7 +967,7 @@ uint64_t nevr_mic_provider::MicRead(void* buffer, uint64_t sampleCount) {
 }
 
 void nevr_mic_provider::MicStart() {
-  if (ServerHasNoCapture()) return;
+  if (CaptureIsOff()) return;
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Start, &request)) return;
   if (request.result) {
@@ -963,7 +989,7 @@ void nevr_mic_provider::MicStart() {
 }
 
 void nevr_mic_provider::MicStop() {
-  if (ServerHasNoCapture()) return;
+  if (CaptureIsOff()) return;
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Stop, &request)) return;
   if (!request.result) {
@@ -981,7 +1007,7 @@ void nevr_mic_provider::MicStop() {
 }
 
 void nevr_mic_provider::MicDestroy() {
-  if (ServerHasNoCapture()) return;
+  if (CaptureIsOff()) return;
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Destroy, &request)) return;
   if (!request.result) {
