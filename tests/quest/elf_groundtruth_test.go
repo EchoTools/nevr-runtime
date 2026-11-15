@@ -407,6 +407,11 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 		// read-finished handler calls it before the game's allocator and the game's callback. It parses and builds JSON
 		// (core/combat_balance/balance_merge.h) and calls no game code; it is noexcept.
 		"combat balance merge (mp_weapon_settings)": regexp.MustCompile(`^_ZN10nevr_quest10menu_cards12_GLOBAL__N_112MergeBalanceE`),
+
+		// The end record of a held new-unlocks clear (LogEnd in src/quest/combat/new_unlocks_clear.cpp): ClearHandler calls it after
+		// the game's clear has returned. It reads the social layer's snapshot (a lock and a copy) and logs; it calls no game code and
+		// is noexcept.
+		"new unlocks clear end record": regexp.MustCompile(`^_ZN10nevr_quest6combat17new_unlocks_clear12_GLOBAL__N_16LogEndE`),
 	}
 	for what, re := range want {
 		if !anyMatches(v.annotatedReached, re) {
