@@ -68,9 +68,28 @@ std::string VersionWord(const std::string& v) { return names::IsVersionName(v) ?
 
 // ---- the core's error text is classified, never logged (logging Rule 4: remote text is not a field) -----------------------
 
-// A manifest that failed a check of the method (ADR 0023: "FAIL step N") is not the network.
+// The core displays every error as "FAIL step N: <message>" (installer/src/error.rs; ADR 0023: the nine steps). Step 1 is the fetch
+// (installer/src/session.rs), so a step-1 error is the connection (network); a step of 2 or more is a manifest that failed a check
+// (manifest_check). The step is read strictly from the start of the text; text that does not parse is manifest_check, because the
+// connection is claimed only when the core says it was the fetch.
+constexpr char kCoreErrorPrefix[] = "FAIL step ";
+constexpr unsigned kFetchStep = 1;
+constexpr unsigned kDecimalBase = 10;
+constexpr std::size_t kStepDigitsMax = 9;  // every step the core numbers fits in 9 digits; a longer run stops short of the ':' and is not a step
+
 const char* ManifestReason(const std::string& core_error) {
-  return core_error.find("FAIL step") != std::string::npos ? "manifest_check" : "network";
+  const std::string prefix = kCoreErrorPrefix;
+  if (core_error.compare(0, prefix.size(), prefix) != 0) return "manifest_check";
+  std::size_t at = prefix.size();
+  unsigned step = 0;
+  std::size_t digits = 0;
+  while (at < core_error.size() && core_error[at] >= '0' && core_error[at] <= '9' && digits < kStepDigitsMax) {
+    step = step * kDecimalBase + static_cast<unsigned>(core_error[at] - '0');
+    ++at;
+    ++digits;
+  }
+  const bool parsed = at < core_error.size() && core_error[at] == ':';
+  return parsed && step == kFetchStep ? "network" : "manifest_check";
 }
 
 struct CoreRun {

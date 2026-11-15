@@ -270,7 +270,7 @@ struct Lines {
 struct FakeCore {
   bool open_ok = true;
   bool manifest_ok = true;
-  std::string manifest_error = "could not fetch the manifest";
+  std::string manifest_error = "FAIL step 1: could not fetch the manifest";
   bool stage_ok = true;
   std::string stage_error = "the download was cut off";
   std::string action = "staged";
@@ -1024,6 +1024,46 @@ TEST(UpdateCheck, AnUnreachableManifestIsNetworkAndABadOneIsManifestCheck) {
     CheckEnv env = MakeEnv(root, core, lines);
     EXPECT_EQ(RunCheck(env).reason, "core_open_failed");
     EXPECT_EQ(core.manifest_calls, 0);
+  }
+}
+
+// The core displays every error as "FAIL step N: ..." (installer/src/error.rs); step 1 is the fetch, so only the step number tells a
+// connection that failed (network) from a manifest that failed a check (manifest_check). #2751
+TEST(UpdateCheck, TheCoresStepNumberDecidesNetworkOrManifestCheck) {
+  struct Case {
+    const char* text;
+    const char* reason;
+  };
+  const Case cases[] = {
+      {"FAIL step 1: connection refused", "network"},
+      {"FAIL step 1: manifest.json: timed out; the manifest stored by an earlier run cannot be used: it is expired", "network"},
+      {"FAIL step 2: signature does not verify", "manifest_check"},
+      {"FAIL step 3: schema_version is not 1", "manifest_check"},
+      {"FAIL step 4: manifest_version is below the floor", "manifest_check"},
+      {"FAIL step 5: the manifest has expired", "manifest_check"},
+      {"FAIL step 6: state.json: access denied", "manifest_check"},
+      {"FAIL step 10: not the fetch", "manifest_check"},
+      {"FAIL step 0: before any step", "manifest_check"},
+      {"FAIL step 1", "manifest_check"},
+      {"FAIL step 1x: junk", "manifest_check"},
+      {"FAIL step : junk", "manifest_check"},
+      {"FAIL step 99999999999999999999: overflow", "manifest_check"},
+      {"signature said FAIL step 1: inside", "manifest_check"},
+      {"XXXXXXXXXX1: the prefix is as long as FAIL step ", "manifest_check"},
+      {"FAIL step 4294967297: wraps to 1 in 32 bits", "manifest_check"},
+      {"internal error (panic)", "manifest_check"},
+      {"", "manifest_check"},
+  };
+  for (const Case& c : cases) {
+    Root root;
+    Lines lines;
+    FakeCore core;
+    core.manifest_ok = false;
+    core.manifest_error = c.text;
+    CheckEnv env = MakeEnv(root, core, lines);
+    EXPECT_EQ(RunCheck(env).reason, c.reason) << "core text: \"" << c.text << "\"";
+    EXPECT_EQ(lines.Dump().find(c.text[0] != '\0' ? c.text : "\x01"), std::string::npos)
+        << "the core's own text is not a log field (logging Rule 4)";
   }
 }
 

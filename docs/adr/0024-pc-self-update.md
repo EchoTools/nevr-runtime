@@ -176,8 +176,7 @@ units (`src/core/update/names.cpp`, `host/file_digest.cpp`), compiled into both 
   verified (`update verify`) with `nevr_plugin_trust::ProductionPolicy()`, the denylist included; one that fails removes
   `update\staging\<version>` and ends in `blocked reason=verify_failed`. Then the lock (5 s), a second look for `pending.json`,
   and `staged.json` by rename, last.
-- **The reasons.** `failed`: `core_open_failed`, `network` (the manifest could not be fetched), `manifest_check` (the core's
-  text names `FAIL step N`), `stage_failed`, `timeout`, `bad_result`, `lock_unavailable`, `publish_failed`,
+- **The reasons.** `failed`: `core_open_failed`, `network` (the core's error is `FAIL step 1`, the fetch), `manifest_check` (any other step, or text that is not `FAIL step N:`), `stage_failed`, `timeout`, `bad_result`, `lock_unavailable`, `publish_failed`,
   `root_unconvertible`, `running_runtime_unreadable`, `internal_error`. The core's own error text is never a log field (logging
   Rule 4); it is in `logs\nevr-update.jsonl`.
 - **F5.** A staged file that fails Authenticode is a discard, not a quarantine: the flowchart and F5 say the same thing. When the
