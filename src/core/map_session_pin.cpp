@@ -23,9 +23,18 @@ constexpr unsigned char kUtf8ContinuationMask = 0xC0;
 constexpr unsigned char kUtf8ContinuationBits = 0x80;
 constexpr unsigned char kUtf8LeadMin = 0xC0;
 
-std::mutex g_mutex;
-ChannelView g_view;
-std::vector<MapPin> g_mounted;
+std::mutex& g_mutex() {
+  static std::mutex instance;  // function-local: no load-time initializer in the sentinel (tools/check_quest_static_init.sh)
+  return instance;
+}
+ChannelView& g_view() {
+  static ChannelView instance;  // function-local: no load-time initializer in the sentinel (tools/check_quest_static_init.sh)
+  return instance;
+}
+std::vector<MapPin>& g_mounted() {
+  static std::vector<MapPin> instance;  // function-local: no load-time initializer in the sentinel (tools/check_quest_static_init.sh)
+  return instance;
+}
 FetchRequestFn g_fetch = nullptr;
 
 // The tick's state: game thread only (TickWith), and ResetForTest.
@@ -38,7 +47,10 @@ struct TickState {
   std::uint64_t leave_deadline = 0;
   std::string leave_id;
 };
-TickState g_tick;
+TickState& g_tick() {
+  static TickState instance;  // function-local: no load-time initializer in the sentinel (tools/check_quest_static_init.sh)
+  return instance;
+}
 
 const MapPin* PinById(const std::vector<MapPin>& pins, const std::string& id) {
   for (const MapPin& pin : pins)
@@ -106,8 +118,8 @@ nlohmann::json EntryJson(const MapPin& pin) {
 }
 
 void ResetClientKey() {
-  g_tick.have_key = false;
-  g_tick.local_warned = false;
+  g_tick().have_key = false;
+  g_tick().local_warned = false;
 }
 
 // Asks the game to return to the lobby. A refusal is retried each tick for kLeaveRetryMs, then reported once.
@@ -115,26 +127,26 @@ void TryLeave(GameAccess& game, std::uint64_t now) {
   if (game.ScheduleLeave()) {
     PinEvent event;
     event.kind = PinEventKind::kLeaveScheduled;
-    event.id = g_tick.leave_id;
+    event.id = g_tick().leave_id;
     game.Event(event);
-    g_tick.leave_pending = false;
+    g_tick().leave_pending = false;
     return;
   }
-  if (!g_tick.leave_pending) {
-    g_tick.leave_pending = true;
-    g_tick.leave_deadline = now + kLeaveRetryMs;
-  } else if (now >= g_tick.leave_deadline) {
-    g_tick.leave_pending = false;
+  if (!g_tick().leave_pending) {
+    g_tick().leave_pending = true;
+    g_tick().leave_deadline = now + kLeaveRetryMs;
+  } else if (now >= g_tick().leave_deadline) {
+    g_tick().leave_pending = false;
     PinEvent event;
     event.kind = PinEventKind::kLeaveFailed;
-    event.id = g_tick.leave_id;
+    event.id = g_tick().leave_id;
     game.Event(event);
   }
 }
 
 void ServerTick(GameAccess& game, std::uint64_t lobby) {
   if (lobby == 0) {
-    g_tick.server_set = 0;
+    g_tick().server_set = 0;
     return;
   }
   const std::uint64_t level = SessionLevelWith(game);
@@ -146,12 +158,12 @@ void ServerTick(GameAccess& game, std::uint64_t lobby) {
   event.pin = desired;
   if (desired != 0) {
     game.SetOwnerSymbol(lobby, kOwnerPinKey, desired);
-    g_tick.server_set = desired;
+    g_tick().server_set = desired;
     event.kind = PinEventKind::kServerSet;
     game.Event(event);
-  } else if (g_tick.server_set != 0 && current == g_tick.server_set) {
+  } else if (g_tick().server_set != 0 && current == g_tick().server_set) {
     game.SetOwnerSymbol(lobby, kOwnerPinKey, 0);
-    g_tick.server_set = 0;
+    g_tick().server_set = 0;
     event.kind = PinEventKind::kServerCleared;
     game.Event(event);
   }
@@ -163,18 +175,18 @@ void ClientTick(GameAccess& game, std::uint64_t lobby, std::uint64_t now) {
   const bool inSession = state >= kFirstSessionState && state <= kLastSessionState;
   if (lobby == 0 || !inSession) {
     ResetClientKey();
-    g_tick.leave_pending = false;
+    g_tick().leave_pending = false;
     return;
   }
-  if (g_tick.leave_pending) TryLeave(game, now);
+  if (g_tick().leave_pending) TryLeave(game, now);
 
   const std::uint64_t level = SessionLevelWith(game);
   const std::uint64_t pin = game.OwnerSymbol(lobby, kOwnerPinKey);
-  if (g_tick.have_key && g_tick.key_lobby == lobby && g_tick.key_level == level && g_tick.key_pin == pin) return;
-  g_tick.have_key = true;
-  g_tick.key_lobby = lobby;
-  g_tick.key_level = level;
-  g_tick.key_pin = pin;
+  if (g_tick().have_key && g_tick().key_lobby == lobby && g_tick().key_level == level && g_tick().key_pin == pin) return;
+  g_tick().have_key = true;
+  g_tick().key_lobby = lobby;
+  g_tick().key_level = level;
+  g_tick().key_pin = pin;
 
   const ClientDecision decision = DecideClient(level, pin);
   PinEvent event;
@@ -190,8 +202,8 @@ void ClientTick(GameAccess& game, std::uint64_t lobby, std::uint64_t now) {
       game.Event(event);
       return;
     case ClientAction::kLocal:
-      if (g_tick.local_warned) return;
-      g_tick.local_warned = true;
+      if (g_tick().local_warned) return;
+      g_tick().local_warned = true;
       event.kind = PinEventKind::kLocalMap;
       event.local_path = decision.local_path;
       game.Event(event);
@@ -213,14 +225,14 @@ void ClientTick(GameAccess& game, std::uint64_t lobby, std::uint64_t now) {
   if (decision.request_fetch) {
     FetchRequestFn fetch = nullptr;
     {
-      std::lock_guard<std::mutex> lock(g_mutex);
+      std::lock_guard<std::mutex> lock(g_mutex());
       fetch = g_fetch;
     }
     if (fetch != nullptr) fetch(decision.id);
   }
   // A leave already retrying stands, whatever the level does meanwhile.
-  if (g_tick.leave_pending) return;
-  g_tick.leave_id = decision.id;
+  if (g_tick().leave_pending) return;
+  g_tick().leave_id = decision.id;
   TryLeave(game, now);
 }
 
@@ -310,29 +322,29 @@ ChannelView ViewFromMount(const nevr_maps::MountReport& report) {
 }
 
 void SetChannelView(ChannelView view) {
-  std::lock_guard<std::mutex> lock(g_mutex);
-  g_view = std::move(view);
+  std::lock_guard<std::mutex> lock(g_mutex());
+  g_view() = std::move(view);
 }
 
 void SetMountedPins(std::vector<MapPin> pins) {
-  std::lock_guard<std::mutex> lock(g_mutex);
-  g_mounted = std::move(pins);
+  std::lock_guard<std::mutex> lock(g_mutex());
+  g_mounted() = std::move(pins);
 }
 
 std::vector<MapPin> MountedPins() {
-  std::lock_guard<std::mutex> lock(g_mutex);
-  return g_mounted;
+  std::lock_guard<std::mutex> lock(g_mutex());
+  return g_mounted();
 }
 
 void SetFetchRequest(FetchRequestFn fn) {
-  std::lock_guard<std::mutex> lock(g_mutex);
+  std::lock_guard<std::mutex> lock(g_mutex());
   g_fetch = fn;
 }
 
 std::uint64_t ServerPinFor(std::uint64_t level) {
   if (level == 0) return 0;
-  std::lock_guard<std::mutex> lock(g_mutex);
-  for (const MapPin& pin : g_mounted)
+  std::lock_guard<std::mutex> lock(g_mutex());
+  for (const MapPin& pin : g_mounted())
     if (pin.level == level) return PinValue(pin);
   return 0;
 }
@@ -340,9 +352,9 @@ std::uint64_t ServerPinFor(std::uint64_t level) {
 ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin) {
   ClientDecision decision;
   if (level == 0) return decision;
-  std::lock_guard<std::mutex> lock(g_mutex);
+  std::lock_guard<std::mutex> lock(g_mutex());
   const std::string* listedId = nullptr;
-  for (const auto& row : g_view.listed)
+  for (const auto& row : g_view().listed)
     if (row.first == level) listedId = &row.second;
   if (listedId == nullptr) return decision;
   const std::string& id = *listedId;
@@ -353,11 +365,11 @@ ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin) {
     return decision;
   }
   // A staged map has not mounted yet (the login and the lobby can come before the first resource request) but will.
-  const MapPin* mounted = PinById(g_mounted, id);
-  const MapPin* staged = PinById(g_view.staged, id);
+  const MapPin* mounted = PinById(g_mounted(), id);
+  const MapPin* staged = PinById(g_view().staged, id);
   if ((mounted != nullptr && PinValue(*mounted) == pin) || (staged != nullptr && PinValue(*staged) == pin)) return decision;
 
-  if (const std::string* local = SecondOf(g_view.local, id)) {
+  if (const std::string* local = SecondOf(g_view().local, id)) {
     decision.action = ClientAction::kLocal;
     decision.reason = "local_map";
     decision.local_path = *local;
@@ -365,7 +377,7 @@ ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin) {
   }
   decision.action = ClientAction::kLeave;
   // The pin is a hash, so the client cannot name the server's version; it names its own when it has one.
-  if (const std::string* token = SecondOf(g_view.not_mounted, id)) {
+  if (const std::string* token = SecondOf(g_view().not_mounted, id)) {
     decision.reason = "not_mounted";
     decision.notice_line = FitLine({{"Map "}, {id, true}, {" did not load: "}, {*token, true}, {". See the nevr log."}});
     decision.request_fetch = *token == "stock_changed";
@@ -399,8 +411,8 @@ void TickWith(GameAccess& game) {
     // Nothing listed, nothing mounted, nothing to clear and no leave pending: no decision and no write can follow, so the game is
     // not called at all, not even to prove its own bytes (Callable reads them and logs a mismatch). The tick runs every frame once
     // it is wired, so a run with no maps does nothing here.
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (g_view.listed.empty() && g_mounted.empty() && g_tick.server_set == 0 && !g_tick.leave_pending) return;
+    std::lock_guard<std::mutex> lock(g_mutex());
+    if (g_view().listed.empty() && g_mounted().empty() && g_tick().server_set == 0 && !g_tick().leave_pending) return;
   }
   if (!game.Callable()) return;
   const std::uint64_t lobby = game.Lobby();
@@ -412,14 +424,14 @@ void TickWith(GameAccess& game) {
 
 nlohmann::json LoginEntries() {
   nlohmann::json entries = nlohmann::json::array();
-  std::lock_guard<std::mutex> lock(g_mutex);
-  for (const MapPin& pin : g_mounted) {
+  std::lock_guard<std::mutex> lock(g_mutex());
+  for (const MapPin& pin : g_mounted()) {
     nlohmann::json entry = EntryJson(pin);
     entry["mounted"] = true;
     entries.push_back(std::move(entry));
   }
-  for (const MapPin& pin : g_view.staged) {
-    if (PinById(g_mounted, pin.id) != nullptr) continue;
+  for (const MapPin& pin : g_view().staged) {
+    if (PinById(g_mounted(), pin.id) != nullptr) continue;
     nlohmann::json entry = EntryJson(pin);
     entry["mounted"] = false;
     entries.push_back(std::move(entry));
@@ -429,21 +441,21 @@ nlohmann::json LoginEntries() {
 
 std::vector<std::string> RegistrationEntries() {
   std::vector<std::string> entries;
-  std::lock_guard<std::mutex> lock(g_mutex);
-  for (const MapPin& pin : g_mounted) entries.push_back(EntryJson(pin).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+  std::lock_guard<std::mutex> lock(g_mutex());
+  for (const MapPin& pin : g_mounted()) entries.push_back(EntryJson(pin).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
   // A staged map's set is registered at boot, so the server already reports its level (MountedLevelNames).
-  for (const MapPin& pin : g_view.staged)
-    if (PinById(g_mounted, pin.id) == nullptr)
+  for (const MapPin& pin : g_view().staged)
+    if (PinById(g_mounted(), pin.id) == nullptr)
       entries.push_back(EntryJson(pin).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
   return entries;
 }
 
 void ResetForTest() {
-  std::lock_guard<std::mutex> lock(g_mutex);
-  g_view = ChannelView();
-  g_mounted.clear();
+  std::lock_guard<std::mutex> lock(g_mutex());
+  g_view() = ChannelView();
+  g_mounted().clear();
   g_fetch = nullptr;
-  g_tick = TickState();
+  g_tick() = TickState();
 }
 
 }  // namespace nevr_map_session_pin

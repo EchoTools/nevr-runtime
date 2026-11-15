@@ -24,7 +24,10 @@ constexpr std::uint32_t kPollMs = 50;
 
 std::atomic<bool> g_started{false};
 // The owners this run's boot granted, written once by Start before the mount thread exists; the observer reads them on that thread.
-std::vector<std::string> g_granted_owners;
+std::vector<std::string>& g_granted_owners() {
+  static std::vector<std::string> instance;  // function-local: no load-time initializer in the sentinel (tools/check_quest_static_init.sh)
+  return instance;
+}
 
 std::string JoinOwners(const std::vector<std::string>& owners) {
   std::string text;
@@ -33,7 +36,7 @@ std::string JoinOwners(const std::vector<std::string>& owners) {
 }
 
 void OnMount(const nevr_resource_sets::MountReport& report) {
-  const MountOutcome outcome = ApplyMount(g_granted_owners, report);
+  const MountOutcome outcome = ApplyMount(g_granted_owners(), report);
   sentinel::LogFields(outcome.withdrawn.empty() ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "map_summary",
                       {{"stage", "mount"},
                        {"mounted", outcome.mounted.size()},
@@ -116,7 +119,7 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
   if (boot.start != nevr_map_channel::Start::kRun) {
     return false;  // the core logged why (not_configured or the refusal); nothing was granted, no thread starts
   }
-  for (const std::string& id : boot.report.mounted) g_granted_owners.push_back(std::string(nevr_resource_sets::kMapOwnerPrefix) + id);
+  for (const std::string& id : boot.report.mounted) g_granted_owners().push_back(std::string(nevr_resource_sets::kMapOwnerPrefix) + id);
   nevr_map_channel::ArmSessionGroupRequest();  // a session success now queues its group for the worker (ADR 0048 decision 15)
   map_sets::SetMountObserver(&OnMount);
   nevr_config_alias::InstallIfStaged();

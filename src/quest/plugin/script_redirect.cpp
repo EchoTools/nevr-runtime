@@ -321,7 +321,10 @@ struct Slot {
 
 Slot g_slots[kMaxMapScripts];
 std::atomic<std::uint32_t> g_used{0};  // slots [0, g_used) are published; release-stored after the slot is written
-std::mutex g_writers;                  // Admit, Withdraw and ResetForTest; the dlopen handler never takes it
+std::mutex& g_writers() {
+  static std::mutex instance;  // function-local: no load-time initializer in the sentinel (tools/check_quest_static_init.sh)
+  return instance;
+}
 
 bool Live(std::uint8_t state) noexcept { return state == kHeld || state == kServed || state == kPulling; }
 
@@ -345,7 +348,7 @@ void LogRefusedWithdraw(const char* owner, const char* reason, std::uint64_t has
 const char* Admit(const char* owner, std::uint64_t hash) noexcept {
   if (owner == nullptr || owner[0] == '\0' || std::strlen(owner) >= kOwnerCapacity) return "bad_owner";
   if (hash == 0) return "bad_hash";
-  const std::lock_guard<std::mutex> lock(g_writers);
+  const std::lock_guard<std::mutex> lock(g_writers());
   nevr_map_script::ClaimFacts facts;
   // KNOWN-WRONG #TBD: stock_hash is set only for the hashes the combat redirect rewrites (RedirectHolds), not for every stock
   // library in the APK (465 in script_image_rules.h's Quest set), so a manifest that pins one of those is held. ADR 0048
@@ -373,7 +376,7 @@ const char* Admit(const char* owner, std::uint64_t hash) noexcept {
 
 std::size_t Withdraw(const char* owner) noexcept {
   if (owner == nullptr || std::strlen(owner) >= kOwnerCapacity) return 0;
-  const std::lock_guard<std::mutex> lock(g_writers);
+  const std::lock_guard<std::mutex> lock(g_writers());
   const std::uint32_t used = g_used.load(std::memory_order_relaxed);
   // Phase 1: every live entry of the owner goes Held -> Pulling. A loaded one refuses the whole withdraw.
   for (std::uint32_t i = 0; i < used; ++i) {
@@ -468,7 +471,7 @@ void NoteLoad(const char* name) noexcept {
 }
 
 void ResetForTest() noexcept {
-  const std::lock_guard<std::mutex> lock(g_writers);
+  const std::lock_guard<std::mutex> lock(g_writers());
   for (Slot& slot : g_slots) {
     slot.hash = 0;
     slot.owner[0] = '\0';
