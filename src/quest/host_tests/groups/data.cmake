@@ -72,7 +72,7 @@ nevr_ht_obj(o_cdn_hook_log GROUP data NOEXC HOST INCS src/quest/sentinel SRC src
 nevr_ht_obj(o_cdn_atomic_write GROUP data NOEXC HOST SRC src/quest/auth/atomic_write.cpp)
 nevr_ht_test(cdn_service_test GROUP data HOST INCS src/quest/sentinel TIMEOUT 120 ENV ${_data_env}
   SRC src/quest/tests/cdn_service_test.cpp
-  OBJS ${_cdn_objs} o_cdn_env_posix o_cdn_cdn_service o_cdn_worker o_cdn_hook_log o_cdn_atomic_write o_data_staging o_core_owned_remove_posix
+  OBJS ${_cdn_objs} o_cdn_env_posix o_cdn_cdn_service o_cdn_worker o_cdn_hook_log o_cdn_atomic_write o_data_staging o_core_owned_remove_posix o_data_zip
   LIBS ${NEVR_ZLIB_LIB} ${NEVR_ZSTD_LIB})
 # The whole-game launch (#2398): the data step in its all-assets mode, with the worker the sentinel sets, over a scripted transport.
 nevr_ht_test(whole_game_launch_test GROUP data HOST INCS src/quest/sentinel TIMEOUT 300 ENV ${_data_env}
