@@ -810,10 +810,16 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
             if (g_rules_total) Send(s, from, 'R', *(volatile uint32_t *)g_rules_total);
             Send(s, from, 'G', RulesWord());                                 // its LOADOUTS / SERIES-10 ONLY
         }
+        // RULES and PAUSE asks count in a private match only (#2242, EchoCombat 2.0.3); the map buttons check their own
+        // privacy (below), so their ask is not refused here.
+        const nevr_combat::MatchPrivacy privacy = p.type == 'C' ? SessionPrivacy() : nevr_combat::MatchPrivacy::kUnknown;
+        const bool rule_ask = privacy == nevr_combat::MatchPrivacy::kPrivate;
+        if (p.type == 'C' && !rule_ask && (p.id & 0xF0000000) != WANT_MAP)
+            Log("RULES ask %08x from %s: refused (%s)", p.id, Addr(from, buf, sizeof(buf)), nevr_combat::PrivacyText(privacy));
         uint8_t asked_rate = (uint8_t)(p.id >> 8);   // a podium asks for a POINT RATE (the value itself)
         // on a payload map the row is PAYLOAD SPEED: the same asks (and steps) set that instead
         volatile LONG &rate_rule = g_payload_map ? g_pspeed : g_rate;
-        if (p.type == 'C' && (p.id & (WANT_CHASSIS | WANT_RATE)) == WANT_RATE &&
+        if (rule_ask && (p.id & (WANT_CHASSIS | WANT_RATE)) == WANT_RATE &&
             memchr(kRateSteps, asked_rate, sizeof(kRateSteps)) && asked_rate != (uint8_t)rate_rule) {
             rate_rule = asked_rate;
             if (g_rules) g_rules[g_payload_map ? PSPEED_SHOWN : RATE_SHOWN] = asked_rate;
@@ -822,7 +828,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
             Log("%s %d/4 (asked by %s): told %d client(s)", g_payload_map ? "PAYLOAD SPEED" : "POINT RATE",
                 (int)asked_rate, Addr(from, buf, sizeof(buf)), r);
         }
-        if (p.type == 'C' && (p.id & (WANT_CHASSIS | WANT_RATE | WANT_PAUSE)) == WANT_PAUSE) {   // PAUSE / UNPAUSE
+        if (rule_ask && (p.id & (WANT_CHASSIS | WANT_RATE | WANT_PAUSE)) == WANT_PAUSE) {   // PAUSE / UNPAUSE
             // PAUSE from running or resuming; UNPAUSE only from paused, and it starts the countdown
             LONG now = g_paused, want = (p.id & 1) ? PAUSE_ON : now == PAUSE_ON ? PAUSE_RESUMING : now;
             // payload maps: a pause only happens while the payload is held (before the attackers
@@ -858,7 +864,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
                 Log("MAP SWITCH to %s asked by %s", kMapNames[k], Addr(from, buf, sizeof(buf)));
             }
         }
-        if (p.type == 'C' && (p.id & WANT_CHASSIS)) {                        // a podium asks for SERIES-10 ONLY
+        if (rule_ask && (p.id & WANT_CHASSIS)) {                        // a podium asks for SERIES-10 ONLY
             LONG want = (LONG)(p.id & 1);
             if (InterlockedExchange(&g_chassis, want) != want) {
                 if (g_rules) g_rules[CHASSIS_SHOWN] = (uint8_t)want;
@@ -867,7 +873,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
                 Log("SERIES-10 ONLY %s (asked by %s): told %d client(s)", want ? "on" : "off", Addr(from, buf, sizeof(buf)), n);
             }
         }
-        if (p.type == 'C' && p.id <= LOADOUT_NEW) {                          // a podium asks for LOADOUTS
+        if (rule_ask && p.id <= LOADOUT_NEW) {                          // a podium asks for LOADOUTS
             LONG want = (LONG)p.id;
             if (InterlockedExchange(&g_classic, want) != want) {
                 if (g_rules) g_rules[CLASSIC_SHOWN] = (uint8_t)want;
