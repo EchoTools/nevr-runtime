@@ -10,7 +10,7 @@ makes the base a fixed input and checks the result.
 WHAT.
 
     quest_release_base.py prepare --apk REFERENCE.apk --out BASE.apk
-        Refuses unless REFERENCE.apk is the pinned reference APK (REFERENCE_APK_SHA256). Writes BASE.apk: the reference
+        Refuses unless REFERENCE.apk is the pinned combat base (REFERENCE_APK_SHA256, the wave-2 base). Writes BASE.apk: the reference
         APK with its package renamed to com.readyatdawn.r15 and the launcher label "Echo VR" (quest_apk_rename_package.py,
         the `just quest-reference-base` step), and refuses unless BASE.apk holds every REFERENCE_ENTRIES name.
 
@@ -59,9 +59,14 @@ def runtime_carries_table(data: bytes) -> bool:
 
 TAG = "NEVR.QUEST.BASE"
 
-# The reference combat build, as shipped (package com.readyatdawn.afk, versionCode 4987566). v6.12.0 and v6.16.4 were
-# repacked from it.
-REFERENCE_APK_SHA256 = "d0b51a014647643a30469ed318968b17374f39286b7d9ded5723f39299eedb48"
+# The wave-2 combat base (kotorvr/echoquest-combat release wave2-1104-fdad4965af, commit c5a67e8), unsigned: the 10-30 reference
+# combat build (sha256 d0b51a014647643a30469ed318968b17374f39286b7d9ded5723f39299eedb48, package com.readyatdawn.afk, versionCode
+# 4987566) with its META-INF dropped and six entries replaced by the wave-2 ones: the
+# 13-module runtime libvrapi.so (sha256 1212fcea..., quest_apk_rename_package.py KNOWN_RUNTIMES), four script libraries and
+# assets/afk_default_on.txt. Every entry of the release's APK delta is in it with the release's sha256; its libr15.so is the
+# reference build's own (kLibR15ReferenceSha256[1], src/quest/patch/libr15_patch_table.h). The repack writes
+# tools/quest-afk-default-on.txt over the base's switch list, as for any base.
+REFERENCE_APK_SHA256 = "be30121cd6d45d62b26058d04b94941ebb143d80d5f92df81517b57a4d4287e1"
 
 # Entries the reference build carries and the store APK lacks: a base without them is not the reference build.
 REFERENCE_ENTRIES = ("assets/afk_default_on.txt", "lib/arm64-v8a/libassetpatch.so")

@@ -432,7 +432,7 @@ func TestAModuleImportedByATestIsCovered(t *testing.T) {
 	f.write("tools/refmod.py", "")
 	f.write("tools/dup.py", "")
 	f.write("tools/sub/dup.py", "") // the same stem twice: neither is a module the rule covers
-	f.write("tools/tests/test_uses.py", "import refmod\nimport dup\n")
+	f.write("tools/tests/test_uses.py", "import refmod\nimport dup\n\ndef test_uses():\n    pass\n")
 	f.track()
 	m := f.mapper(t)
 	if err := m.references(); err != nil {
@@ -443,6 +443,45 @@ func TestAModuleImportedByATestIsCovered(t *testing.T) {
 	}
 	if m.cov["tools/dup.py"]["pytest:test_uses"] {
 		t.Errorf("dup.py, whose stem is not unique in the tree, is covered by an import of it")
+	}
+}
+
+// A tools/tests/test_*.py that defines no test is a fixture, not a target (pytest collects nothing from it and exits 5): the
+// fixture, and the module it imports, are covered by the test that imports it.
+func TestAFixtureWithNoTestIsNoTargetAndItsImporterCoversIt(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.write("tools/fixmod.py", "")
+	f.write("tools/tests/test_fixture_only.py", "import fixmod\n\ndef helper():\n    return 1\n")
+	f.write("tools/tests/test_real.py", "import unittest\nimport test_fixture_only\n\nclass Real(unittest.TestCase):\n    def test_x(self):\n        pass\n")
+	f.track()
+	m := f.mapper(t)
+	if err := m.references(); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{"tools/fixmod.py", "tools/tests/test_fixture_only.py", "tools/tests/test_real.py"} {
+		if m.cov[file]["pytest:test_fixture_only"] {
+			t.Errorf("%s is covered by the fixture test_fixture_only, which defines no test: %v", file, m.cov.ids(file))
+		}
+		if !m.cov[file]["pytest:test_real"] {
+			t.Errorf("%s is not covered by test_real, which imports the fixture: %v", file, m.cov.ids(file))
+		}
+	}
+}
+
+// Each form of a collected test counts; a helper named test_ that is not at a def, or prose, does not.
+func TestDefinesPytestMatchesTheFormsPytestCollects(t *testing.T) {
+	t.Parallel()
+	for _, text := range []string{"def test_a():\n", "class X(unittest.TestCase):\n    def test_b(self):\n", "class TestThing:\n",
+		"async def test_c():\n", "class Y(TestCase):\n"} {
+		if !definesPytest.MatchString(text) {
+			t.Errorf("not a test: %q", text)
+		}
+	}
+	for _, text := range []string{"def helper():\n", "x = test_a\n", "# def test_a\n", "import test_quest_apk_rename_package as t\n"} {
+		if definesPytest.MatchString(text) {
+			t.Errorf("a test: %q", text)
+		}
 	}
 }
 

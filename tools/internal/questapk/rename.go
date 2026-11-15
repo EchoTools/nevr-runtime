@@ -62,9 +62,10 @@ var expected = []expectation{
 // count of the source package (ASCII, UTF-16LE). A runtime the table does not name must hold 0 (tools/quest_apk_rename_package.py
 // KNOWN_RUNTIMES, which holds the reasons for both counts).
 var KnownRuntimes = map[string]pair{
-	// the 12-module runtime of the pinned reference APK: no package string
+	// the 12-module runtime of the 10-30 reference APK (d0b51a01...): no package string
 	"59a3cd2090b29f72cc14b853f1550073c9dd066c87c9cd120eed6d93f84c3839": {0, 0},
-	// the 13-module wave-2 runtime: the package once, as the fallback name of a file-existence check
+	// the 13-module wave-2 runtime of the pinned base (tools/quest_release_base.py REFERENCE_APK_SHA256): the package once,
+	// as the fallback name of a file-existence check
 	"1212fcea7837111d7ae8ea835f64399f479a50cde89a0f44a003caedae12466a": {1, 0},
 }
 

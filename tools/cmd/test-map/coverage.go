@@ -549,6 +549,10 @@ func (m *mapper) references() error {
 			}
 		}
 	}
+	// A tools/tests/test_*.py that defines no test is a fixture module (pytest collects nothing from it and exits 5): it is
+	// no target. What it names or imports is covered by each test file that imports it, and so is the fixture itself.
+	texts := map[string]string{}
+	var fixtures, tests []string
 	for _, f := range m.tracked {
 		if path.Dir(f) != "tools/tests" || !strings.HasPrefix(path.Base(f), "test_") || !strings.HasSuffix(f, ".py") {
 			continue
@@ -557,14 +561,21 @@ func (m *mapper) references() error {
 		if err != nil {
 			return err
 		}
+		texts[f] = text
+		if definesPytest.MatchString(text) {
+			tests = append(tests, f)
+		} else {
+			fixtures = append(fixtures, f)
+		}
+	}
+	for _, f := range tests {
 		id := testmap.KindPytest + ":" + strings.TrimSuffix(path.Base(f), ".py")
 		m.cov.add(f, id)
-		for h := range m.refs(text) {
-			m.cov.add(h, id)
-		}
-		for stem, re := range m.moduleRes {
-			if re.MatchString(text) {
-				m.cov.add(modules[stem], id)
+		m.coverText(texts[f], id, modules)
+		for _, fx := range fixtures {
+			if importsStem(texts[f], strings.TrimSuffix(path.Base(fx), ".py")) {
+				m.cov.add(fx, id)
+				m.coverText(texts[fx], id, modules)
 			}
 		}
 	}
@@ -594,6 +605,28 @@ func (m *mapper) references() error {
 		}
 	}
 	return nil
+}
+
+// definesPytest matches a test pytest collects: a module-level or method `def test_...`, or a class named Test... or one
+// that derives from a TestCase.
+var definesPytest = regexp.MustCompile(`(?m)^\s*(async\s+)?def\s+test\w*\s*\(|^class\s+(Test\w*|\w+\s*\([^)]*TestCase[^)]*\))`)
+
+// importsStem reports whether a Python text imports the module `stem` (`import stem`, `from stem import`, a dotted form).
+func importsStem(text, stem string) bool {
+	q := regexp.QuoteMeta(stem)
+	return regexp.MustCompile(`(?m)^\s*(import|from)\s+(\w+\.)*` + q + `\b`).MatchString(text)
+}
+
+// coverText gives `id` every tracked file the text names and every unique-stem tools module it imports.
+func (m *mapper) coverText(text, id string, modules map[string]string) {
+	for h := range m.refs(text) {
+		m.cov.add(h, id)
+	}
+	for stem, re := range m.moduleRes {
+		if re.MatchString(text) {
+			m.cov.add(modules[stem], id)
+		}
+	}
 }
 
 // fixed covers each file the fixed rules name: the rows of fixedRules.

@@ -698,7 +698,7 @@ release-quest-apk tag store_apk=env("NEVR_STORE_APK"): (_release-quest-apk "rele
 
 # The reference Quest APK of a RELEASE, built only when it is asked for by this name: the repack of the reference combat build
 # with the loader CI built from the release tag. The input is the
-# reference combat build as shipped, `reference_apk` (default $NEVR_QUEST_REFERENCE_APK): tools/quest_release_base.py prepare
+# pinned combat base (the wave-2 base: the reference build with the wave-2 entries in place), `reference_apk` (default $NEVR_QUEST_REFERENCE_APK): tools/quest_release_base.py prepare
 # refuses any other file (its sha256 is pinned there) and renames it to this package, the `just quest-reference-base` step; the
 # store APK has none of the reference build's combat entries (#1994). After the repack, tools/quest_release_base.py check-release
 # refuses an APK that lacks any entry of that base. That loader is

@@ -14,15 +14,16 @@ import (
 
 // The fixture is a synthetic AArch64 ELF built by the fixture package: an executable segment with twelve sites per entry
 // and a data segment with twelve lists of three entries. A pin of the fixture must equal the fixture built for the new
-// text. One real-file case runs only when NEVR_REFERENCE_LIBVRAPI names the reference APK's libvrapi.so (sha-256
-// below), which the lane's expected output (md5 0748d0e3...) is compared with.
+// text. One real-file case runs only when NEVR_REFERENCE_LIBVRAPI names the 12-module libvrapi.so of the 10-30 reference APK
+// (d0b51a01..., sha-256 below; not the 13-module runtime of the pinned wave-2 base), which the lane's expected output
+// (md5 0748d0e3...) is compared with.
 
 const (
 	oldMD5       = fixture.OLD
 	secondMD5    = fixture.SECOND
 	thirdMD5     = fixture.THIRD
 	notAnELFSize = 12 // the copies the not-an-ELF case writes: enough for a table
-	// The reference APK's libvrapi.so and the lane's expected output.
+	// The 10-30 reference APK's (d0b51a01...) 12-module libvrapi.so and the lane's expected output.
 	referenceSHA256 = "59a3cd2090b29f72cc14b853f1550073c9dd066c87c9cd120eed6d93f84c3839"
 	laneMD5         = "0748d0e375e3a6d1956ca057a009bf48"
 	lanePinMD5      = "3e89307b9eddca58aa4573953a4477b9"
@@ -499,7 +500,7 @@ func TestRealReferenceRuntime(t *testing.T) {
 	t.Parallel()
 	path := os.Getenv("NEVR_REFERENCE_LIBVRAPI") // an input outside the tree, like NEVR_STOCK_DATA in internal/radpack
 	if path == "" {
-		t.Skip("set NEVR_REFERENCE_LIBVRAPI to the reference APK's lib/arm64-v8a/libvrapi.so")
+		t.Skip("set NEVR_REFERENCE_LIBVRAPI to the 10-30 reference APK's (d0b51a01...) lib/arm64-v8a/libvrapi.so")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

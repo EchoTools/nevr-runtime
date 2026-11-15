@@ -938,7 +938,7 @@ func TestE2EPack_WithoutPackCarriesNothingOfIt(t *testing.T) {
 		t.Fatal("the pack steps ran with no pack")
 	}
 	store := storeNames(t, fx.APK)
-	want := map[string]bool{"lib/arm64-v8a/libovrplatformloader_orig.so": true, variantEntryName: true}
+	want := map[string]bool{"lib/arm64-v8a/libovrplatformloader_orig.so": true, "lib/arm64-v8a/libnevr-runtime.so": true, variantEntryName: true}
 	for n := range store {
 		want[n] = true
 	}

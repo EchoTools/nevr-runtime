@@ -1,6 +1,7 @@
 // Package questruntimepin pins the reference runtime's libr15 checksum list to the libr15 the APK carries (#1737).
 //
-// WHY. The reference runtime (lib/arm64-v8a/libvrapi.so of the reference APK) holds twelve modules that act only on a
+// WHY. The reference runtime (lib/arm64-v8a/libvrapi.so of the reference APK) holds twelve modules, thirteen in the wave-2
+// runtime of the pinned base (KnownSites), that act only on a
 // libr15 whose md5 is on the list each module carries (custctx, memsys, voipdrop and others). The libr15 this project's
 // APK carries is the reference file after the host patcher (quest_patch_libr15) and so has an md5 none of the lists
 // names; every one of those modules logs "OFF: libr15.so md5 ... is none of ..." and changes nothing. The md5 of the

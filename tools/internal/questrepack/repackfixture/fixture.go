@@ -201,6 +201,8 @@ func (f *Fixture) MakeInputs(version string, header bool) {
 		t.Fatalf("%v", err)
 	}
 	BuildLib(t, f.Shim, shimC, "libovrplatformloader.so", version)
+	// The baseline runtime the recipe stages from beside the shim (stage-runtime refuses a missing or empty one).
+	BuildLib(t, filepath.Join(filepath.Dir(f.Shim), "libnevr-runtime.so"), originalC, "libnevr-runtime.so", "")
 	if header {
 		info := filepath.Join(f.Dir, "build", "generated")
 		if err := os.MkdirAll(info, 0o755); err != nil {

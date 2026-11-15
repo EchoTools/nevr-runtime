@@ -36,7 +36,8 @@ second run over its own output writes the same entries again.
 
 KNOWN RUNTIMES. The libvrapi of a reference build is looked up by the sha-256 of the library as the APK carries it (an
 already-renamed library is looked up with the target put back to the source). `KNOWN_RUNTIMES` names the two reference
-runtimes (the pinned reference APK's, 0 copies; the wave-2 base's, 1). A libvrapi the table does not name must hold the
+runtimes (the 10-30 reference APK's, d0b51a01..., 0 copies; the wave-2 runtime of the pinned base, tools/quest_release_base.py
+REFERENCE_APK_SHA256, 1). A libvrapi the table does not name must hold the
 source string 0 times, else the rename is refused: the tool never renames what its table does not name. `--known-runtimes
 FILE` (and the `known_runtimes` argument of `rename_apk`) EXTENDS the built-in table, never replaces it: FILE is a JSON
 object of sha-256 (64 hex digits) to [ASCII count, UTF-16LE count], two non-negative integers; an entry that names a
@@ -85,9 +86,10 @@ EXPECTED = {
 # of the library as the APK carries it) must hold exactly its count; any other libvrapi must hold 0 (see KNOWN RUNTIMES above).
 RUNTIME_ENTRY = "lib/arm64-v8a/libvrapi.so"
 KNOWN_RUNTIMES = {
-    # the 12-module runtime of the pinned reference APK (tools/quest_release_base.py REFERENCE_APK_SHA256): no package string
+    # the 12-module runtime of the 10-30 reference APK (d0b51a01...): no package string
     "59a3cd2090b29f72cc14b853f1550073c9dd066c87c9cd120eed6d93f84c3839": (0, 0),
-    # the 13-module wave-2 runtime: the package once, as the fallback name of a file-existence check
+    # the 13-module wave-2 runtime of the pinned base (tools/quest_release_base.py REFERENCE_APK_SHA256): the package once, as the
+    # fallback name of a file-existence check
     "1212fcea7837111d7ae8ea835f64399f479a50cde89a0f44a003caedae12466a": (1, 0),
 }
 SHA256_HEX_DIGITS = 64

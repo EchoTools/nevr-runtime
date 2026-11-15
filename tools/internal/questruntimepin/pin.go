@@ -19,8 +19,9 @@ const (
 	// StockEntryMD5 is the md5 of the stock libr15 that the reference runtime's list opens with (index 0): the entry the
 	// pin replaces.
 	StockEntryMD5 = "4911ef7f1248580ee2978590d581dbfd"
-	// Sites is the gated-module count of the pinned reference APK's runtime (12): one site and one ASCII copy of an entry
-	// per module. The wave-2 reference runtime holds 13 (KnownSites); the tests name the 12 case.
+	// Sites is the gated-module count of the 10-30 reference APK's runtime (d0b51a01..., 12): one site and one ASCII copy of
+	// an entry per module. The runtime of the pinned wave-2 base (tools/quest_release_base.py REFERENCE_APK_SHA256) holds 13
+	// (KnownSites); the tests name the 12 case.
 	Sites = 12
 	// Chunks is the number of 8-byte compare chunks in a 32-hex text.
 	Chunks = 4
@@ -359,8 +360,9 @@ func hexTexts(data []byte) []int {
 	return found
 }
 
-// KnownSites is the gated-module count of each reference runtime this project knows: 12 in the pinned reference APK's
-// runtime, 13 in the wave-2 runtime (the retired Python pin's KNOWN_SITES, #2132).
+// KnownSites is the gated-module count of each reference runtime this project knows: 12 in the 10-30 reference APK's
+// runtime (d0b51a01...), 13 in the wave-2 runtime of the pinned base (tools/quest_release_base.py REFERENCE_APK_SHA256)
+// (the retired Python pin's KNOWN_SITES, #2132).
 var KnownSites = []int{12, 13}
 
 func isKnownSites(n int) bool {

@@ -1,7 +1,7 @@
 """#1994: a release Quest APK is repacked from the pinned reference build and keeps every entry of that base.
 
 v6.16.0 to v6.16.3 were repacked from the store APK and lost the reference build's combat content without any check
-failing. tools/quest_release_base.py refuses an input that is not the pinned reference APK, and a release APK that lacks
+failing. tools/quest_release_base.py refuses an input that is not the pinned combat base (REFERENCE_APK_SHA256), and a release APK that lacks
 an entry of its base.
 """
 
@@ -17,8 +17,8 @@ import unittest
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 
-# The reference runtime's checksum list opens with the stock libr15's md5 and has twelve gated sites (the Go
-# package questruntimepin's StockEntryMD5 and Sites).
+# The reference runtime's checksum list opens with the stock libr15's md5 and has twelve gated sites, thirteen in the wave-2
+# runtime of the pinned base (the Go package questruntimepin's StockEntryMD5 and KnownSites).
 STOCK_ENTRY_MD5 = "4911ef7f1248580ee2978590d581dbfd"
 KNOWN_SITES = (12, 13)
 
@@ -118,8 +118,11 @@ class Prepare(unittest.TestCase):
             qb.prepare(self.ref, out, expected_sha256=self.sha, rename=rename_dropping)
         self.assertFalse(out.exists())
 
-    def test_the_pin_is_the_reference_build_v6_12_0_was_made_from(self):
-        self.assertEqual(qb.REFERENCE_APK_SHA256, "d0b51a014647643a30469ed318968b17374f39286b7d9ded5723f39299eedb48")
+    def test_the_pin_is_the_wave_2_base_and_not_the_10_30_reference(self):
+        """v6.18.0's combat APK is built on the wave-2 base (kotorvr/echoquest-combat release wave2-1104-fdad4965af): the 10-30
+        reference APK (d0b51a01...) with the six wave-2 entries in place. prepare refuses the 10-30 APK from now on."""
+        self.assertEqual(qb.REFERENCE_APK_SHA256, "be30121cd6d45d62b26058d04b94941ebb143d80d5f92df81517b57a4d4287e1")
+        self.assertNotEqual(qb.REFERENCE_APK_SHA256, "d0b51a014647643a30469ed318968b17374f39286b7d9ded5723f39299eedb48")
 
 
 class CheckRelease(unittest.TestCase):

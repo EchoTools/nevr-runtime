@@ -520,6 +520,7 @@ func TestStagePack_NotAZipRefused(t *testing.T) {
 // TestStagePack_EveryUnusableMetaRefused is test_every_unusable_meta_is_refused.
 func TestStagePack_EveryUnusableMetaRefused(t *testing.T) {
 	t.Parallel()
+	initPins(t) // the cases below slice prefixPath, which is empty until the pins are read
 	cases := map[string]map[string]any{
 		"an id with a capital":                      {"id": "Combat"},
 		"an id with a slash":                        {"id": "a/b"},

@@ -144,10 +144,15 @@ func TestPinDataTheRunsOfOneSiteMustLieWithinTheSiteSpan(t *testing.T) {
 	refused(t, err, fmt.Sprintf("bytes apart, over %#x", SiteSpan))
 }
 
+// A copy count no known runtime has (KnownSites) is refused by the count; a known count whose sites are not there (13 copies
+// over the 12 sites of the fixture) is refused by the immediate runs.
 func TestPinDataMoreThanTwelveASCIICopiesAreRefused(t *testing.T) {
 	t.Parallel()
-	_, _, err := PinData(runtime(fixture.OLD, fixture.WithCopies(Sites+1)), fixture.MD5Hex([]byte("a patched libr15")), 0, StockEntryMD5)
-	refused(t, err, "has 13 ASCII copies, not 12")
+	patched := fixture.MD5Hex([]byte("a patched libr15"))
+	_, _, err := PinData(runtime(fixture.OLD, fixture.WithCopies(Sites+2)), patched, 0, StockEntryMD5)
+	refused(t, err, fmt.Sprintf("has %d ASCII copies, not one of %v", Sites+2, KnownSites))
+	_, _, err = PinData(runtime(fixture.OLD, fixture.WithCopies(Sites+1)), patched, 0, StockEntryMD5)
+	refused(t, err, fmt.Sprintf("has %d immediate runs", Sites*Chunks))
 }
 
 // A list that holds the entry twelve times in a row would have all twelve copies replaced, though the pin means one entry:
