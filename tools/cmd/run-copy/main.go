@@ -32,6 +32,7 @@ import (
 	"strings"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
+	"github.com/EchoTools/nevr-runtime/tools/internal/runroot"
 )
 
 // exitUsage is the exit code of a bad flag, a missing argument or input that cannot be read.
@@ -84,7 +85,12 @@ func execute(args []string, stdout, stderr io.Writer) int {
 	}
 	wr := *workRoot
 	if wr == "" {
-		wr = runlog.WorkRoot(os.Getenv)
+		root, err := runroot.WorkRoot(os.Getenv)
+		if err != nil {
+			fmt.Fprintf(stderr, "run-copy: %v\n", err)
+			return exitUsage
+		}
+		wr = root
 	}
 	if r, err := filepath.EvalSymlinks(wr); err == nil {
 		wr = r

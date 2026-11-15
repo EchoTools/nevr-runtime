@@ -125,7 +125,12 @@ func testTools(opts options, ctx context.Context, args []string, getenv func(str
 		log.Error("no go", "error", err.Error())
 		return exitSetup
 	}
-	dir := logDir(getenv)
+	dir, err := logDir(getenv)
+	if err != nil {
+		fmt.Fprintf(stderr, "test-tools: FAIL cannot find the work root: %v\n", err)
+		log.Error("no work root", "error", err.Error())
+		return exitSetup
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		fmt.Fprintf(stderr, "test-tools: FAIL cannot write the run record to %s: %v\n", dir, err)
 		log.Error("no log dir", "dir", dir, "error", err.Error())
@@ -461,11 +466,15 @@ func nonNil(s []string) []string {
 }
 
 // logDir is $NEVR_TEST_LOG_DIR, else test-runs/tools-tests in the work root, as the Python runner has it.
-func logDir(getenv func(string) string) string {
+func logDir(getenv func(string) string) (string, error) {
 	if d := getenv("NEVR_TEST_LOG_DIR"); d != "" {
-		return d
+		return d, nil
 	}
-	return filepath.Join(runlog.WorkRoot(getenv), "test-runs", "tools-tests")
+	root, err := runroot.WorkRoot(getenv)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, "test-runs", "tools-tests"), nil
 }
 
 // newStem is <UTC stamp to the microsecond>-<pid>-<16 random hex digits>, the Python runner's stem without the commit.

@@ -57,16 +57,6 @@ func Path(tool string, getenv func(string) string) (string, error) {
 	return filepath.Join(state, "nevr-runtime", tool+".jsonl"), nil
 }
 
-// WorkRoot is the work root (AGENTS.md, "Nothing that only one machine has"): $NEVR_WORK_ROOT, else
-// $HOME/src/nevr-runtime-work. A record the repository's tools keep beside a run's output (a test run, a suite run)
-// goes below it.
-func WorkRoot(getenv func(string) string) string {
-	if root := getenv("NEVR_WORK_ROOT"); root != "" {
-		return root
-	}
-	return filepath.Join(getenv("HOME"), "src", "nevr-runtime-work")
-}
-
 // Log is an open run log. Logger writes each record with one write to a file opened for appending, so records from
 // several goroutines, and from several processes, do not interleave.
 type Log struct {
