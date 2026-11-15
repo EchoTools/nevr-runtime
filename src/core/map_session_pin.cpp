@@ -401,6 +401,12 @@ ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin) {
       decision.notice_line = FitLine({{"Downloading "}, {id, true}, {"; join again when it is ready."}});
       return decision;
     }
+    // Cached and current, mounted only once a session asks: the request checks the manifest first and mounts with no restart.
+    if (*token == nevr_maps::kNotAskedToken) {
+      decision.request_fetch = true;
+      decision.notice_line = FitLine({{"Loading "}, {id, true}, {"; join again when it is ready."}});
+      return decision;
+    }
     decision.notice_line = FitLine({{"Map "}, {id, true}, {" did not load: "}, {*token, true}, {". See the nevr log."}});
     decision.request_fetch = *token == "stock_changed";
     return decision;

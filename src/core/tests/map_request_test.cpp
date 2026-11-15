@@ -34,12 +34,13 @@ class MapRequestTest : public ::testing::Test, public Fixture {
   void TearDown() override { sp::ResetForTest(); }
 
   // A client process: the channel booted from whatever the cache holds, its view handed to the session pin.
-  void BootClient() {
+  void BootClient(bool mount_on_demand = false) {
     mc::Settings settings;
     settings.base_url = kBase;
     settings.keys = {key.pin};
     ChannelConfig platform;
     platform.dir = kDir;
+    platform.mount_on_demand = mount_on_demand;
     client = std::make_unique<mc::Channel>(platform, settings);
     requests = std::make_unique<MapRequests>(env, /*is_server=*/false);
     const mc::BootResult& boot = client->Boot(env, fs, mounter, nullptr, kNow, {});
@@ -187,6 +188,55 @@ TEST_F(MapRequestTest, CacheOnTheOldVersionFetchesTheChangedPiecesAndLoadsTheCur
   ASSERT_TRUE(Mounted(mounted, "arena_c"));
   ASSERT_EQ(mounted.staged.size(), 1u);
   EXPECT_EQ(mounted.staged[0].version, "1.1.0");
+  EXPECT_EQ(Join("arena_c", ServerPinOfMounted("arena_c")).action, sp::ClientAction::kNone);
+}
+
+// Mount on demand (the PC): the cache holds V-1 and its stored manifest lists V-1, and the bucket moved to V between runs, the case
+// a boot mount could only fix with a restart. Nothing mounts at boot. The lobby's group check stores V's changed piece and mounts
+// nothing; the first join asks for the map, V mounts, and the next join loads. V-1 is never mounted.
+TEST_F(MapRequestTest, MountOnDemandACopyTheBucketMovedPastBetweenRunsLoadsTheCurrentWithNoRestart) {
+  const std::string v1 = MakeSet(6, 'c');
+  channel.Publish("arena_c", "1.0.0", v1);
+  channel.Sign(1);
+  ASSERT_EQ(Fetch().outcome, FetchOutcome::kFetched);
+  std::string v2 = v1;
+  v2[FramesStart(6) + 2 * kFrameBytes + 20] ^= 1;
+  channel.Publish("arena_c", "1.1.0", v2);
+  channel.Sign(2);  // on the bucket only: the stored manifest still lists 1.0.0
+
+  BootClient(/*mount_on_demand=*/true);
+  EXPECT_TRUE(run.mounted.empty());
+  EXPECT_EQ(TokenOf(run, "arena_c"), kNotAskedToken);
+  ASSERT_TRUE(requests->RequestGroup(kGroup, &reason));
+  Serve();
+  EXPECT_EQ(fetched.pieces_fetched, 1u);
+  EXPECT_TRUE(mounted.mounted.empty());
+  const sp::ClientDecision first = Join("arena_c", kOtherServerPin);
+  EXPECT_EQ(first.action, sp::ClientAction::kLeave);
+  EXPECT_TRUE(first.request_fetch);
+  EXPECT_EQ(first.notice_line, "Loading arena_c; join again when it is ready.");
+
+  ASSERT_TRUE(requests->RequestMap("arena_c", &reason));
+  Serve();
+  ASSERT_TRUE(Mounted(mounted, "arena_c"));
+  ASSERT_EQ(run.staged.size(), 1u);
+  EXPECT_EQ(run.staged[0].version, "1.1.0");
+  EXPECT_EQ(Join("arena_c", ServerPinOfMounted("arena_c")).action, sp::ClientAction::kNone);
+}
+
+TEST_F(MapRequestTest, MountOnDemandAMapNoSessionAsksForIsNeverMounted) {
+  channel.Publish("arena_c", "1.0.0", MakeSet(4, 'c'));
+  channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+  channel.Sign(1);
+  ASSERT_EQ(Fetch().outcome, FetchOutcome::kFetched);  // both cached
+  BootClient(/*mount_on_demand=*/true);
+  ASSERT_TRUE(requests->RequestGroup(kGroup, &reason));
+  ASSERT_TRUE(requests->RequestMap("arena_c", &reason));
+  Serve();
+  EXPECT_TRUE(Mounted(run, "arena_c"));
+  EXPECT_FALSE(Mounted(run, "beta"));
+  EXPECT_EQ(TokenOf(run, "beta"), kNotAskedToken);
+  EXPECT_FALSE(mounter.Called("set map:beta"));
   EXPECT_EQ(Join("arena_c", ServerPinOfMounted("arena_c")).action, sp::ClientAction::kNone);
 }
 

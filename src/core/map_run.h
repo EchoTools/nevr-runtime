@@ -99,6 +99,10 @@ struct ChannelConfig {
   std::string channel;               // maps.channel; empty = the channel base_url was bound to at its first fetch
   std::uint32_t boot_budget_ms = 0;  // maps.boot_budget_ms: how long one mount may take; 0 = no limit
   std::uint64_t cache_cap_bytes = kDefaultCacheCapBytes;  // maps.cache_cap_gib: the most the cache holds; 0 = no cap
+  // The platform's: a map mounts only when a session asks for it, after its group's manifest was checked, so a version the
+  // bucket moved past since the last run is never mounted at boot. False mounts every cached map at boot (the Quest, which has
+  // no later mount yet).
+  bool mount_on_demand = false;
 };
 
 // Where a group's manifest is on the channel, and where the cache keeps the copy it verified.
@@ -117,6 +121,8 @@ inline constexpr std::uint64_t kDescriptorShareForMaps = 4;
 inline constexpr const char* kStaleToken = "stale";
 // The skip token of a map an earlier mount of this process holds at another version: a mounted set is never replaced in the process.
 inline constexpr const char* kMountedOtherVersionToken = "mounted_other_version";
+// The skip token of a cached, current map no session has asked for yet (ChannelConfig::mount_on_demand).
+inline constexpr const char* kNotAskedToken = "not_asked";
 
 struct MountedMap {
   std::string id, version, index_sha256, platform, source_sha256, title, group;
@@ -140,7 +146,9 @@ struct MountReport {
 class CacheMount {
  public:
   CacheMount(nevr_cdn::Env& env, MapFs& fs, const ChannelConfig& config, Mounter& mounter, Deriver* deriver);
-  MountReport Mount(const std::vector<std::string>& groups, const std::string& now_utc);
+  // `only`, when given, are the ids this call may grant; every other cached map at its listed version is skipped (not_asked).
+  MountReport Mount(const std::vector<std::string>& groups, const std::string& now_utc,
+                    const std::vector<std::string>* only = nullptr);
   std::vector<std::string> MountedIds() const;  // every map a call mounted, sorted
 
  private:

@@ -232,9 +232,10 @@ struct Listing {
 class MountRun {
  public:
   MountRun(Env& env, MapFs& fs, const ChannelConfig& config, Mounter& mounter, Deriver* deriver,
-           std::map<std::string, std::string>& mounted, std::map<std::uint64_t, std::string>& script_holders)
+           std::map<std::string, std::string>& mounted, std::map<std::uint64_t, std::string>& script_holders,
+           const std::vector<std::string>* only)
       : env_(env), fs_(fs), config_(config), mounter_(mounter), deriver_(deriver), mounted_(mounted),
-        script_holders_(script_holders) {}
+        script_holders_(script_holders), only_(only) {}
 
   MountReport Run(const std::vector<std::string>& groups, const std::string& now_utc) {
     const std::uint64_t started = env_.NowMs();
@@ -424,6 +425,7 @@ class MountRun {
     // not stored yet: offline, or the fetch failed) is refused, never mounted in its place; the next fetch stores the listed one.
     const Listing* pinning = Pinning(listings, cached.index_sha256);
     if (pinning == nullptr) return Refuse(id, kStaleToken);
+    if (only_ != nullptr && !Contains(*only_, id)) return Skip(id, kNotAskedToken);
     const Listing selected = *pinning;
     const std::string version_dir = Join(config_.dir, cached.dir);
 
@@ -593,6 +595,7 @@ class MountRun {
   Deriver* deriver_;
   std::map<std::string, std::string>& mounted_;
   std::map<std::uint64_t, std::string>& script_holders_;
+  const std::vector<std::string>* only_;
   CacheIndex index_;
   std::map<std::string, std::vector<Listing>> listings_;
   std::set<std::string> revoked_ids_, revoked_sha_;
@@ -1675,8 +1678,9 @@ const char* FetchOutcomeName(FetchOutcome outcome) noexcept {
 CacheMount::CacheMount(Env& env, MapFs& fs, const ChannelConfig& config, Mounter& mounter, Deriver* deriver)
     : env_(env), fs_(fs), config_(config), mounter_(mounter), deriver_(deriver) {}
 
-MountReport CacheMount::Mount(const std::vector<std::string>& groups, const std::string& now_utc) {
-  return MountRun(env_, fs_, config_, mounter_, deriver_, mounted_, script_holders_).Run(groups, now_utc);
+MountReport CacheMount::Mount(const std::vector<std::string>& groups, const std::string& now_utc,
+                              const std::vector<std::string>* only) {
+  return MountRun(env_, fs_, config_, mounter_, deriver_, mounted_, script_holders_, only).Run(groups, now_utc);
 }
 
 std::vector<std::string> CacheMount::MountedIds() const {

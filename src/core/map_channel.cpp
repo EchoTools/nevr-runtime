@@ -269,7 +269,8 @@ const BootResult& Channel::Boot(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_m
   config_.local_maps = LocalShadowIds(local_ids);
   // The cache index's groups, latest first: the mount reads them, and hashes nothing it has stamped (decision 4, ADR 0045 decision 7).
   mount_ = std::make_unique<nevr_maps::CacheMount>(env, fs, config_, mounter, deriver);
-  result_.report = mount_->Mount(nevr_maps::CachedGroupIds(env, config_.dir), now_utc);
+  const std::vector<std::string> none;
+  result_.report = mount_->Mount(nevr_maps::CachedGroupIds(env, config_.dir), now_utc, config_.mount_on_demand ? &none : nullptr);
   run_ = result_.report;
   result_.reason = "ok";
   env.Event(nevr_cdn::EventLevel::kInfo, "map_start",
@@ -312,7 +313,7 @@ void Channel::ServeRequests(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_maps:
       scope.in_use = mount_->MountedIds();
       const nevr_maps::FetchReport fetched =
           nevr_maps::FetchGroup(env, fs, config_, group, run_.deferred, deriver, now_utc(), keep_going, progress, scope);
-      const nevr_maps::MountReport mounted = mount_->Mount({group}, now_utc());
+      const nevr_maps::MountReport mounted = mount_->Mount({group}, now_utc(), config_.mount_on_demand ? &asked.ids : nullptr);
       MergeMountReport(run_, mounted);
       if (after) after(fetched, mounted, run_);
       return fetched;
