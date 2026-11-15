@@ -590,6 +590,9 @@ constexpr std::size_t kTwoPluginCount = 2;
 constexpr std::size_t kThreePluginCount = 3;
 // An index no test list reaches, far past its end.
 constexpr std::size_t kFarPastTheEnd = 5;
+// The alias-built list that expands to kWideFanOut to the power kWideLevels nodes.
+constexpr std::size_t kWideLevels = 8;
+constexpr std::size_t kWideFanOut = 10;
 // The plugin names in kThreePlugins, and the short names the one-off lists use.
 constexpr const char* kNameAlpha = "alpha";
 constexpr const char* kNameBeta = "beta";
@@ -898,4 +901,65 @@ TEST(NevrConfigSetPlugin, ANameTheLoaderWouldRefuseMatchesNothing) {
   EXPECT_FALSE(r.ok);
   EXPECT_STREQ(r.reason, "plugin_name_mismatch");
   EXPECT_EQ(Read(dir.File()), before);
+}
+
+// A block scalar's lines, comment-looking ones included, are its content: an `enabled:` line inserted after them would end the
+// scalar and cut off what follows. An insert into such an entry is refused; the entry's own `enabled:` is replaced in place and
+// no text around the scalar moves.
+TEST(NevrConfigSetPlugin, AnEntryWithABlockScalarIsRefusedWhereAnInsertWouldCutItOff) {
+  const char* const cases[] = {
+      "plugins:\n  - name: a\n    args:\n      script: |\n        run\n        # keep\n",
+      "plugins:\n  - name: a\n    args:\n      script: >-\n        run\n        # keep\n",
+      "plugins:\n  - name: a\n    args:\n      lines:\n        - |\n          run\n          # keep\n",
+      "plugins:\n  - name: a\n    note: |2\n        indented\n      # keep\n",
+      "plugins:\n  - name: a\n    ? |\n      key\n      # keep\n    : v\n",
+  };
+  for (const char* const text : cases) {
+    Dir dir;
+    Write(dir.File(), text);
+    const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, false);
+    EXPECT_FALSE(r.ok) << text;
+    EXPECT_FALSE(r.wrote) << text;
+    EXPECT_STREQ(r.reason, "entry_has_block_scalar") << text;
+    EXPECT_EQ(Read(dir.File()), text);
+  }
+}
+
+TEST(NevrConfigSetPlugin, AnExistingEnabledIsReplacedInPlaceBesideABlockScalar) {
+  Dir dir;
+  Write(dir.File(), "plugins:\n  - name: a\n    enabled: true\n    args:\n      script: |\n        run\n        # keep\n");
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, false);
+  ASSERT_TRUE(r.ok) << r.reason;
+  EXPECT_TRUE(r.wrote);
+  EXPECT_EQ(Read(dir.File()), "plugins:\n  - name: a\n    enabled: false\n    args:\n      script: |\n        run\n        # keep\n");
+}
+
+TEST(NevrConfigSetPlugin, ABlockScalarInAnotherEntryDoesNotStopAnInsert) {
+  Dir dir;
+  Write(dir.File(), "plugins:\n  - name: a\n    args:\n      script: |\n        run\n        # keep\n  - name: b\n");
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kBeta, kNameB, false);
+  ASSERT_TRUE(r.ok) << r.reason;
+  EXPECT_EQ(Read(dir.File()), "plugins:\n  - name: a\n    args:\n      script: |\n        run\n        # keep\n  - name: b\n    enabled: false\n");
+}
+
+// An alias can make the entry's tree a cycle, or a DAG that expands to more nodes than any file needs. The scan for a block scalar is
+// bounded the way the loader's walk is, and an entry it cannot finish is refused, not scanned forever.
+TEST(NevrConfigSetPlugin, AnEntryTooDeepOrTooWideToScanIsRefused) {
+  const std::string cycle = "plugins:\n  - name: a\n    args: &x\n      - *x\n";
+  std::string wide = "plugins:\n  - name: a\n    args:\n      l0: &l0 [x, x, x, x, x, x, x, x, x, x]\n";
+  for (std::size_t level = 1; level <= kWideLevels; ++level) {
+    const std::string below = "*l" + std::to_string(level - 1);
+    wide += "      l" + std::to_string(level) + ": &l" + std::to_string(level) + " [";
+    for (std::size_t i = 0; i < kWideFanOut; ++i) wide += (i == 0 ? "" : ", ") + below;
+    wide += "]\n";
+  }
+  for (const std::string& text : {cycle, wide}) {
+    Dir dir;
+    Write(dir.File(), text);
+    const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, false);
+    EXPECT_FALSE(r.ok) << text;
+    EXPECT_FALSE(r.wrote) << text;
+    EXPECT_STREQ(r.reason, "entry_too_complex") << text;
+    EXPECT_EQ(Read(dir.File()), text);
+  }
 }

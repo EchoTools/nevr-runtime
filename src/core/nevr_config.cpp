@@ -808,6 +808,40 @@ bool EntryNameIs(const YAML::Node& entry, const std::string& name) {
   }
 }
 
+enum class BlockScalarScan { kNone, kFound, kTooComplex };
+
+// Whether `node` or anything under it (keys included) is a block scalar, `|` or `>`. The parser's mark for a scalar is where its
+// text starts, so a block scalar is the one kind whose first byte there is its indicator: a plain scalar cannot start with `|` or
+// `>`, and a quoted or flow one starts with its quote or bracket. Bounded like the loader's walk (kMaxConfigDepth,
+// kMaxConfigNodes): an alias can make the tree a cycle or a DAG that expands without end.
+BlockScalarScan ScanForBlockScalar(const std::string& text, const std::vector<std::size_t>& starts, const YAML::Node& node,
+                                   std::size_t depth, std::size_t* visited) {
+  if (depth > kMaxConfigDepth || ++*visited > kMaxConfigNodes) return BlockScalarScan::kTooComplex;
+  if (node.IsScalar()) {
+    std::size_t at = 0;
+    return OffsetOf(starts, text, node.Mark(), &at) && at < text.size() && (text[at] == '|' || text[at] == '>')
+               ? BlockScalarScan::kFound
+               : BlockScalarScan::kNone;
+  }
+  if (!node.IsMap() && !node.IsSequence()) return BlockScalarScan::kNone;
+  BlockScalarScan result = BlockScalarScan::kNone;
+  bool tooComplex = false;
+  auto visit = [&](const YAML::Node& child) {
+    const BlockScalarScan below = ScanForBlockScalar(text, starts, child, depth + 1, visited);
+    if (below == BlockScalarScan::kTooComplex) tooComplex = true;
+    if (below == BlockScalarScan::kFound) result = below;
+  };
+  for (YAML::const_iterator it = node.begin(); it != node.end() && !tooComplex; ++it) {
+    if (node.IsMap()) {
+      visit(it->first);
+      visit(it->second);
+    } else {
+      visit(*it);
+    }
+  }
+  return tooComplex ? BlockScalarScan::kTooComplex : result;
+}
+
 // SetPluginEnabled's edit: `plugins[index].enabled` becomes `enabled`. `existing` is the file's text, or null when the file is missing.
 // A block list of block entries only. The entry's own `enabled:` value is replaced in place (ReplaceValue); an entry without one
 // gets `enabled: <value>` after its last content line, at the column of its first key.
@@ -871,6 +905,12 @@ Splice SpliceEnabled(const std::string* existing, std::size_t index, const std::
     std::size_t dash = lineBegin;
     while (dash < keyOffset && text[dash] == ' ') ++dash;
     if (dash >= keyOffset || text[dash] != '-' || !OnlySpaceOrComment(text, dash + 1, keyOffset)) return Refused("position_mismatch");
+    // BlockEnd finds the entry's last line by indentation and takes a `#` line for a comment. Inside a block scalar that line is
+    // content, and the inserted `enabled:` would end the scalar before it. Only an insert moves text around such a scalar.
+    std::size_t visited = 0;
+    const BlockScalarScan scan = ScanForBlockScalar(text, starts, entry, 0, &visited);
+    if (scan == BlockScalarScan::kTooComplex) return Refused("entry_too_complex");
+    if (scan == BlockScalarScan::kFound) return Refused("entry_has_block_scalar");
     const std::size_t at = BlockEnd(starts, text, keyLine, dash - lineBegin);
     const std::string eol = LineEnding(text, starts, keyLine);
     std::string add = std::string(childColumn, ' ') + kEnabledKey + ": " + edit.text + eol;
