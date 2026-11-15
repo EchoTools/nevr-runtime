@@ -47,6 +47,30 @@ inline Choice Select(bool noVr, const char* serial) {
   return {value, Source::GameBuffer};
 }
 
+// The headset type the login's system_info carries. The game's HMD descriptor (an ovrHmdDesc copy at 0x1420c77a8, ProductName[64]
+// at +8; src/runtime/patch/render_config.h kHmdDescVa) holds the LibOVR product name of the headset in use, such as "Oculus Rift
+// CV1"; the stock client sends that string [UNVERIFIED: the stock login's own read of it was not disassembled; the value
+// matches what a stock Rift CV1 login carries in the game service's logs]. "No VR" only when the game's No VR flag is set;
+// "unknown" when the game is in VR mode but the descriptor is empty or not text, so a real headset is never reported as No VR.
+constexpr std::size_t kHmdProductNameRva = 0x20C77A8 + 8;  // image base + 0x1420c77a8 + 8
+constexpr std::size_t kProductNameBytes = 64;
+constexpr const char* kNoVrHeadset = "No VR";
+constexpr const char* kUnknownHeadset = "unknown";
+
+inline std::string HeadsetType(bool noVr, const char* productName) {
+  if (noVr) return kNoVrHeadset;
+  if (productName == nullptr) return kUnknownHeadset;
+  std::string value;
+  for (std::size_t i = 0; i < kProductNameBytes && productName[i] != '\0'; ++i) {
+    const unsigned char c = static_cast<unsigned char>(productName[i]);
+    if (c < 0x20 || c > 0x7e) return kUnknownHeadset;  // not text
+    value.push_back(static_cast<char>(c));
+  }
+  const std::size_t first = value.find_first_not_of(' ');
+  if (first == std::string::npos) return kUnknownHeadset;
+  return value.substr(first, value.find_last_not_of(' ') - first + 1);
+}
+
 inline const char* SourceName(Source s) {
   switch (s) {
     case Source::GameBuffer: return "game-buffer";

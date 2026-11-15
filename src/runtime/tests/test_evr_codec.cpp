@@ -304,6 +304,15 @@ TEST(EvrCodecPolicy, TheNoVrDecisionReadsBit20OfTheGameFlagsAndNeverOnAServer) {
   EXPECT_FALSE(nevr_hmd_serial::LoginIsNoVr(true, 0x100000ULL)) << "a server keeps its platform";
 }
 
+TEST(HmdSerial, HeadsetTypeIsTheGamesProductNameAndNoVrOnlyWithoutAHeadset) {
+  EXPECT_EQ(nevr_hmd_serial::HeadsetType(false, "Oculus Rift CV1"), "Oculus Rift CV1");
+  EXPECT_EQ(nevr_hmd_serial::HeadsetType(false, "  Oculus Rift S  "), "Oculus Rift S");
+  EXPECT_EQ(nevr_hmd_serial::HeadsetType(true, "Oculus Rift CV1"), "No VR") << "the game's No VR flag wins";
+  EXPECT_EQ(nevr_hmd_serial::HeadsetType(false, ""), "unknown") << "VR mode with an empty descriptor is not No VR";
+  EXPECT_EQ(nevr_hmd_serial::HeadsetType(false, nullptr), "unknown");
+  EXPECT_EQ(nevr_hmd_serial::HeadsetType(false, "bad\x01name"), "unknown");
+}
+
 TEST(EvrCodecPolicy, RemoteBearerIsTheServerKeyOnlyWithUrlCredentials) {
   EXPECT_EQ(nevr_evr_codec::SelectRemoteBearer(false, "jwt", "key"), "jwt");
   EXPECT_EQ(nevr_evr_codec::SelectRemoteBearer(true, "jwt", "key"), "key");

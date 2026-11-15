@@ -6923,6 +6923,22 @@ TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) 
   ASSERT_TRUE(json.contains("system_info"));
   EXPECT_TRUE(json["system_info"]["num_physical_cores"].is_number_unsigned());
   EXPECT_TRUE(json["system_info"]["memory_total"].is_number_unsigned());
+  // A client in VR mode never says "No VR": outside the game there is no HMD descriptor to read, so the type is "unknown".
+  EXPECT_EQ(json["system_info"]["headset_type"], "unknown");
+}
+
+// "No VR" is for the game's own No VR flag (bit 20 of game+0x7ae0), the flag the stock login reads for the "N/A" serial.
+TEST(WsBridgeLoginRequest, HeadsetTypeIsNoVrOnlyWhenTheGamesNoVrFlagIsSet) {
+  const BOOL wasServer = g_isServer;
+  g_isServer = FALSE;
+  TestHook_SetGameFlagWord(0x100000);
+  const std::string request = TestHook_BuildLoginRequest(79, 3, "Player", "token");
+  TestHook_SetGameFlagWord(-1);
+  g_isServer = wasServer;
+  constexpr size_t kJsonOffset = 56;
+  ASSERT_GT(request.size(), kJsonOffset);
+  const nlohmann::json json = nlohmann::json::parse(request.substr(kJsonOffset, request.size() - kJsonOffset - 1));
+  EXPECT_EQ(json["system_info"]["headset_type"], "No VR");
 }
 
 // The login wire payload, rather than SystemInfo in isolation, must carry

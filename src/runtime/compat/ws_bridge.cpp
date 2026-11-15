@@ -1095,6 +1095,12 @@ static std::optional<uint32_t> GameFlagWord() {
   return flags;
 }
 
+// The product name of the headset the game found, from its HMD descriptor (nullptr outside the game).
+static const char* GameHmdProductName() {
+  if (EchoVR::g_GameBaseAddress == nullptr || g_pGame == nullptr) return nullptr;
+  return reinterpret_cast<const char*>(EchoVR::g_GameBaseAddress) + nevr_hmd_serial::kHmdProductNameRva;
+}
+
 static nevr_hmd_serial::Choice GameHmdSerial() {
   const std::optional<uint32_t> flags = GameFlagWord();
   if (!flags) return nevr_hmd_serial::Select(false, nullptr);
@@ -1223,6 +1229,9 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   profileInputs.access_token = accessToken;
   profileInputs.password = password;
   profileInputs.hmd_serial_number = hmd.value;
+  // The headset the game found, as the stock client sends it; "No VR" only for the game's No VR flag.
+  profileInputs.headset_type = nevr_hmd_serial::HeadsetType(GameIsNoVr(), GameHmdProductName());
+  Log(EchoVR::LogLevel::Info, "[NEVR.WS] login headset_type=%s", profileInputs.headset_type.c_str());
   profileInputs.driver_version = driverVersion;
   profileInputs.cpu = host.cpu_brand;
   profileInputs.physical_cores = host.physical_cores;
