@@ -1,0 +1,9 @@
+/* The dynamic exports of libnevr-runtime.so: the entry the host calls and the EC script libraries' page (src/quest/sentinel/ec_page.h).
+   Everything else is local. tests/quest TestRuntimeExportAllowlist reads the linked library against this list. */
+{
+  global:
+    NEVR_GetRuntimeApi;
+    re33_ec_page;
+  local:
+    *;
+};

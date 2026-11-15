@@ -274,7 +274,12 @@ target_include_directories(nevr_quest_runtime PRIVATE ${NEVR_QUEST_RUNTIME_INCLU
 target_compile_options(nevr_quest_runtime PRIVATE ${NEVR_QUEST_RUNTIME_OPTIONS})
 target_link_libraries(nevr_quest_runtime PRIVATE ${NEVR_QUEST_RUNTIME_LIBRARIES} nevr_quest_integration)
 # -Wl,-z,defs makes an undefined symbol a link error: every name the copy uses resolves against a library the link names.
-target_link_options(nevr_quest_runtime PRIVATE -Wl,--exclude-libs,ALL -Wl,-z,text -Wl,-z,defs)
+# The version script is the export set: NEVR_GetRuntimeApi and re33_ec_page, nothing else (tests/quest TestRuntimeExportAllowlist).
+# An object linked straight into this library exports libc++'s default-visibility std::function type info (the update worker's
+# and the host's callbacks take std::function); --exclude-libs only covers archives, so the script keeps those local.
+target_link_options(nevr_quest_runtime PRIVATE -Wl,--exclude-libs,ALL -Wl,-z,text -Wl,-z,defs
+  -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/nevr_runtime_exports.map)
+set_property(TARGET nevr_quest_runtime APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/nevr_runtime_exports.map)
 
 # The runtime's own NEVR-BUILD literal (core/build_identity.h): the version and the full commit, the same identity the PC
 # runtime embeds. A binary contains exactly one; the runtime's copy is the only one in this library.
