@@ -47,11 +47,15 @@ namespace nevr_resource_sets {
 
 namespace {
 
-// What the resolver hook reads with no lock: the shadow and one serve counter per mounted set. Published once with
-// a release store after the mount and never freed (a request in flight may still be filled from it).
+// What the resolver hook reads with no lock: one node per mount (the boot mount, then each later mount of sets fetched
+// mid-run, newest first), each with its shadow and one serve counter per mounted set. Each node is published with a
+// release store after its mount and never freed (a request in flight may still be filled from it). No two nodes hold
+// one key (LaterMountView), so the order of the walk decides nothing.
 struct Published {
-  explicit Published(const nevr_shadow::Shadow* s, std::size_t sets) : shadow(s), served(sets) {}
+  Published(const nevr_shadow::Shadow* s, std::vector<const Set*> mounted, Published* older)
+      : shadow(s), sets(std::move(mounted)), served(sets.size()), next(older) {}
   const nevr_shadow::Shadow* shadow;
+  std::vector<const Set*> sets;  // the node's mounted sets, by shadow user index; owned by a registry that lives for the run
   std::vector<std::atomic<std::uint64_t>> served;
   std::atomic<std::uint64_t> stockWins{0};
   // The first key the game's manifest answered instead of a set, and that set's index (+1; 0 until one).
@@ -59,6 +63,7 @@ struct Published {
   std::atomic<std::uint64_t> firstWinName{0};
   std::atomic<std::uint32_t> firstWinUser{0};
   std::atomic<bool> firstWinReady{false};  // stored after the three above, so a reader that sees it sees them
+  Published* const next;
 };
 
 // When a mount is still waiting this long after the plugin pass, one Warning says why.
@@ -74,6 +79,12 @@ std::mutex g_mutex;  // the registry, the init state and the mount
 // Taken before g_mutex and before the asset registry's own lock, never after either.
 std::mutex g_keyMutex;
 Registry g_registry;
+// Sets registered after the boot mount (a map fetched mid-run) wait in g_laterPending until the frame mounts them
+// (MountLaterSets); each later mount's registry is kept for the run, since the game reads its sets' files.
+std::unique_ptr<Registry> g_laterPending;
+std::vector<std::unique_ptr<Registry>> g_later;
+bool g_abandoned = false;  // the boot mount gave up (no resolver hook): nothing later mounts either
+std::atomic<bool> g_laterRequested{false};
 std::atomic<Published*> g_published{nullptr};
 std::atomic<bool> g_mountDeferred{false};
 bool g_deferSaid = false;
@@ -424,7 +435,7 @@ void PublishLocked(const std::vector<const Set*>& mounted) {
     // The first read window starts here, before the publish: a read the resolver serves on another thread between
     // the publish and this frame's summary is then counted in a window that has a start.
     g_lastSummaryMs.store(NowMs());
-    g_published.store(new Published(shadow, mounted.size()), std::memory_order_release);
+    g_published.store(new Published(shadow, mounted, g_published.load(std::memory_order_relaxed)), std::memory_order_release);
 #ifdef NEVR_TEST_HOOKS
     if (g_testAfterPublish != nullptr) g_testAfterPublish();
 #endif
@@ -679,7 +690,8 @@ Outcome RegisterFileResourceSet(const MapFileRequest& request, std::int64_t held
   std::uint32_t records = 0, chunks = 0, overrides = 0;
   std::size_t levels = 0;
   std::uint64_t bytes = 0;
-  const Outcome outcome = RegisterMapFile(request, file, &MountedNow, [&](const void* view, std::uint64_t size) {
+  // After the boot mount a map's set goes to the next later mount (`add` routes it), so it is never too late here.
+  const Outcome outcome = RegisterMapFile(request, file, [] { return false; }, [&](const void* view, std::uint64_t size) {
     // The same claim as a plugin's set: a set and a plugin asset never both take one resource.
     nevr_resource_set::View parsed;
     const std::lock_guard<std::mutex> claim(g_keyMutex);
@@ -695,7 +707,10 @@ Outcome RegisterFileResourceSet(const MapFileRequest& request, std::int64_t held
     }
     bytes = size;
     const std::lock_guard<std::mutex> lock(g_mutex);
-    return g_registry.AddMapFile(request.owner, request.label, view, size, held_handle);
+    if (!g_registry.mounted()) return g_registry.AddMapFile(request.owner, request.label, view, size, held_handle);
+    if (g_abandoned) return Outcome{Refusal::kTooLate, "the run's resource sets were not mounted (no resolver hook)"};
+    if (!g_laterPending) g_laterPending = std::make_unique<Registry>();
+    return g_laterPending->AddMapFile(request.owner, request.label, view, size, held_handle);
   });
   if (!outcome.ok()) return MapRefused(request, outcome);
   Log(EchoVR::LogLevel::Info,
@@ -711,6 +726,7 @@ void WithdrawFileResourceSet(const std::string& owner) {
   {
     std::lock_guard<std::mutex> lock(g_mutex);
     dropped = g_registry.DropMap(owner);
+    if (dropped.empty() && g_laterPending) dropped = g_laterPending->DropMap(owner);
   }
   if (dropped.empty()) return;
   CloseHandles(dropped);
@@ -749,6 +765,7 @@ void MountWhenReadyUnguarded() {
     if (!hooked) {
       for (const Set* set : g_registry.HeldSets()) abandonedPlugins.push_back(Printable(set->plugin.c_str()));
       abandoned = g_registry.Abandon();
+      g_abandoned = true;
     } else {
       g_armedAtMs = NowMs();
       if (!g_deferSaid) {
@@ -794,20 +811,18 @@ void SummarizeReads() {
   const std::uint64_t now = NowMs();
   std::uint64_t last = g_lastSummaryMs.load(std::memory_order_relaxed);
   if (now - last < 10000 || !g_lastSummaryMs.compare_exchange_strong(last, now)) return;
-  std::vector<const Set*> sets;
-  {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    sets = g_registry.MountedSets();
+  for (Published* node = published; node != nullptr; node = node->next) {
+    for (std::size_t i = 0; i < node->sets.size(); ++i) {
+      const std::uint64_t served = node->served[i].exchange(0, std::memory_order_relaxed);
+      if (served == 0) continue;
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.RESOURCE] resource set reads plugin=%s label=\"%s\" served=%llu window_ms=%llu (the game read these "
+          "records from the plugin's file)",
+          Printable(node->sets[i]->plugin.c_str()).c_str(), node->sets[i]->label.c_str(),
+          static_cast<unsigned long long>(served), static_cast<unsigned long long>(now - last));
+    }
   }
-  for (std::size_t i = 0; i < sets.size() && i < published->served.size(); ++i) {
-    const std::uint64_t served = published->served[i].exchange(0, std::memory_order_relaxed);
-    if (served == 0) continue;
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.RESOURCE] resource set reads plugin=%s label=\"%s\" served=%llu window_ms=%llu (the game read these "
-        "records from the plugin's file)",
-        Printable(sets[i]->plugin.c_str()).c_str(), sets[i]->label.c_str(), static_cast<unsigned long long>(served),
-        static_cast<unsigned long long>(now - last));
-  }
+  const std::vector<const Set*>& sets = published->sets;
   if (published->firstWinReady.load(std::memory_order_acquire) && !g_stockWinSaid.exchange(true)) {
     const std::uint64_t stockWins = published->stockWins.load(std::memory_order_relaxed);
     const std::uint32_t user = published->firstWinUser.load();
@@ -822,8 +837,72 @@ void SummarizeReads() {
 }
 }  // namespace
 
+namespace {
+// The later mount, on the frame (the stock check reads the game's manifests, as the boot mount does): the sets registered
+// since the last mount, checked against the stock and every key an earlier mount serves, in a shadow of their own. The
+// observer hears every later mount, an empty one too, so the channel learns what each fetch's grants came to.
+void MountLaterNow() {
+  MountReport report;
+  std::vector<const Set*> mounted;
+  std::unique_ptr<Registry> registry;
+  bool hooked = true;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    registry = std::move(g_laterPending);
+    if (registry) {
+#ifdef NEVR_TEST_HOOKS
+      if (g_testNoResolverHook) {
+        hooked = false;
+      } else if (g_testStockHas == nullptr) {
+        hooked = nevr::assets::EnsureResolverHook();
+      }
+#else
+      hooked = nevr::assets::EnsureResolverHook();
+#endif
+      if (hooked) {
+        std::vector<const Registry*> earlier{&g_registry};
+        for (const std::unique_ptr<Registry>& r : g_later) earlier.push_back(r.get());
+        const LaterMountView view(StockView{&StockHasThunk, nullptr, StockRecordsNow()}, earlier);
+        report = registry->Mount(view.stock());
+        mounted = registry->MountedSets();
+      } else {
+        report.handles_to_close = registry->Abandon();
+      }
+    }
+  }
+  CloseHandles(report.handles_to_close);
+  for (const MountReport::Refused& refused : report.refusals) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MAPS] map resource set refused at later mount owner=%s reason=%s detail=\"%s\" (the map is not served this run)",
+        Printable(refused.plugin.c_str()).c_str(), RefusalName(refused.outcome.refusal), refused.outcome.detail.c_str());
+  }
+  NotifyMountObserver(report);
+  if (!registry) return;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (const nevr_shadow::Shadow* shadow = registry->shadow()) {
+    g_published.store(new Published(shadow, mounted, g_published.load(std::memory_order_relaxed)), std::memory_order_release);
+  }
+  Log(hooked ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+      "[NEVR.MAPS] map later mount sets=%zu refused=%zu records=%zu chunk_base=%u hooked=%s (sets fetched this run are served "
+      "with no restart; a level already loaded is never replaced)",
+      report.sets, report.refused, report.records, report.chunk_base, hooked ? "true" : "false");
+  g_later.push_back(std::move(registry));
+}
+}  // namespace
+
+void MountLaterSets() { g_laterRequested.store(true, std::memory_order_release); }
+
 // Per frame, inside the game's own hook (DispatchPerFrameWork): nothing here may throw into the game.
 void OnFrame(bool onLoopThread) {
+  if (g_laterRequested.load(std::memory_order_acquire) && !g_mountDeferred.load(std::memory_order_relaxed) && MountedNow() &&
+      g_laterRequested.exchange(false)) {
+    try {
+      MountLaterNow();
+    } catch (const std::exception&) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.MAPS] map later mount failed reason=exception (the maps fetched since the last mount "
+                                     "are not served this run)");
+    }
+  }
   if (g_mountDeferred.load(std::memory_order_relaxed)) {
     try {
       TryMount(onLoopThread);
@@ -851,9 +930,9 @@ void OnFrame(bool onLoopThread) {
 
 const void* ManagerFor(const void* manager, std::uint64_t type, std::uint64_t name) {
   Published* published = g_published.load(std::memory_order_acquire);
-  if (published == nullptr) return nullptr;
   std::uint32_t user = 0;
-  if (!published->shadow->Find(type, name, nullptr, &user)) return nullptr;
+  while (published != nullptr && !published->shadow->Find(type, name, nullptr, &user)) published = published->next;
+  if (published == nullptr) return nullptr;
   if (ManagerHasNow(manager, type, name)) {
     if (published->stockWins.fetch_add(1, std::memory_order_relaxed) == 0) {
       published->firstWinType.store(type);
@@ -871,19 +950,35 @@ std::unique_lock<std::mutex> LockKeyClaims() { return std::unique_lock<std::mute
 
 bool HoldsKey(std::uint64_t type, std::uint64_t name) {
   std::lock_guard<std::mutex> lock(g_mutex);
-  return g_registry.Holds(type, name) || g_registry.Holds(nevr_resource_key::OnDiskType(type, 0), name) ||
-         g_registry.Holds(nevr_resource_key::OnDiskType(type, 1), name);
+  const auto holds = [&](const Registry& r) {
+    return r.Holds(type, name) || r.Holds(nevr_resource_key::OnDiskType(type, 0), name) ||
+           r.Holds(nevr_resource_key::OnDiskType(type, 1), name);
+  };
+  if (holds(g_registry)) return true;
+  for (const std::unique_ptr<Registry>& r : g_later)
+    if (holds(*r)) return true;
+  return false;
 }
 
 std::vector<std::uint64_t> MountedLevelNames() {
   std::lock_guard<std::mutex> lock(g_mutex);
-  return g_registry.MountedLevels();
+  std::vector<std::uint64_t> levels = g_registry.MountedLevels();
+  for (const std::unique_ptr<Registry>& r : g_later) {
+    const std::vector<std::uint64_t> more = r->MountedLevels();
+    levels.insert(levels.end(), more.begin(), more.end());
+  }
+  return levels;
 }
 
 std::string ReportJson() {
   nlohmann::json sets = nlohmann::json::array();
   std::lock_guard<std::mutex> lock(g_mutex);
-  for (const Set* set : g_registry.MountedSets()) {
+  std::vector<const Set*> mounted = g_registry.MountedSets();
+  for (const std::unique_ptr<Registry>& r : g_later) {
+    const std::vector<const Set*> more = r->MountedSets();
+    mounted.insert(mounted.end(), more.begin(), more.end());
+  }
+  for (const Set* set : mounted) {
     nlohmann::json levels = nlohmann::json::array();
     char hex[24];
     for (const std::uint64_t level : set->levels) {

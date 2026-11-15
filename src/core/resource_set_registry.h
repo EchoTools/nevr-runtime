@@ -148,6 +148,24 @@ struct MountReport {
   std::vector<std::int64_t> handles_to_close;  // the files of the refused sets, which nothing will read
 };
 
+class Registry;
+
+// The stock a later mount of the same run checks its sets against (a map fetched mid-run): the game's manifests, and every key an
+// earlier mount serves. A later set naming a served key is refused (kStockKey), so two mounts never answer one key and a mounted
+// set is never replaced; a later level resolves what it depends on in either. Its own Registry builds its own shadow, which takes
+// the next chunk range of the run.
+class LaterMountView {
+ public:
+  LaterMountView(const StockView& stock, const std::vector<const Registry*>& earlier);
+  // Valid while this object lives.
+  StockView stock() const { return StockView{&LaterMountView::Has, const_cast<LaterMountView*>(this), base_.records}; }
+
+ private:
+  static bool Has(void* ctx, std::uint64_t type, std::uint64_t name);
+  StockView base_;
+  std::vector<std::pair<std::uint64_t, std::uint64_t>> served_;  // sorted
+};
+
 class Registry {
  public:
   // `indexSpace`: how many chunk indices the shadow can give out (from kFirstChunkIndex to kChunkIndexLimit).

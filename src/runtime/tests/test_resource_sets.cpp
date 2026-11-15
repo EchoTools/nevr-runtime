@@ -547,6 +547,34 @@ TEST(ResourceSetRegistry, AnArchiveDependencyResolvesInAnEarlierSetAndOneNothing
       << report.refusals[0].outcome.detail;
 }
 
+// A map fetched mid-run: a second registry mounts it with the first mount's keys as stock, in a chunk range of its own.
+TEST(ResourceSetRegistry, ALaterMountServesANewSetAndRefusesAKeyAnEarlierMountServes) {
+  nevr_shadow::Shadow::ResetChunkCounterForTest();
+  const std::vector<unsigned char> first = LevelSet().Build();
+  Registry boot;
+  ASSERT_TRUE(boot.AddMapFile("map:a", "a", first.data(), first.size(), 1).ok());
+  FakeStock stock;
+  const nevr_resource_sets::MountReport booted = boot.Mount(stock.View());
+  ASSERT_EQ(booted.sets, 1u);
+
+  const std::vector<unsigned char> fresh = LevelSet(kLevel + 1, 0x7777ULL).Build();
+  const std::vector<unsigned char> clash = LevelSet(kLevel, 0x8888ULL).Build();  // the level the first mount serves
+  Registry later;
+  ASSERT_TRUE(later.AddMapFile("map:b", "b", fresh.data(), fresh.size(), 2).ok());
+  ASSERT_TRUE(later.AddMapFile("map:c", "c", clash.data(), clash.size(), 3).ok());
+  const nevr_resource_sets::LaterMountView view(stock.View(), {&boot});
+  const nevr_resource_sets::MountReport report = later.Mount(view.stock());
+  EXPECT_EQ(report.sets, 1u);
+  ASSERT_EQ(report.refusals.size(), 1u);
+  EXPECT_EQ(report.refusals[0].plugin, "map:c");
+  EXPECT_EQ(report.refusals[0].outcome.refusal, Refusal::kStockKey);
+  ASSERT_NE(later.shadow(), nullptr);
+  EXPECT_GT(report.chunk_base, booted.chunk_base);
+  EXPECT_TRUE(later.Holds(kLevelRootType, kLevel + 1));
+  EXPECT_FALSE(later.Holds(kLevelRootType, kLevel));
+  EXPECT_TRUE(boot.Holds(kLevelRootType, kLevel));
+}
+
 TEST(ResourceSetRegistry, NothingIsTakenAfterTheMount) {
   const std::vector<unsigned char> bytes = LevelSet().Build();
   Registry registry;

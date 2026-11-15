@@ -30,6 +30,7 @@
 #include "cdn/cdn_env.h"
 #include "core/config_alias.h"
 #include "core/map_manifest.h"
+#include "core/map_request.h"
 #include "core/map_run.h"
 #include "core/map_types.h"
 
@@ -107,6 +108,10 @@ MountDecision DecideMount(const std::vector<std::string>& expected, const nevr_c
                           const std::function<void(const std::string& owner)>& withdraw,
                           const std::function<bool(const std::string& owner, std::uint64_t alias)>& holds_alias);
 
+// A later mount's report folded into the run's: the maps it mounted are added, and a map's not-mounted token is the latest mount's
+// (a map that mounted later loses its earlier token). The session pin's view is taken from the folded report (ViewFromMount).
+void MergeMountReport(nevr_maps::MountReport& into, const nevr_maps::MountReport& later);
+
 struct BootResult {
   Start start = Start::kOff;
   std::string reason;  // "not_configured", the refusal, or "ok"
@@ -142,6 +147,15 @@ class Channel {
   // mounted at a version is not granted again). A server mounts the group it fetched this way, at once (ADR 0048 decision 13).
   // Empty when Boot did not run the channel. Worker thread only, after Boot.
   nevr_maps::MountReport MountGroups(const std::vector<std::string>& groups, const std::string& now_utc);
+  // The worker, after FetchPass: answers `requests` until keep_going turns false or the requests stop. Each fetch is followed by a
+  // mount of its group from the cache through the boot's mount (the hot mount): a map that arrived mounts now, with no restart; a
+  // map this run mounted at another version is skipped (mounted_other_version), never replaced, so a loaded level is never
+  // swapped. `after` hears each fetch with its mount and the run's folded report, on the worker, before the requests' answers.
+  using AfterMount = std::function<void(const nevr_maps::FetchReport& fetched, const nevr_maps::MountReport& mounted,
+                                        const nevr_maps::MountReport& run)>;
+  void ServeRequests(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_maps::Deriver* deriver, nevr_maps::MapRequests& requests,
+                     const std::function<std::string()>& now_utc, const std::function<bool()>& keep_going,
+                     const nevr_maps::FetchProgressFn& progress, const AfterMount& after);
 
  private:
   nevr_maps::ChannelConfig config_;
@@ -150,7 +164,11 @@ class Channel {
   std::unique_ptr<nevr_maps::CacheMount> mount_;  // made by Boot once the channel runs; its references live as long as the channel
   bool booted_ = false;
   BootResult result_;
+  nevr_maps::MountReport run_;                    // every mount of the run, folded (worker only after Boot)
 };
+
+// How long the worker parks between checks of keep_going while no request waits.
+inline constexpr std::uint32_t kServeWaitMs = 250;
 
 // The background pass's thread: one pass, then it parks until a request (one more pass) or a stop. Heap-owned by the platform: on a
 // stop that times out it is left alive with whatever its pass references. The pass must not throw (the build has no exceptions on

@@ -331,6 +331,21 @@ std::vector<std::int64_t> Registry::DropMap(const std::string& owner) {
   return handles;
 }
 
+LaterMountView::LaterMountView(const StockView& stock, const std::vector<const Registry*>& earlier) : base_(stock) {
+  for (const Registry* registry : earlier) {
+    for (const Set* set : registry->MountedSets()) {
+      for (const nevr_shadow::Record& r : set->records) served_.emplace_back(r.type, r.name);
+    }
+  }
+  std::sort(served_.begin(), served_.end());
+}
+
+bool LaterMountView::Has(void* ctx, std::uint64_t type, std::uint64_t name) {
+  const LaterMountView& view = *static_cast<const LaterMountView*>(ctx);
+  return std::binary_search(view.served_.begin(), view.served_.end(), std::make_pair(type, name)) ||
+         view.base_.has(view.base_.ctx, type, name);
+}
+
 MountReport Registry::Mount(const StockView& stock) {
   MountReport report;
   report.stock_records = stock.records;
