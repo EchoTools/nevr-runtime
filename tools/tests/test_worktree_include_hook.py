@@ -214,7 +214,7 @@ class BuildInputsHintTest(unittest.TestCase):
 
     def fixture(self) -> Fixture:
         fx = Fixture(self.root)
-        for rel in ("justfile", "buf.gen.yaml", "tools/proto_stamp.py"):
+        for rel in ("justfile", "buf.gen.yaml", "tools/proto_stamp.py", "tools/owned_remove.py"):
             (fx.main / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(REPO / rel, fx.main / rel)
         fx.commit("add the build-input files")
