@@ -11,6 +11,7 @@ import os
 import pathlib
 import re
 import shlex
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -195,6 +196,9 @@ class RecipesRun(unittest.TestCase):
         for name, text in (("release_preflight.py", STUB_PREFLIGHT), ("quest_release_loader.py", STUB_LOADER),
                            ("package_release.py", STUB_PACKAGE), ("quest_release_base.py", STUB_BASE)):
             (self.dir / "tools" / name).write_text(text)
+        # The recipes source the real helper (justfile: `. "{{ justfile_directory() }}/tools/lib/owned.sh"`), so the copy takes it.
+        (self.dir / "tools" / "lib").mkdir()
+        shutil.copy(ROOT / "tools" / "lib" / "owned.sh", self.dir / "tools" / "lib" / "owned.sh")
         keystore = self.dir / "tools" / "quest_keystore.sh"
         keystore.write_text(STUB_KEYSTORE)
         for executable in (keystore, self.dir / "tools" / "release_preflight.py"):  # the recipe runs these two directly

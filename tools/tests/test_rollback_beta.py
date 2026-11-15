@@ -24,6 +24,7 @@ TOOL = ROOT / "tools" / "rollback_beta.py"
 sys.path.insert(0, str(ROOT / "tools"))
 
 import rollback_beta  # noqa: E402 - the tool itself, for the tests that run it in this process
+import owned_remove  # noqa: E402 - the module whose remove_checked_tree calls shutil.rmtree (the cleanup's removal)
 
 SECRETS = {
     "R2_ENDPOINT": "https://sentinel-endpoint.invalid",
@@ -932,11 +933,11 @@ class FailurePaths(RollbackCase):
 
     def test_a_cleanup_that_fails_after_a_verified_rollback_says_so_and_exits_zero(self) -> None:
         env = {k: v for k, v in self.env.items() if k not in ("RELEASE_SIGNER_BIN", "RELEASE_SIGNER_DIR")}
-        with mock.patch.object(rollback_beta.shutil, "rmtree", side_effect=OSError(13, "Permission denied")):
+        with mock.patch.object(owned_remove.shutil, "rmtree", side_effect=OSError(13, "Permission denied")):
             code, out, err = self.run_inproc("v5.17.0", "--live", "--yes", env=env)
         self.assertEqual(code, 0, err)
         self.assertIn("rolled back and verified; cleanup of ", err)
-        self.assertIn(" failed: Permission denied", err)
+        self.assertIn(" failed: [Errno 13] Permission denied", err)
         self.assertNotIn("not confirmed", err + out)
         self.assertNotIn("undo", err)
         self.assertIn("cleanup_failed", [r["event"] for r in self.records()])
