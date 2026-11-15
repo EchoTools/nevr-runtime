@@ -27,7 +27,8 @@ REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "build.yml"
 BUILT = REPO / "tools" / "release_already_built.sh"
 
-TWO = ["nevr-runtime-v5.0.0-windows.zip", "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # the build's two files
+TWO = ["nevr-runtime-v5.0.0-windows.zip", "nevr-runtime-v5.0.0-quest-libovrplatformloader.so",
+       "nevr-runtime-v5.0.0-quest-runtime.so"]  # the build's files
 
 DRAFT = "needs.build.outputs.draft == 'true'"
 
@@ -316,7 +317,7 @@ class ReleaseDraftPathTest(unittest.TestCase):
             self.assertNotRegex(text.split("source ", 1)[1], r'nevr-runtime-v\$version[-.]', script)
         names = (REPO / "tools" / "release_asset_names.sh").read_text(encoding="utf-8")
         self.assertNotIn("tar.zst\"", names, "the .tar.zst archives are a workflow artifact, not a release asset")
-        self.assertEqual(names.count('"nevr-runtime-v$version'), 2)
+        self.assertEqual(names.count('"nevr-runtime-v$version'), 3)
 
     # ---- the published guard (tools/release_already_built.sh) meets the draft this path fills -------------
     def built(self, assets):

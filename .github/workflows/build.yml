@@ -715,10 +715,11 @@ jobs:
         if-no-files-found: error
         retention-days: 7
 
-  # The Quest library: libovrplatformloader.so built from the same tag with the Android NDK (the same steps as
+  # The Quest library: libovrplatformloader.so, and the Quest runtime library libnevr-runtime.so under its own release
+  # name, both built from the same tag with the Android NDK (the same steps as
   # android.yml: `just test-android` is build, the static-initializer gate, the embedded-defaults check and the
-  # ELF ground-truth tests). A loose release asset, attested and uploaded by `publish` under a name that carries
-  # the tag. It is not Authenticode; the signer declares it as a file in its
+  # ELF ground-truth tests). Loose release assets, attested and uploaded by `publish` under names that carry
+  # the tag. They are not Authenticode; the signer declares them as files in its
   # config/sources.yml (rule 3.3). Built for a dry run on a tag too, so the asset set is the same for both.
   quest:
     needs: guard
@@ -807,6 +808,17 @@ jobs:
         cp "$so" "$out"
         ls -l "$out"
         sha256sum "$out"
+        # The Quest runtime library (DESIGN.md piece 17): libnevr-runtime.so from the same tree, published under its own name,
+        # not stripped (as the library above is not). It carries one NEVR-BUILD literal naming this version and commit
+        # (src/core/build_identity.h), checked whole by package_release.py quest-runtime (it has no plugin-trust literal,
+        # so `stamp` does not apply to it).
+        runtime=build/android-arm64/sentinel/libnevr-runtime.so
+        test -s "$runtime"
+        python3 tools/package_release.py quest-runtime --lib "$runtime" --version "$version" --commit "$GITHUB_SHA"
+        runtime_out="quest-asset/$(release_quest_runtime_asset_name "$version")"
+        cp "$runtime" "$runtime_out"
+        ls -l "$runtime_out"
+        sha256sum "$runtime_out"
 
     - name: Upload the Quest library
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

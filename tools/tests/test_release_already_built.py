@@ -38,7 +38,8 @@ class ReleaseAlreadyBuiltTest(unittest.TestCase):
                               capture_output=True, text=True)
 
     def names(self, version="5.0.0", drop=None):
-        names = [f"nevr-runtime-v{version}-windows.zip", f"nevr-runtime-v{version}-quest-libovrplatformloader.so"]
+        names = [f"nevr-runtime-v{version}-windows.zip", f"nevr-runtime-v{version}-quest-libovrplatformloader.so",
+                 f"nevr-runtime-v{version}-quest-runtime.so"]
         return "\n".join(n for n in names if n != drop) + "\n"
 
     def test_both_assets_mean_already_built(self):
@@ -50,11 +51,12 @@ class ReleaseAlreadyBuiltTest(unittest.TestCase):
         self.assertEqual((result.returncode, result.stdout.strip()), (0, "false"))
         self.assertIn("nevr-runtime-v5.0.0-quest-libovrplatformloader.so", result.stderr)
 
-    def test_every_one_of_the_two_is_required(self):
+    def test_every_one_of_the_three_is_required(self):
         every = self.names().split()
-        self.assertEqual(len(every), 2)
+        self.assertEqual(len(every), 3)
         self.assertEqual(sorted(every), sorted(["nevr-runtime-v5.0.0-windows.zip",
-                                                "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]))
+                                                "nevr-runtime-v5.0.0-quest-libovrplatformloader.so",
+                                                "nevr-runtime-v5.0.0-quest-runtime.so"]))
         for name in every:
             with self.subTest(missing=name):
                 result = self.run_script(FAKE_ASSETS=self.names(drop=name))

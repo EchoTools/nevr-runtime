@@ -410,6 +410,7 @@ class ReleaseStagesTest(PackageFixture):
         shutil.copy(sealed / f"nevr-runtime-v{version}-windows.zip", assets)
         if quest:
             (assets / f"nevr-runtime-v{version}-quest-libovrplatformloader.so").write_bytes(self.QUEST)
+            (assets / f"nevr-runtime-v{version}-quest-runtime.so").write_bytes(self.QUEST)
         return assets
 
     CHANGES = ("feat(runtime): a player feature", "fix(quest): a player fix", "fix(arena): a host fix", "docs: a note")
@@ -450,8 +451,19 @@ class ReleaseStagesTest(PackageFixture):
             "dedicated server (`echovr_server.exe`) and `uninstall.ps1`.",
             "- `nevr-runtime-v5.0.0-quest.apk`: install on Quest (published on the release host, not on this page).",
             "- `nevr-runtime-v5.0.0-quest-libovrplatformloader.so`: for the Quest patcher; players do not need it.",
+            "- `nevr-runtime-v5.0.0-quest-runtime.so`: the Quest runtime library, for the Quest's own update; players do not need it.",
             "- `install-nevr-runtime.exe` (inside the zip): the core installer the scripts run.",
         ])
+
+    def test_notes_refuses_a_release_without_the_quest_runtime_library(self):
+        sealed = self.seal_to(self.make_tree())
+        assets = self.release_dir(sealed, "no-runtime-assets")
+        (assets / "nevr-runtime-v5.0.0-quest-runtime.so").unlink()
+        out = Path(tempfile.mkdtemp(prefix="no-runtime-", dir=self.tmp)) / "notes.md"
+        result = self.run_notes("--assets", str(assets), "--out", str(out))
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("nevr-runtime-v5.0.0-quest-runtime.so", result.stderr)
+        self.assertFalse(out.exists())
 
     def test_the_release_body_has_no_hash_no_commit_and_no_table(self):
         sealed = self.seal_to(self.make_tree())

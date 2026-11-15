@@ -28,7 +28,8 @@ def release(draft, assets=()):
     return {"draft": draft, "assets": list(assets)}
 
 
-BUILT = ["nevr-runtime-v5.0.0-windows.zip", "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # the build's two files
+BUILT = ["nevr-runtime-v5.0.0-windows.zip", "nevr-runtime-v5.0.0-quest-libovrplatformloader.so",
+         "nevr-runtime-v5.0.0-quest-runtime.so"]  # the build's files
 
 
 class ReleaseDraftTest(unittest.TestCase):
@@ -131,9 +132,9 @@ class ReleaseDraftTest(unittest.TestCase):
             self.assertIn("refusing to decide", result.stderr)
 
     def test_the_decision_line_names_the_counts_and_the_outcome(self):
-        cases = [([release(True)], "1 draft(s), 0 published, 0 of 2 built names on the draft(s): draft"),
-                 ([release(True, BUILT[:1])], "1 draft(s), 0 published, 1 of 2 built names on the draft(s): refused"),
-                 ([], "0 draft(s), 0 published, 0 of 2 built names on the draft(s): none")]
+        cases = [([release(True)], "1 draft(s), 0 published, 0 of 3 built names on the draft(s): draft"),
+                 ([release(True, BUILT[:1])], "1 draft(s), 0 published, 1 of 3 built names on the draft(s): refused"),
+                 ([], "0 draft(s), 0 published, 0 of 3 built names on the draft(s): none")]
         for releases, line in cases:
             self.assertIn(line, self.run_script(releases).stderr)
 
