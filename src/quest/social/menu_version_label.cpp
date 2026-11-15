@@ -83,6 +83,8 @@ static std::string WithoutBuildMetadata(const char* version) {
 }
 
 std::string LabelFor(const char* runtime, const char* app) {
+  // No app version to name (none handed over): the runtime alone, never the runtime's version stated as the app's.
+  if (app == nullptr || app[0] == '\0') return nevr_menu_version_label::FitLabel(std::string("nEVR ") + runtime);
   const std::string whole =
       std::string("nEVR ") + WithoutBuildMetadata(runtime) + " (app " + WithoutBuildMetadata(app) + ")";
   if (whole.size() <= nevr_menu_version_label::kMaxLabelChars) return whole;
@@ -90,12 +92,11 @@ std::string LabelFor(const char* runtime, const char* app) {
   return nevr_menu_version_label::FitLabel(std::string("nEVR ") + runtime);
 }
 
-// The runtime and the app are this build's: the sentinel runs the runtime it was built with. The update path (its loader
-// maps a staged runtime) passes the loaded runtime's version here once it lands.
-std::string Label() { return LabelFor(nevr_build::kVersion, nevr_build::kVersion); }
+// The runtime is the one this build embeds (the runtime copy runs its own nevr_build::kVersion); the app is the APK's version.
+std::string Label(const char* app) { return LabelFor(nevr_build::kVersion, app); }
 
-std::size_t InstallMenuVersionLabelHook() noexcept {
-  const std::string fitted = Label();
+std::size_t InstallMenuVersionLabelHook(const char* app) noexcept {
+  const std::string fitted = Label(app);
   if (fitted.empty() || fitted.size() >= sizeof g_label) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "menu_version", {{"status", "label_empty"}});
     return 0;

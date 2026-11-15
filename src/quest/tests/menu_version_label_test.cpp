@@ -175,8 +175,13 @@ void AnEmptyLabelLeavesTheCallAlone() {
 // dropped. When it does not fit, the runtime alone; a runtime too long for the slot is cut to its width (the PC rules,
 // nevr_menu_version_label::FitLabel).
 void TheLabelIsTheRuntimeAndTheApp() {
-  // The build's runtime and app: the host test's stand-in header says 5.17.0 for both.
-  QCHECK(mv::Label() == "nEVR 5.17.0 (app 5.17.0)");
+  // The build's runtime (the host test's stand-in header says 5.17.0) and the app version the shim hands over.
+  QCHECK(mv::Label("5.17.0") == "nEVR 5.17.0 (app 5.17.0)");
+  QCHECK(mv::Label("6.18.0") == "nEVR 5.17.0 (app 6.18.0)");
+  QCHECK(mv::Label("6.18.0+abcdef012345") == "nEVR 5.17.0 (app 6.18.0)");  // the app's build metadata is dropped
+  // No app version, or an empty one: the runtime alone. Nothing names the runtime's version as the app's.
+  QCHECK(mv::Label(nullptr) == "nEVR 5.17.0");
+  QCHECK(mv::Label("") == "nEVR 5.17.0");
   QCHECK(mv::LabelFor("5.17.0", "5.17.0") == "nEVR 5.17.0 (app 5.17.0)");  // 24 characters
   QCHECK(mv::LabelFor("6.18.1", "6.18.0") == "nEVR 6.18.1 (app 6.18.0)");  // an updated runtime, the APK's own version
   QCHECK(mv::LabelFor("5.17.1-dev.3+abcdef012345", "5.17.0") == "nEVR 5.17.1-dev.3");  // too long: the runtime alone
@@ -206,10 +211,15 @@ void TheFirstDrawnLabelIsLoggedOnce() {
 void TheInstallIsRefusedWhenLibr15IsNotLoaded() {
   Reset();
   g_lines.clear();
-  QCHECK(mv::InstallMenuVersionLabelHook() == 0);
+  QCHECK(mv::InstallMenuVersionLabelHook("6.18.0") == 0);
   QCHECK(Lines("\"event\":\"menu_version\",\"status\":\"module_not_loaded\"") == 1);
   QCHECK(Lines("CCanvasUICS7SetText") >= 1);
   QCHECK(Lines("\"status\":\"installed\"") == 0);
+  // The label the install arms is this build's runtime with the app version it was given.
+  QCHECK(Lines("\"label\":\"nEVR 5.17.0 (app 6.18.0)\"") == 1);
+  g_lines.clear();
+  QCHECK(mv::InstallMenuVersionLabelHook("") == 0);
+  QCHECK(Lines("\"label\":\"nEVR 5.17.0\"") == 1);
 }
 
 }  // namespace

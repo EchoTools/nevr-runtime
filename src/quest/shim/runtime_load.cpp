@@ -5,11 +5,15 @@
 
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <string>
+
+#include "core/build_literal_scan.h"
 
 #if defined(__ANDROID__)
 #include <android/dlext.h>
@@ -204,10 +208,25 @@ int OpenBaselineIn(const char* dir) noexcept {
   return ::open(path, O_RDONLY | O_CLOEXEC);
 }
 
+// The version of the runtime that loaded, read from its NEVR-BUILD literal through the descriptor after the load (LoadedRuntimeVersion).
+// Zero-initialised, so the shim gains no load-time initializer.
+char g_loadedVersion[nevr_build_literal::kMaxVersionBytes + 1] = {};
+
+void RecordLoadedVersion(int fd) noexcept {
+  struct stat st = {};
+  if (::fstat(fd, &st) != 0 || st.st_size <= 0) return;
+  const std::string version = nevr_build_literal::VersionOfFile(fd, static_cast<std::uint64_t>(st.st_size));
+  const std::size_t length =
+      version.size() < nevr_build_literal::kMaxVersionBytes ? version.size() : nevr_build_literal::kMaxVersionBytes;
+  std::memset(g_loadedVersion, 0, sizeof g_loadedVersion);
+  std::memcpy(g_loadedVersion, version.data(), length);
+}
+
 Outcome LoadRuntimeFromFd(int fd, const char* file, const HostInputs& host) noexcept {
   const FdGuard guard = {fd};
   Attempt attempt;
   Run(fd, host, &attempt);
+  if (attempt.outcome == Outcome::kLoaded) RecordLoadedVersion(fd);
   Report(file, host, attempt, 0);
   return attempt.outcome;
 }
@@ -255,5 +274,7 @@ void* ShimHandleOf(const void* in_shim) noexcept {
   if (dladdr(in_shim, &info) == 0 || info.dli_fname == nullptr) return nullptr;
   return dlopen(info.dli_fname, RTLD_NOW | RTLD_NOLOAD);
 }
+
+const char* LoadedRuntimeVersion() noexcept { return g_loadedVersion; }
 
 }  // namespace nevr_quest::runtime_load

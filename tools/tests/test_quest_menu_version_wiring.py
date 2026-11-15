@@ -64,7 +64,7 @@ class QuestMenuVersionIsAGotHook(unittest.TestCase):
 
     def test_the_social_step_installs_it_and_no_longer_skips_it(self):
         text = strip_comments(STEPS.read_text())
-        self.assertIn("if (ok) quest_social::menu_version::InstallMenuVersionLabelHook();", text)
+        self.assertIn("if (ok) quest_social::menu_version::InstallMenuVersionLabelHook(ShimVersion());", text)
         self.assertIn('#include "quest/social/menu_version_label.h"', STEPS.read_text())
         self.assertNotIn('LogCodeWriteSkipped("menu_version")', text)
         # It rides the social step after the facade is in place, the way the lobby-full policy did.

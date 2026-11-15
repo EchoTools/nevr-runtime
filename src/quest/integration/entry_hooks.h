@@ -130,6 +130,15 @@ void LogCombatConfig(const nevr_quest::CombatConfig& config) noexcept;
 // libraries. Never throws and never blocks.
 void RunSentinelConstructor() noexcept;
 
+// What the shim (libovrplatformloader.so) hands the runtime library at initialize (runtime/runtime_entry.cpp), kept by
+// production_steps.cpp for the sequence the runtime then runs. Both are set before RunSentinelConstructor and read after.
+//
+// The shim's NEVR-BUILD version: the login's nevr_identity.host_version. The runtime is a separate build, so its own version
+// (NEVR_QUEST_PROJECT_VERSION) is the project version and never stands in for this one. A null or empty version reads back as
+// "unknown", and so does a version never set (the shim's own copy of the sequence, which the shim does not run).
+void SetShimVersion(const char* version) noexcept;
+const char* ShimVersion() noexcept;
+
 // True when the shim installed the crash-first hooks (InstallCrashFirstHook) from its own constructor, so the runtime's
 // InstallCrashFirst step installs none and reports the step as shim-owned. The runtime's copy of production_steps.cpp is the
 // static library nevr_quest_integration, compiled once for both shared objects, so no preprocessor symbol tells it which object it

@@ -60,6 +60,7 @@
 #include "quest/integration/entry_hooks.h"
 #include "quest/redirect/hook_adapter.h"
 #include "quest/shim/runtime_load.h"
+#include "quest/shim/update_root.h"
 #include "libr15_identity.h"
 
 #include <jni.h>
@@ -378,7 +379,8 @@ void RuntimeLog(std::uint32_t level, const char* tag, const char* event, const c
   }
   std::vector<sentinel::LogField> list;
   list.reserve(static_cast<std::size_t>(count) + kHeaderFields);
-  list.emplace_back(kTagField, tag != nullptr ? tag : "");
+  // A record with no tag of its own gets none here, so the sentinel's own tag stands (sentinel_log.cpp FormatDiskLogLine).
+  if (tag != nullptr && tag[0] != '\0') list.emplace_back(kTagField, tag);
   if (message != nullptr) list.emplace_back(kMessageField, message);
   for (std::uint32_t i = 0; i < count; ++i) {
     if (fields[i].key != nullptr) list.emplace_back(fields[i].key, fields[i].value);
@@ -398,7 +400,17 @@ void StartRuntime(std::uint32_t variant) {
   host.shim_version = nevr_build::kVersion;
   host.variant = variant;
   host.log = &RuntimeLog;
-  nevr_quest::runtime_load::StartBaselineBesideShim(&kShimAnchor, host);
+  const nevr_quest::runtime_load::Outcome outcome = nevr_quest::runtime_load::StartBaselineBesideShim(&kShimAnchor, host);
+  if (outcome == nevr_quest::runtime_load::Outcome::kLoaded) {
+    // The versions record: the shim's version and the loaded runtime's, apart. The APK's versionCode is read at android_main
+    // (update_root.h), so it is not part of this record.
+    nevr_quest::update_root::VersionsFacts facts;
+    facts.host_version = host.shim_version;
+    const char* runtimeVersion = nevr_quest::runtime_load::LoadedRuntimeVersion();
+    facts.runtime_version = runtimeVersion[0] != '\0' ? runtimeVersion : nevr_quest::update_root::kUnknownValue;
+    facts.runtime_path = nevr_quest::runtime_load::kBaselineFileName;
+    nevr_quest::update_root::LogVersions(facts);
+  }
 }
 
 }  // namespace

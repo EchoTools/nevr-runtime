@@ -79,13 +79,27 @@
 
 namespace nevr_quest::integration {
 
+// --- what the shim hands over (entry_hooks.h) -----------------------------------------------------
+
 namespace {
 
-// Set once by the runtime's initialize, before the sequence runs, and read by the InstallCrashFirst step. A constant-initialized atomic
-// has no dynamic initializer (tools/check_quest_static_init.sh).
+constexpr char kShimVersionUnknown[] = "unknown";
+
+// Both are set once by the runtime's initialize, before the sequence runs, and read by the sequence's steps and the post-load
+// actions. A constant-initialized atomic has no dynamic initializer (tools/check_quest_static_init.sh).
+std::atomic<const char*> g_shimVersion{nullptr};
 std::atomic<bool> g_shimOwnsCrashFirst{false};
 
 }  // namespace
+
+void SetShimVersion(const char* version) noexcept {
+  g_shimVersion.store(version != nullptr && version[0] != '\0' ? version : nullptr, std::memory_order_release);
+}
+
+const char* ShimVersion() noexcept {
+  const char* const version = g_shimVersion.load(std::memory_order_acquire);
+  return version != nullptr ? version : kShimVersionUnknown;
+}
 
 void SetShimOwnsCrashFirst(bool owns) noexcept { g_shimOwnsCrashFirst.store(owns, std::memory_order_release); }
 
@@ -275,8 +289,9 @@ void StartInviteService(const nevr_quest::ResolvedConfig& cfg) {
 nevr_quest_login::BuildInfo ThisBuild() {
   nevr_quest_login::BuildInfo build;
   build.project_version = NEVR_QUEST_PROJECT_VERSION;
-  // The login runs in the shim, which is this build: its host version is the build's own (nevr_identity.host_version).
-  build.host_version = NEVR_QUEST_PROJECT_VERSION;
+  // nevr_identity.host_version is the shim's NEVR-BUILD version, which the shim hands over at initialize (ShimVersion). The shim
+  // and this library are two builds, so the project version above is not the host's.
+  build.host_version = ShimVersion();
   build.git_commit = NEVR_QUEST_GIT_COMMIT;
   build.git_describe = NEVR_QUEST_GIT_DESCRIBE;
   build.build_type = NEVR_QUEST_BUILD_TYPE;
@@ -807,7 +822,7 @@ class ProductionSteps final : public Steps {
     if (ok) quest_net::SetLobbyPartySource(true);
     // The menu version label (#747) rides this step: one GOT hook on libr15's SetText slot, a data page, so it writes no code
     // page. The hook logs its own outcome; a refusal does not fail social.
-    if (ok) quest_social::menu_version::InstallMenuVersionLabelHook();
+    if (ok) quest_social::menu_version::InstallMenuVersionLabelHook(ShimVersion());
     // The three libr15 features that were inline hooks are rows of the build-time patch (ADR 0021): each is activated with one
     // atomic store into its row's slot once AttachLibR15 verified the file, and logs its own outcome. A row that is refused
     // (an unverified libr15, a mismatched helper) stays pass-through; none of them fails social.

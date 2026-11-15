@@ -192,7 +192,9 @@ std::int32_t Initialize(const NevrQuestHostContext* host) noexcept {
   const auto variant = static_cast<nevr_quest::build_variant::Variant>(host->variant);
   const char* kind = nevr_build::kIsDev ? "dev" : "release";
 
-  // The shim has installed the crash-first hooks (entry_hooks.h); the sequence's InstallCrashFirst step reads this.
+  // The shim's version is the login's host version, and the shim has installed the crash-first hooks (entry_hooks.h); both are read
+  // by the sequence below.
+  nevr_quest::integration::SetShimVersion(host->shim_version);
   nevr_quest::integration::SetShimOwnsCrashFirst(true);
 
   nevr_quest::combat::SetVariant(variant);

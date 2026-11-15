@@ -73,6 +73,10 @@ Outcome LoadBaseline(const char* dir, const HostInputs& host) noexcept;
 /// library folder once the APK is installed). Sets `shim_handle` from that object; the caller sets the rest of `host`.
 Outcome StartBaselineBesideShim(const void* in_shim, HostInputs host) noexcept;
 
+// The version in the NEVR-BUILD literal of the runtime that loaded, read from the file the shim mapped; "" when no runtime
+// loaded or the file has no literal. It points at storage the loader keeps for the process.
+const char* LoadedRuntimeVersion() noexcept;
+
 /// The folder the shared object containing `in_shim` was loaded from, NUL-terminated into `out`. False when the address is in no
 /// loaded object, the object's name has no folder part, or the folder does not fit in `capacity`.
 bool NativeLibraryDirOf(const void* in_shim, char* out, std::size_t capacity) noexcept;

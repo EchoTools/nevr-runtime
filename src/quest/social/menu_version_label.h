@@ -18,13 +18,15 @@
 namespace quest_social::menu_version {
 
 // What is drawn: "nEVR <runtime> (app <apk>)" fitted to the lobby_version slot (nevr_menu_version_label::FitLabel's rules:
-// build metadata dropped, width kMaxLabelChars). When the whole does not fit, the runtime alone. Label() is this build's
-// runtime and app.
+// build metadata dropped, width kMaxLabelChars). When the whole does not fit, or `app` is null or empty (no app version was
+// handed over), the runtime alone.
 std::string LabelFor(const char* runtime, const char* app);
-std::string Label();
+// This build's label: the runtime is the one this build embeds (nevr_build::kVersion), the app is the APK's version the shim
+// reports (`app`).
+std::string Label(const char* app);
 
-// Installs the hook into libr15's SetText slot. Returns 1 when the slot holds the thunk, 0 when the install is refused (the
-// game then draws its own text). Logs one line either way.
-std::size_t InstallMenuVersionLabelHook() noexcept;
+// Installs the hook into libr15's SetText slot, with the label of `app` (the APK's version). Returns 1 when the slot holds the
+// thunk, 0 when the install is refused (the game then draws its own text). Logs one line either way.
+std::size_t InstallMenuVersionLabelHook(const char* app) noexcept;
 
 }  // namespace quest_social::menu_version
