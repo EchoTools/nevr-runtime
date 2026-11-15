@@ -238,6 +238,7 @@ set(PATCHES_SOURCES
     # #896, #906: the UI text writer (pure logic in ui_text.h).
     "patch/ui_text.cpp"
     "patch/ui_texture_mips.cpp"
+    "patch/dinput_enumerate.cpp"
     "patch/social_facade.cpp"
     "patch/social_facade_object.cpp"
     "log/builtin_filter.cpp"

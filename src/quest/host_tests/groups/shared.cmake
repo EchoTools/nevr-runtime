@@ -26,6 +26,9 @@ nevr_ht_test(asset_cache_index_test GROUP shared
 # The PC mic provider's capture policy (runtime/patch/mic_policy.h): no capture on a server or with -noaudio. Header-only rule.
 nevr_ht_test(mic_policy_test GROUP shared
   SRC src/quest/tests/mic_policy_test.cpp)
+# The PC DirectInput enumeration rule (runtime/patch/dinput_enumerate_rules.h): enumerated only in desktop mode. Header-only rule.
+nevr_ht_test(dinput_enumerate_rules_test GROUP shared
+  SRC src/quest/tests/dinput_enumerate_rules_test.cpp)
 # P5: the run-log index rules (runtime/log/run_log_index.h) and the retention selection it feeds (runtime/log/log_retention.h).
 nevr_ht_test(run_log_index_test GROUP shared
   SRC src/quest/tests/run_log_index_test.cpp)

@@ -16,6 +16,7 @@
 #include "runtime/hook/patching.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/patch/mic_policy.h"
+#include "runtime/patch/dinput_enumerate.h"
 #include "runtime/patch/mode_patches.h"
 // platform_compat lives in src/modules/platform-compat (loaded in boot.cpp).
 #include "runtime/patch/resource_override.h"
@@ -437,6 +438,10 @@ static VOID InitializeAfterGameImageGuard() {
 
   // UI, splash and menu textures at their top mip (ui_texture_mips.h).
   nevr_ui_texture_mips::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+
+  // DirectInput game controllers are enumerated only in desktop mode (dinput_enumerate.h). Before the engine forks its
+  // enumeration thread, which it does inside the original PreprocessCommandLine.
+  nevr_dinput_enumerate::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // --- DLL load interceptor (patch DLLs as they load) ---
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] debug; installing DLL load hooks...\n");
