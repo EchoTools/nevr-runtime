@@ -29,6 +29,7 @@ What a player does, for builds that include the feature.
 | File | Description | Audience |
 | ---- | ----------- | -------- |
 | `quest/SIGN-IN.md` | Signing in to EchoVRCE on Quest with a device code: what the headset shows, what to do, and what to do if the game closes first | Quest players and testers |
+| `reference/maps-channel.md` | The custom-map channel: what it does, the `maps.*` keys, the cache location, what runs on PC and Quest, the server's hold and the log lines to look for | Players and server operators |
 
 ## Installers
 

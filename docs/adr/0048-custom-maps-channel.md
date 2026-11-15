@@ -74,13 +74,14 @@ session they are in is the lobby group id.
    A plugin set or a content pack keeps its keys (the existing mount report). A local copy of the same level wins over the CDN
    copy: the CDN map is skipped with `map_skipped reason=local_map`, so the two never mix per key.
 9. **Version pin.** Players match only on the same map version: the pin is `id@version`, with `source_sha256` (the map document
-   the export read) tying the PC and Quest packages of one version together. nevr reports its pins at registration and login, and
-   a client whose version differs from the session's pin leaves before loading.
+   the export read) tying the PC and Quest packages of one version together. nevr reports its pins at login (`LoginEntries`); the
+   registration report is not called yet (KNOWN-WRONG #TBD, see What is built). A client whose version differs from the session's
+   pin leaves before loading.
    Two cases do not leave, and the decision table (`map_session_pin.h`) keeps both:
    - **`kUnpinned`.** A session whose owner JSON states no pin (`nevr_map_pin` 0) is logged as `map_unpinned` and the client stays.
      The client has no version to compare, and a server that states none has nothing to match; leaving would split the players of
-     every server that does not write a pin. What would change it: every server writing a pin, which the channel's start makes true
-     for the groups a server hosts.
+     every server that does not write a pin. What would change it: every server writing a pin. The channel does not serve dedicated
+     servers yet (see What is built).
    - **`kLocal` (PC only).** A client that holds a local copy of the session's map (a hand-installed level file, decision 8) stays
      in the session and logs `local_map` once, as a Warning. The copy is the player's own file, and leaving would stop every session
      of that map for a player who keeps it. What would change it: a rule that a hand-installed copy never plays a channel session;
@@ -128,34 +129,46 @@ session they are in is the lobby group id.
 ## What is built
 
 The core is built into `nevr_core` and tested by its GTests (`src/core/maps.cmake`): the formats and the minisign verifier
-(decisions 1, 3, 11, 14, 15), the fetch, the resume, the recipe rebuild and the cached mount over main's `nevr_cdn::Env`
+(decisions 1, 3, 11, 14, 15), the fetch, the resume, the recipe rebuild and the cached mount over the `nevr_cdn::Env` seam
 (decisions 2, 4, 10, and the cache index of decision 16), the registry's map entry points and the script image rules (decisions 5
 and 6), the config aliases' pure rules (decision 5), the `signed_only` refusal of a map whose manifest is not official (decision
-7), and the request queue (`map_fetch_queue.h`). The config-alias hooks are built (`src/runtime/content/config_alias_hook.cpp`,
-`src/quest/sentinel/config_alias_hook.cpp`, with the arena override's precedence line in
-`src/runtime/lifecycle/arena_rules_hook.cpp`), and nothing installs them until the channel stages a map. The session pin
-(decision 9) has its pure core and both game halves (`map_session_pin.h`, `runtime/content/map_session_pin_game.cpp` on the PC,
-`quest/cdn/map_pin_game.cpp` on the Quest), and no caller yet: nothing calls the tick, the session level or the install,
-`RegistrationEntries` is not called and the Quest login's `map_report` is not set (`KNOWN-WRONG #TBD` at each site). Not built
-yet (#2733): the PC and Quest platform layers and the channel that starts them, including which keys they give the core as
-official (decision 7) and the `mixed_keys` check (decision 3); the local-copy precedence (decision 8); the wiring of the session
-pin. The server's group fetch and its join hold (decisions 13 and 17) have their rules built in `src/core/map_server_hold.h` and
-their PC glue in `src/runtime/server/map_hold.cpp` and `join_hold.cpp`; the glue waits for the channel's request entry and for its
-progress and mount notes. The server mount (decision 18) has its signed-only rule written as `ServerMountsScripts`, which nothing calls yet: the
-mount tests the same rule inline (`src/core/map_run.cpp`), so the two are one rule in two places until the channel's mount
-calls the function.
+7), and the request queue (`map_fetch_queue.h`). The official-key list is empty (decision 12): `CompiledOfficialKeys` returns
+nothing, and `maps.official_keys` and `maps.trusted_keys` are read with the `mixed_keys` check (decision 3).
+
+The channel's starts are built. The PC boots the channel from `src/runtime/lifecycle/boot.cpp` (`nevr_map_channel::pc::Boot`,
+then `StartFetch`), with the PC glue in `src/runtime/content/map_channel.cpp`. The Quest starts it from
+`src/quest/integration/production_steps.cpp` (`StartFromConfig`, `src/quest/cdn/map_start.cpp`). Both pass no seams
+(`NoSeams()`): no group is named to the background pass, and no local level or id is supplied. So no group is fetched, the
+session request is not set (`SetSessionGroupRequest` has no caller, so a session success logs `session group no_channel`), and
+no CDN map is skipped as local (decision 8: the core decides it, `src/core/map_local_precedence.cpp`, but nothing gives it
+names). KNOWN-WRONG #TBD at each of these sites.
+
+The config-alias hooks are built (`src/runtime/content/config_alias_hook.cpp`, `src/quest/sentinel/config_alias_hook.cpp`, with
+the arena override's precedence line in `src/runtime/lifecycle/arena_rules_hook.cpp`). The session pin (decision 9) has its pure
+core and both game halves (`map_session_pin.h`, `runtime/content/map_session_pin_game.cpp` on the PC,
+`quest/cdn/map_pin_game.cpp` on the Quest). The PC calls its tick every frame (`src/runtime/frame/tick.cpp`), and its login
+carries the pins (`LoginEntries`, `src/runtime/compat/ws_bridge.cpp`). The Quest's login sets `map_report` to `LoginEntries`
+(`src/quest/integration/production_steps.cpp`). `RegistrationEntries` has no caller, and the Quest's `InstallTick` has no caller
+(KNOWN-WRONG #TBD at each site).
+
+The server's group fetch and its join hold have their rules built in `src/core/map_server_hold.h` and their PC glue in
+`src/runtime/server/map_hold.cpp` and `src/runtime/server/join_hold.cpp`. The PC boot does not start the channel on a dedicated
+server (`map_start reason=server_not_served`, `src/runtime/content/map_channel.cpp`), and `SetRequestFetch` has no caller, so
+`OnSessionCreate` returns before it arms a hold: the hold is inert (KNOWN-WRONG #TBD). The server mount (decision 18) has its
+signed-only rule written as `ServerMountsScripts`, which nothing calls yet: the mount tests the same rule inline
+(`src/core/map_run.cpp`), so the two are one rule in two places until the channel's mount calls the function.
 
 ## Consequences
 
-- With no `maps.base_url`, nevr starts no thread, makes no directory, installs no hook and writes one Info line saying the channel
-  is not configured (not built yet, #2733).
+- With no `maps.base_url`, nevr starts no thread, makes no directory, installs no hook and writes one Info record,
+  `map_start reason=not_configured`.
 - The channel reaches files through two seams. Main's `nevr_cdn::Env` (`src/cdn/cdn_env.h`) is the texture cargo's own:
   `ReadSmallFile`, `MakeDirs`, `WriteFileAtomically`, `OpenAppend` (`Append`, `Truncate`, `Sync`), `QueryDevice`, `NewHasher`,
-  `Get` and `Event`; the channel adds nothing to it and has no temporary file: a fetch appends each verified piece to a member file
+  `OpenBlob`, `ReadBlob`, `CloseBlob`, `NowMs`, `Get` and `Event`; the channel adds nothing to it and has no temporary file: a fetch appends each verified piece to a member file
   in a staging directory, cuts back a failed piece's bytes with `Truncate`, and renames the directory into place. `nevr_maps::MapFs`
   (`map_types.h`) adds what only a map needs: a held share-read handle and its stamp, its final path, a directory listing, a
   removal and a rename of a whole directory. The hasher is the portable SHA-256 (`src/quest/data/sha256.h`): the Quest `Env`
-  (`src/cdn/env_posix.cpp`) uses it today, and the PC `Env` the platform commit adds uses the same one, never BCrypt.
+  (`src/cdn/env_posix.cpp`) uses it today. The PC Env (`src/cdn/env_windows.cpp`) hashes with BCrypt instead.
 - The limits are ADR 0045 decision 8's: one document's bytes, a recipe's buffers and the groups the cache keeps are shares of the
   device's memory and free space (`MapDocumentBytes`, `map_manifest.h`), never a constant. What a format defines stays constant in
   `map_format.h`, which cites the format.

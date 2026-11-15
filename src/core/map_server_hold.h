@@ -17,11 +17,11 @@
 
 namespace nevr_maps {
 
-// The timeout's bounds, in milliseconds. The values are the owner's choices for this first version and are not measured on a
-// live server: the ceiling is two minutes, the bound the repository's own client login run gives a login before it counts as
-// failed (AGENTS.md, "Client login test mechanics": --login-timeout defaults to 120 s); the floor is the least time a hold may
-// wait, so a set the cache already holds still waits for its manifest's round trip; the slack is the manifest round trip and the
-// mount, added to the transfer time. A measured live-run figure would replace any of these, not the rule that uses them.
+// The timeout's bounds, in milliseconds. None of them is measured on a live server. The ceiling is two minutes: the --login-timeout
+// default of the repository's client login run (AGENTS.md, "Client login test mechanics", 120 s), the longest a login is given
+// before it counts as failed. The floor is the least time a hold waits, so a set the cache already holds still waits for its
+// manifest's round trip. The slack is the manifest round trip and the mount, added to the transfer time. A measured live-run
+// figure would replace any of these; the rule that uses them stays.
 inline constexpr std::uint64_t kMapHoldCeilingMs = 120000;
 inline constexpr std::uint64_t kMapHoldFloorMs = 5000;
 inline constexpr std::uint64_t kMapHoldSlackMs = 2000;
