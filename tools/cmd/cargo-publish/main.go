@@ -59,6 +59,7 @@ const (
 	plainManifestName = "manifest.json"
 	manifestFrameName = "manifest.json.zst"
 	manifestsKeyDir   = "v1/manifests/"
+	livePrefix        = "v1/"         // the ADR 0045 layout: blobs at the bucket root, manifests under v1/
 	stagingPrefix     = "v1-staging/" // a staging set stays whole under it: its by-hash manifest is kept at <prefix>manifests/
 	manifestFrameExt  = ".json.zst"
 	liveManifestKey   = "v1/manifest.json" // never written by this tool
@@ -184,7 +185,7 @@ func buildPlan(dir, prefix string) (plan, error) {
 		if sum != name {
 			return plan{}, fmt.Errorf("blob %s holds bytes that hash to %s", name, sum)
 		}
-		p.Objects = append(p.Objects, object{Key: prefix + blobsDir + name, Local: local, SHA: sum, Size: size})
+		p.Objects = append(p.Objects, object{Key: blobBase(prefix) + blobsDir + name, Local: local, SHA: sum, Size: size})
 		p.Blobs++
 		p.Bytes += size
 	}
@@ -213,6 +214,15 @@ func buildPlan(dir, prefix string) (plan, error) {
 	}
 	sort.Slice(p.Objects, func(i, j int) bool { return p.Objects[i].Key < p.Objects[j].Key })
 	return p, nil
+}
+
+// blobBase is where a set's blobs go: under its prefix, except for the live prefix v1/, whose blobs are at the bucket root
+// (docs/adr/0045-cdn-texture-delivery.md decision 5: a client with the default base URL reads <base>blobs/sha256/<hex>).
+func blobBase(prefix string) string {
+	if prefix == livePrefix {
+		return ""
+	}
+	return prefix
 }
 
 // manifestsDirFor is the folder the by-hash copy of the manifest goes to: the shared v1/manifests/, except for a set under
@@ -263,40 +273,62 @@ func runPublish(ctx context.Context, cfg config, p plan, log *slog.Logger) (summ
 	if workers < 1 {
 		workers = 1
 	}
-	jobs := make(chan object)
 	var mu sync.Mutex
 	var errs []error
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for o := range jobs {
-				res, err := publishOne(ctx, cfg, o, log)
-				mu.Lock()
-				switch {
-				case err != nil:
-					errs = append(errs, err)
-				case res == "skipped":
-					sum.Skipped++
-					sum.SkippedBytes += o.Size
-				default:
-					sum.Uploaded++
-					sum.UploadedBytes += o.Size
-					sum.Verified++
+	// send runs the objects over the workers and returns when every one is done.
+	send := func(objs []object) {
+		jobs := make(chan object)
+		var wg sync.WaitGroup
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for o := range jobs {
+					res, err := publishOne(ctx, cfg, o, log)
+					mu.Lock()
+					switch {
+					case err != nil:
+						errs = append(errs, err)
+					case res == "skipped":
+						sum.Skipped++
+						sum.SkippedBytes += o.Size
+					default:
+						sum.Uploaded++
+						sum.UploadedBytes += o.Size
+						sum.Verified++
+					}
+					mu.Unlock()
 				}
-				mu.Unlock()
-			}
-		}()
-	}
-	for _, o := range p.Objects {
-		if ctx.Err() != nil {
-			break
+			}()
 		}
-		jobs <- o
+		for _, o := range objs {
+			if ctx.Err() != nil {
+				break
+			}
+			jobs <- o
+		}
+		close(jobs)
+		wg.Wait()
 	}
-	close(jobs)
-	wg.Wait()
+	// Every blob is in place before any manifest names it; the by-hash copy goes before the current one.
+	var blobs, byHash, current []object
+	for _, o := range p.Objects {
+		switch {
+		case strings.HasSuffix(o.Key, manifestFrameName):
+			current = append(current, o)
+		case strings.HasSuffix(o.Key, manifestFrameExt):
+			byHash = append(byHash, o)
+		default:
+			blobs = append(blobs, o)
+		}
+	}
+	send(blobs)
+	if len(errs) == 0 {
+		send(byHash)
+	}
+	if len(errs) == 0 {
+		send(current)
+	}
 	log.Info("publish finished", "objects", sum.Objects, "uploaded", sum.Uploaded, "skipped_present", sum.Skipped,
 		"verified", sum.Verified, "failures", len(errs), "prefix", cfg.Prefix)
 	if err := ctx.Err(); err != nil {

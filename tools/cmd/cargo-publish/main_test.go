@@ -579,3 +579,42 @@ func TestAPresentManifestKeyWithOtherContentIsAnErrorNotASkip(t *testing.T) {
 		t.Error("the present object was overwritten")
 	}
 }
+
+func TestLivePrefixPutsBlobsAtTheRootAndManifestsUnderV1(t *testing.T) {
+	dir, frame := writeSet(t, [][]byte{[]byte("alpha")})
+	p, err := buildPlan(dir, livePrefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{
+		blobsDir + sha256Hex(zstdFrame(t, []byte("alpha"))):   true,
+		"v1/manifest.json.zst":                                true,
+		manifestsKeyDir + sha256Hex(frame) + manifestFrameExt: true,
+	}
+	for _, o := range p.Objects {
+		if !want[o.Key] {
+			t.Errorf("unexpected key %s", o.Key)
+		}
+		delete(want, o.Key)
+	}
+	for k := range want {
+		t.Errorf("missing key %s", k)
+	}
+}
+
+func TestManifestsAreSentOnlyAfterEveryBlob(t *testing.T) {
+	dir, frame := writeSet(t, [][]byte{[]byte("alpha"), []byte("bravo!!")})
+	f, srv := newFake(t)
+	cfg := testConfig(srv.URL)
+	cfg.Prefix = livePrefix
+	p, err := buildPlan(dir, cfg.Prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPublish(context.Background(), cfg, p, quietLog()); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.objects) != 4 || string(f.objects["v1/manifest.json.zst"]) != string(frame) {
+		t.Fatalf("objects = %d", len(f.objects))
+	}
+}
