@@ -2,9 +2,19 @@
 // The decisions VeilNet's PC send path takes (#2242, EchoCombat 2.0.6): which destination is the server (the game still sends to
 // it), which datagrams go to it at all (only the hello, to a server that has not answered), and how many hellos a server that never
 // answers gets. The sockets, the locks and the clock stay in veilnet.cpp; these are pure, so test_veilnet_gate.cpp drives them.
+#include <cstddef>
 #include <cstdint>
 
+#include "runtime/patch/ec_rules.h"  // nevr_ec::KnownTacMod: the seven tac mods, one table (#2242)
+
 namespace nevr_combat::gate {
+
+// A destination is one server: its address and port in one key. The one packing, used by the code and by its tests.
+inline constexpr int kServerKeyShift = 16;
+inline constexpr std::uint64_t ServerKey(std::uint32_t addr, std::uint16_t port) {
+  return std::uint64_t{addr} << kServerKeyShift | port;
+}
+
 
 // A destination the game sent to within this long (ms) is the server; one it has left gets nothing from VeilNet. Before 2026-11-08
 // the last server was kept for good and got a hello every 2 s for as long as the game ran: one idle player's game hit a restarting
@@ -50,19 +60,10 @@ class HelloTries {
 };
 
 
-// The seven tac mods' symbols (EchoCombat's names; the same values as ec_rules.h's AbilitySymbol). A selection is one of these.
-inline constexpr std::uint64_t kTacModSymbols[] = {
-    0xe32dc7c9d4804fb5ull, 0xe32dc7cad6864aa4ull, 0xc8c33e48386618b6ull, 0xc8c33e4832761fbcull,
-    0x41d2d43513260b1aull, 0x41d2d4381430080cull, 0x41d2d02f1b2a1316ull,
-};
-inline bool KnownTacMod(std::uint64_t sym) {
-  for (std::uint64_t k : kTacModSymbols)
-    if (k == sym) return true;
-  return false;
-}
-
 // The local player's tac mod slot was set to `sym` (#2242, EchoCombat 2.0.8): a known tac mod that is not the selection already
 // standing (nEVR re-fires the slot setter, which would otherwise restart the selection's re-run count each time).
-inline bool PickFromSlot(std::uint64_t sym, std::uint64_t selected) { return KnownTacMod(sym) && sym != selected; }
+inline bool PickFromSlot(std::uint64_t sym, std::uint64_t selected) {
+  return nevr_ec::KnownTacMod(sym) && sym != selected;
+}
 
 }  // namespace nevr_combat::gate

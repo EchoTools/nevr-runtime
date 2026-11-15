@@ -302,15 +302,15 @@ void PickServer() {
     ReleaseSRWLockExclusive(&g_lock);
 }
 
-// nEVR port (#2358): ecr::BasicState::SawSend, keyed by socket, address and port.
 // nEVR port (#2242, EchoCombat 2.0.6): when the game last sent to each destination (nevr_combat::gate::Recent). ServerDest gives the
 // picked server only while the game still sends there, so a server the game has left gets nothing from VeilNet.
 struct SentTo { SOCKET sock; uint32_t addr; uint16_t port; ULONGLONG at; };   // at 0: a free entry
-SentTo g_sent_to[16];                            // under g_lock
+constexpr int kSentToSlots = 16;                 // as g_dests: the destinations the game is known to send to
+SentTo g_sent_to[kSentToSlots];                  // under g_lock
 void NoteSent(SOCKET s, uint32_t addr, uint16_t port) {
     const ULONGLONG now = GetTickCount64();
     int slot = -1, oldest = 0;
-    for (int i = 0; i < 16; ++i) {
+    for (int i = 0; i < kSentToSlots; ++i) {
         const SentTo &e = g_sent_to[i];
         if (e.at && e.sock == s && e.addr == addr && e.port == port) { slot = i; break; }
         if (e.at < g_sent_to[oldest].at) oldest = i;
@@ -324,6 +324,7 @@ bool SentRecently(const ecr::BasicDest<SOCKET> &d) {
             return nevr_combat::gate::Recent(e.at, now, nevr_combat::gate::kDestQuietMs);
     return false;
 }
+// nEVR port (#2358): ecr::BasicState::SawSend, keyed by socket, address and port.
 void SawSend(SOCKET s, const sockaddr *to) {
     if (!to || to->sa_family != AF_INET) return;
     const sockaddr_in *a = reinterpret_cast<const sockaddr_in *>(to);
@@ -640,6 +641,7 @@ nevr_combat::MatchPrivacy SessionPrivacy() {
 // engine moves them to "server loading" (the transition screen), unloads their levels and loads
 // the owner JSON's level when the server is in game again.
 constexpr uint32_t WANT_MAP = 0x20000000;        // | map index 0..3
+constexpr uint32_t WANT_KIND_MASK = 0xF0000000;  // the top nibble of a 'C' ask names the ask (WANT_MAP, WANT_END ...)
 constexpr int MAP_COUNT = 4;
 constexpr uint64_t EVT_MAPSWITCH[MAP_COUNT] = {
     0xc60e17c86d1f3df0ull, 0x63093755a2c24ebeull, 0x3d77042c79604528ull, 0xc60e17cb751921edull};   // mapswitch_<map>
@@ -841,7 +843,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
         // privacy (below), so their ask is not refused here.
         const nevr_combat::MatchPrivacy privacy = p.type == 'C' ? SessionPrivacy() : nevr_combat::MatchPrivacy::kUnknown;
         const bool rule_ask = privacy == nevr_combat::MatchPrivacy::kPrivate;
-        if (p.type == 'C' && !rule_ask && (p.id & 0xF0000000) != WANT_MAP)
+        if (p.type == 'C' && !rule_ask && (p.id & WANT_KIND_MASK) != WANT_MAP)
             Log("RULES ask %08x from %s: refused (%s)", p.id, Addr(from, buf, sizeof(buf)), nevr_combat::PrivacyText(privacy));
         uint8_t asked_rate = (uint8_t)(p.id >> 8);   // a podium asks for a POINT RATE (the value itself)
         // on a payload map the row is PAYLOAD SPEED: the same asks (and steps) set that instead
@@ -880,7 +882,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
                     Addr(from, buf, sizeof(buf)), r);
             }
         }
-        if (p.type == 'C' && (p.id & 0xF0000000) == WANT_MAP && (p.id & 0xF) < MAP_COUNT) {   // a map button
+        if (p.type == 'C' && (p.id & WANT_KIND_MASK) == WANT_MAP && (p.id & 0xF) < MAP_COUNT) {   // a map button
             int k = (int)(p.id & 0xF);
             const nevr_combat::MatchPrivacy privacy = SessionPrivacy();   // nEVR port (#2289)
             if (privacy != nevr_combat::MatchPrivacy::kPrivate) {
@@ -2309,7 +2311,7 @@ DWORD WINAPI Tick(LPVOID) {
                 static nevr_combat::gate::HelloTries hello;
                 Dest d;
                 const bool have = ServerDest(d);
-                const uint64_t key = have ? (uint64_t)d.addr.sin_addr.s_addr << 16 | d.addr.sin_port : 0;
+                const uint64_t key = have ? nevr_combat::gate::ServerKey(d.addr.sin_addr.s_addr, d.addr.sin_port) : 0;
                 const bool answered = ::nevr_server_features::Client().Current().echoCombat;
                 const nevr_combat::gate::Hello h = hello.Next(key, answered);
                 if (h != nevr_combat::gate::Hello::kNone) SendToServer('H', 0);

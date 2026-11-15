@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
@@ -17,15 +18,20 @@ namespace rules = nevr_combat::rules;
 // fails here instead of matching itself.
 constexpr std::uint8_t kPointRateX1 = 4;
 
-float FloatAt(const std::array<std::uint8_t, 0x40>& m, std::uint32_t at) {
+// The mailbox the test writes (a block of the same shape), the byte it is filled with, and the bytes a new session must not touch.
+constexpr std::size_t kMailboxBytes = 0x40;
+constexpr std::uint8_t kFill = 0xAB;
+constexpr std::array<std::uint32_t, 9> kUntouchedBytes = {0x10u, 0x12u, 0x13u, 0x14u, 0x16u, 0x2Fu, 0x30u, 0x32u, 0x33u};
+
+float FloatAt(const std::array<std::uint8_t, kMailboxBytes>& m, std::uint32_t at) {
   float f = 0.0f;
   std::memcpy(&f, m.data() + at, sizeof f);
   return f;
 }
 
 TEST(VeilnetRules, DefaultsWriteTheFloatsAndTheShownBytesAFreshSessionStartsWith) {
-  std::array<std::uint8_t, 0x40> m{};
-  m.fill(0xAB);
+  std::array<std::uint8_t, kMailboxBytes> m{};
+  m.fill(kFill);
   rules::ApplyDefaults(m.data());
   for (std::uint32_t at : {rules::kBlueStartScore, rules::kOrangeStartScore, rules::kRoundTotal, rules::kCaptureTime})
     EXPECT_EQ(FloatAt(m, at), 0.0f) << "float at +" << at;
@@ -38,11 +44,10 @@ TEST(VeilnetRules, DefaultsWriteTheFloatsAndTheShownBytesAFreshSessionStartsWith
 }
 
 TEST(VeilnetRules, DefaultsLeaveTheOtherMailboxBytesAlone) {
-  std::array<std::uint8_t, 0x40> m{};
-  m.fill(0xAB);
+  std::array<std::uint8_t, kMailboxBytes> m{};
+  m.fill(kFill);
   rules::ApplyDefaults(m.data());
-  for (std::uint32_t at : {0x10u, 0x12u, 0x13u, 0x14u, 0x16u, 0x2Fu, 0x30u, 0x32u, 0x33u})
-    EXPECT_EQ(m[at], 0xAB) << "byte +" << at;
+  for (std::uint32_t at : kUntouchedBytes) EXPECT_EQ(m[at], kFill) << "byte +" << at;
 }
 
 TEST(VeilnetRules, TheFirstSessionTheProcessSeesIsNotANewOne) {

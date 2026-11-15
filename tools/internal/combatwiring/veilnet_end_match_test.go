@@ -25,7 +25,7 @@ func TestVeilnetHasNoEndMatch(t *testing.T) {
 // the no-answer path (the server's own map switch) does not wait on an answer.
 func TestVeilnetMapAskGatedByPrivacyOnly(t *testing.T) {
 	src := code(t, "src/runtime/combat/veilnet.cpp")
-	branch := body(t, src, "if (p.type == 'C' && (p.id & 0xF0000000) == WANT_MAP")
+	branch := body(t, src, "if (p.type == 'C' && (p.id & WANT_KIND_MASK) == WANT_MAP")
 	if !strings.Contains(branch, "SessionPrivacy()") {
 		t.Errorf("the MAP SWITCH ask no longer reads SessionPrivacy(): %s", branch)
 	}

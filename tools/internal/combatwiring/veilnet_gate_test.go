@@ -1,6 +1,8 @@
 package combatwiring
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -26,4 +28,38 @@ func TestVeilnetSendsOnlyToTheServerTheGameStillTalksTo(t *testing.T) {
 	if !strings.Contains(hello, "gate::HelloTries") || !strings.Contains(hello, "kSendAndGiveUp") {
 		t.Errorf("the hello tick does not stop after the unanswered tries: %s", hello)
 	}
+}
+
+// The two constants and the loop bound that the gate's send path depends on, read from the source as written (the declarations,
+// not stripped of their values): a change to the mask, to the destination table's size, or to the bound of its loop fails here.
+func TestVeilnetWantMaskAndDestinationTableSizeAndBound(t *testing.T) {
+	raw := readSource(t, veilnet)
+	for _, want := range []string{
+		"constexpr uint32_t WANT_KIND_MASK = 0xF0000000;",
+		"constexpr int kSentToSlots = 16;",
+		"SentTo g_sent_to[kSentToSlots];",
+	} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("veilnet.cpp no longer declares %q", want)
+		}
+	}
+	hello := body(t, code(t, veilnet), "if (now >= next_hello) {")
+	if !strings.Contains(hello, "const uint64_t key = have ? nevr_combat::gate::ServerKey(d.addr.sin_addr.s_addr, d.addr.sin_port) : 0;") {
+		t.Error("the hello tick does not key the server by gate::ServerKey (address and port)")
+	}
+	noteSent := body(t, code(t, veilnet), "void NoteSent(SOCKET s, uint32_t addr, uint16_t port) {")
+	if !strings.Contains(noteSent, "for (int i = 0; i < kSentToSlots; ++i) {") {
+		t.Errorf("NoteSent does not scan the whole destination table: %s", noteSent)
+	}
+}
+
+
+// readSource is the file as written, comments included (code() strips them).
+func readSource(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(root(t), path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

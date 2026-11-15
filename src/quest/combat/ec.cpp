@@ -218,6 +218,8 @@ ssize_t RecvHandler(RecvThunk::Fn real, int fd, void* buf, size_t len, int flags
 }
 
 // Runs on whichever thread logs the profile update: two atomic page stores and capped lines.
+// KNOWN-WRONG #2242: the Quest's tac mod pick comes from the profile log line only. The PC also takes it from the local tac mod slot
+// (runtime/combat/veilnet.cpp PickTacMod, EchoCombat 2.0.8); a profile line that is never logged under nEVR leaves the selection stale.
 void SawProfile(const char* json, int lib) noexcept {
   char name[24];
   const std::uint64_t sym = SelectedFromJson(json, name, sizeof name);
@@ -737,6 +739,8 @@ void Step(std::uint64_t now100) noexcept {
   if (nowMs >= L.nextHello) {
     L.nextHello = nowMs + 2000;
     if (haveDest) {
+      // KNOWN-WRONG #2242: the hello goes to a destination the game left, every 2 s, for as long as the game runs (the PC stopped
+      // this in EchoCombat 2.0.6: kDestQuietMs and kHelloTries, runtime/combat/veilnet_gate.h). Not ported to the Quest yet.
       SendPacket(d, 'H', 0);
       if ((d.addr != L.logged.addr || d.port != L.logged.port) && StepLine()) {
         L.logged = d;

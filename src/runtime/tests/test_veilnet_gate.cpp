@@ -2,6 +2,9 @@
 // not answered. The decisions are runtime/combat/veilnet_gate.h; the sockets and the clock are veilnet.cpp's.
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 #include "runtime/combat/veilnet_gate.h"
@@ -11,19 +14,30 @@ namespace {
 namespace gate = nevr_combat::gate;
 using gate::Hello;
 
-// a server is its address and port in one key (the veilnet.cpp side packs them the same way)
-constexpr std::uint64_t kPortA = 6792, kPortB = 6793, kAddrA = 0x0A0B0C0Dull, kAddrB = 0x0A0B0C0Eull;
-constexpr std::uint64_t kServerA = kAddrA << 16 | kPortA, kServerB = kAddrB << 16 | kPortB;
+// a server is its address and port in one key (gate::ServerKey, the one packing veilnet.cpp uses too)
+constexpr std::uint16_t kPortA = 6792, kPortB = 6793;
+constexpr std::uint32_t kAddrA = 0x0A0B0C0D, kAddrB = 0x0A0B0C0E;
+constexpr std::uint64_t kServerA = gate::ServerKey(kAddrA, kPortA), kServerB = gate::ServerKey(kAddrB, kPortB);
 constexpr std::uint64_t kSentAt = 1000, kLater = 5000;     // clock readings, in ms
 constexpr int kTwice = 2, kSilentAfterGiveUp = 3;
 // The values EchoCombat 2.0.6 ships (DEST_QUIET_MS, HELLO_TRIES in his veilnet.cpp): stated here, not read from the header, so a change
 // to the header's constant fails below instead of matching itself.
 constexpr std::uint64_t kCatDestQuietMs = 3000;
 constexpr int kCatHelloTries = 5;
+constexpr std::size_t kTacModCount = 7;   // EchoCombat's seven tac mods
 
 TEST(VeilnetGate, TheValuesAreEchoCombatsOwn) {
   EXPECT_EQ(gate::kDestQuietMs, kCatDestQuietMs);
   EXPECT_EQ(gate::kHelloTries, kCatHelloTries);
+}
+
+// The packing, stated as its fields: the port in the low 16 bits, the address above them (independent of ServerKey's shift).
+constexpr int kPortBits = 16;
+constexpr std::uint64_t kLowSixteenBits = 0xFFFF;
+TEST(VeilnetGate, TheServerKeyHoldsTheAddressAboveThePortBits) {
+  EXPECT_EQ(gate::ServerKey(kAddrA, kPortA) >> kPortBits, kAddrA);
+  EXPECT_EQ(gate::ServerKey(kAddrA, kPortA) & kLowSixteenBits, kPortA);
+  EXPECT_NE(gate::ServerKey(kAddrA, kPortA), gate::ServerKey(kAddrA, kPortB));
 }
 
 TEST(VeilnetGate, ADestinationIsRecentOnlyWhileTheGameSendsWithinTheWindow) {
@@ -73,13 +87,17 @@ TEST(VeilnetGate, AnAnsweringServerIsHelloedEveryTime) {
 }
 
 // The tac mod pick from the local slot (EchoCombat 2.0.8). The seven symbols are EchoCombat's own, stated here.
+// EchoCombat's seven tac mod symbols, stated here as the independent pin of nevr_ec::kAbilities.
+constexpr std::array<std::uint64_t, kTacModCount> kCatTacMods = {
+    0xe32dc7c9d4804fb5ull, 0xe32dc7cad6864aa4ull, 0xc8c33e48386618b6ull, 0xc8c33e4832761fbcull,
+    0x41d2d43513260b1aull, 0x41d2d4381430080cull, 0x41d2d02f1b2a1316ull,
+};
+
 TEST(VeilnetGate, TheSevenTacModsAreKnownAndNothingElseIs) {
-  constexpr std::uint64_t kSmoke = 0xe32dc7c9d4804fb5ull, kWraith = 0x41d2d02f1b2a1316ull;
-  EXPECT_TRUE(gate::KnownTacMod(kSmoke));
-  EXPECT_TRUE(gate::KnownTacMod(kWraith));
-  EXPECT_EQ(sizeof(gate::kTacModSymbols) / sizeof(gate::kTacModSymbols[0]), 7u);
-  EXPECT_FALSE(gate::KnownTacMod(0));
-  EXPECT_FALSE(gate::KnownTacMod(kPortA));
+  EXPECT_EQ(sizeof(nevr_ec::kAbilities) / sizeof(nevr_ec::kAbilities[0]), kTacModCount);
+  for (std::uint64_t sym : kCatTacMods) EXPECT_TRUE(nevr_ec::KnownTacMod(sym)) << std::hex << sym;
+  EXPECT_FALSE(nevr_ec::KnownTacMod(0));
+  EXPECT_FALSE(nevr_ec::KnownTacMod(kPortA));
 }
 
 TEST(VeilnetGate, ASlotPickIsTakenOnlyWhenItIsANewKnownTacMod) {

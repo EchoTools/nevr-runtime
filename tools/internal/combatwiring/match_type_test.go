@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// #2289: VeilNet's MAP SWITCH and END MATCH gates act on the session game type the runtime stores
+// #2289: VeilNet's MAP SWITCH gate and its RULES / PAUSE ask gate act on the session game type the runtime stores
 // (nevr_arena_round_time::SessionGameType), through combat/match_type.h, which test_combat_match_type.cpp drives. These
 // pin that the gates veilnet.cpp runs are the ones that read it, and that the game's session log line, which echovr.exe
 // logs and the module does not watch, is no longer a source.
@@ -80,7 +80,7 @@ func TestTheMatchTypeComesFromTheStoredSessionGameType(t *testing.T) {
 func TestBothGatesAskSessionPrivacy(t *testing.T) {
 	src := code(t, veilnet)
 	for _, gate := range []string{
-		"if (p.type == 'C' && (p.id & 0xF0000000) == WANT_MAP && (p.id & 0xF) < MAP_COUNT)",
+		"if (p.type == 'C' && (p.id & WANT_KIND_MASK) == WANT_MAP && (p.id & 0xF) < MAP_COUNT)",
 	} {
 		b := body(t, src, gate)
 		if !strings.Contains(b, "SessionPrivacy()") || !strings.Contains(b, "!= nevr_combat::MatchPrivacy::kPrivate") {

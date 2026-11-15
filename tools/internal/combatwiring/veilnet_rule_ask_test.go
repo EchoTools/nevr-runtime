@@ -24,7 +24,7 @@ func TestVeilnetRuleAsksCountInAPrivateMatchOnly(t *testing.T) {
 			t.Errorf("the RULES / PAUSE ask is not gated by rule_ask: %s", gate)
 		}
 	}
-	if !strings.Contains(handle, "if (p.type == 'C' && !rule_ask && (p.id & 0xF0000000) != WANT_MAP)") {
+	if !strings.Contains(handle, "if (p.type == 'C' && !rule_ask && (p.id & WANT_KIND_MASK) != WANT_MAP)") {
 		t.Error("a refused RULES ask is not logged (or the MAP SWITCH ask is wrongly refused by it)")
 	}
 }
