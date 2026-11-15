@@ -134,8 +134,8 @@ class Root {
   // Win32: a fresh folder under NEVR_TEST_RUN_ROOT (run_root.h), which the test never removes.
   explicit Root(const char* suffix = "") {
 #if defined(_WIN32)
-    std::wstring label = L"nevr-update-test";
-    for (const char* p = suffix; *p != '\0'; ++p) label += static_cast<wchar_t>(*p);
+    // The suffix is UTF-8 (a test names a folder for a player, "-Zo\xC3\xAB"): converted whole, never a wide unit per byte.
+    const std::wstring label = L"nevr-update-test" + WideOf(suffix);
     const std::wstring dir = nevr_test::NewDir(label.c_str());
     if (dir.empty()) std::abort();
     RootToUtf8(dir.c_str(), &path_);
