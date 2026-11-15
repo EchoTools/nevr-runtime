@@ -802,7 +802,7 @@ TEST(NevrConfig, ShapeWarningNamesTheKeysAndNeverAValue) {
 TEST(NevrConfig, KnownPathsCoverEveryKeyTheQuestReads) {
   const std::vector<std::string> known = nevr::KnownConfigKeyPaths();
   const std::vector<std::string> questReads = {
-      "services.socket_uri", "auth.http_uri",          "auth.http_key",          "auth.server_key",
+      "services.socket_uri", "maps.base_url", "maps.boot_budget_ms", "maps.channel", "maps.official_keys", "maps.trusted_keys", "auth.http_uri",          "auth.http_key",          "auth.server_key",
       "social.facade",       "social.send_presence_to_meta", "diagnostics.hardware_dump",
       "diagnostics.ui_event_probe", "diagnostics.pnsrad_provider", "diagnostics.clock_levels_override",
       "graphics.texture_quality", "graphics.hand_flip", "update.enabled", "update.channel", "combat.force", "combat.heaps", "combat.memsys",
