@@ -4,11 +4,14 @@
 #include <windows.h>
 
 #include <atomic>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
+#include "cdn/cdn_config.h"
 #include "cdn/cdn_demand.h"
 #include "cdn/cdn_manifest.h"
 #include "cdn/cdn_service.h"
@@ -23,6 +26,7 @@
 #include "runtime/ext/plugin_trust.h"
 #include "runtime/content/content_pack.h"
 #include "runtime/lifecycle/update_fs_win32.h"
+#include "runtime/lifecycle/service_config.h"
 #include "runtime/lifecycle/update_worker.h"
 #include "runtime/patch/plugin_assets.h"
 #include "runtime/combat/announcer_callouts.h"
@@ -135,7 +139,17 @@ bool Start() noexcept {
     return false;
   }
   const std::string dir = nevr_root::Join(nevr_root::CacheDir(root), kCdnCacheName);
-  const nevr_cdn::Settings settings{};
+  // The settings are config.yaml's `assets.*` keys, read by the one reader the Quest uses (cdn/cdn_config.h); with none of them in the
+  // file the settings are the code's defaults. A wrong key is a Warning that names the key, and its default stays.
+  nevr_cdn::Settings settings;
+  try {
+    nevr_cdn::ConfigRead read = nevr_cdn::ReadSettings(NevrCfgLoadedConfig());
+    for (const std::string& warning : read.warnings) Log(EchoVR::LogLevel::Warning, "[NEVR.CONFIG] cdn %s", warning.c_str());
+    settings = std::move(read.settings);
+  } catch (const std::exception&) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.CONFIG] cdn config read failed reason=exception consequence=\"the CDN uses its default settings this run\"");
+  }
   nevr_cdn::RunConfig config = nevr_cdn::MakeRunConfig(settings, dir, nevr_cdn::kWindowsX64);
   // The script gate (cdn_script_gate.h) reads the game's script folder, and the registrar claims each label's `scripts` copies before it
   // (cdn_scripts_install.h, PLAN-v5 R10b). Both are set here: the boot mount and the fetch both run the gate.

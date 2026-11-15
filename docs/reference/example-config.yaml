@@ -814,6 +814,32 @@ arena:
   # mercy_score: 15.0
 
 # ---------------------------------------------------------------------------
+# assets.cdn_url, assets.manifest, assets.required_only, assets.labels — the CDN's settings (both)
+#
+# Read by the PC client and the Quest through one reader (src/cdn/cdn_config.h; ADR 0045 decision 9). A PC dedicated server
+# does not read them: its CDN start keeps the code's defaults (its own label defaults, kServerLabelDefaults).
+#   cdn_url        The base URL: https, a host, no query, fragment or credentials; a '/' is added at the end.
+#                  Absent: https://cargo.echo.taxi/ . Blobs are fetched from <cdn_url>blobs/sha256/<hex>.
+#   manifest       The manifest's path below cdn_url (relative, plain characters, no ".."); the client reads a zstd frame or plain JSON
+#                  by its bytes. Absent: v2/manifest.json.zst, and v1/manifest.json.zst when the CDN answers HTTP 404 for v2.
+#                  Any other manifest named here is read as it is, with no fallback (naming v2/manifest.json.zst
+#                  itself is the default, and keeps its fallback).
+#   required_only  true: only a label that is `required` is served. Absent: false.
+#   labels.<name>  on, off or required, for a label of the manifest (lower case, digits, '_'). Absent: lobby_posters on, game
+#                  required, any other label off.
+# A key that is wrong is one Warning that names the key (never the value) and the default stays. With none of these keys
+# in the file the client reads exactly what it read before they existed.
+# Not a secret.
+# Reader: src/cdn/cdn_config.h
+# ---------------------------------------------------------------------------
+# assets:
+#   cdn_url: "https://cargo.echo.taxi/v1-staging/"
+#   manifest: "manifests/<sha-256 of the manifest frame>.json.zst"
+#   required_only: false
+#   labels:
+#     combat_content: on
+
+# ---------------------------------------------------------------------------
 # assets.whole_game — the manifest holds every asset of the game (Quest only)
 #
 # Needs assets.manifest. The first-run data step does not fetch the data zip

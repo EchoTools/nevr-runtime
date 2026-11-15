@@ -1723,6 +1723,14 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_service_map DISCOVERY_MODE PRE_TEST)
 
+    # The CDN settings read from config.yaml (cdn/cdn_config.h, the one reader the PC and the Quest share): header-only over
+    # nevr_config, so it links nevr_core and yaml-cpp only.
+    add_executable(test_cdn_config tests/test_cdn_config.cpp)
+    set_source_files_properties(tests/test_cdn_config.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_cdn_config PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_cdn_config PRIVATE GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp)
+    gtest_discover_tests(test_cdn_config DISCOVERY_MODE PRE_TEST)
+
     # Stable C-string storage and direct config-accessor failure-boundary tests.
     add_executable(test_service_config
       tests/test_service_config.cpp

@@ -88,7 +88,9 @@ process.
    its descriptor (the per-binary pair table, `Platform::pairs`).
 9. **Label states: defaults in code, config only changes them.** `lobby_posters` is on, `game` (the whole-game label) is required;
    any label not listed is off. A dedicated server reads its own defaults (`kServerLabelDefaults`, `src/cdn/cdn_plan.h`): `combat_content` and `game` are on, every other label is off; what it fetches of them is only what its session's map and mode need (decision 10). Config (`assets.labels.<label>: on|off|required`, `assets.required_only`) changes states; the
-   manifest never does. `required` never blocks a level load or a match, and a server cannot require labels of a client.
+   manifest never does. The PC client and the Quest read the same keys through one reader (`src/cdn/cdn_config.h`): `assets.cdn_url` (the base),
+   `assets.manifest` (the manifest's path below it), `assets.required_only` and `assets.labels`; with none of them in `config.yaml` the settings
+   are the defaults above (a PC dedicated server does not read them: its start keeps the code's defaults). `required` never blocks a level load or a match, and a server cannot require labels of a client.
    The one requirement a server makes of a client is the cargo pin of its pin labels (`combat_content`), and only in a session on one of
    six combat levels: the four combat maps of `src/core/combat_level_class.h` and the two pebbles levels (`src/core/cargo_session_pin.h`).
    Those labels' records decide what a combat session simulates, and two sets split its players. A lobby is not compared: on PC the

@@ -582,3 +582,11 @@ TEST(InviteCodesAccessor, AListUnderTheKeyIsStructuredAndAnAbsentKeyIsNot) {
   EXPECT_FALSE(NevrCfgGetFlatIsStructured(nullptr));
   ResetAccessorInputs();
 }
+
+// The CDN's start reads its `assets.*` settings from the same loaded config every accessor reads (cdn_start.cpp, cdn/cdn_config.h).
+TEST(StableStringPoolAccessors, TheLoadedConfigIsTheOneTheAccessorsRead) {
+  SetEmptyInputs();
+  EXPECT_EQ(&NevrCfgLoadedConfig(), &EmptyConfig());
+  SetConfigInputs();
+  EXPECT_EQ(&NevrCfgLoadedConfig(), &Config());
+}

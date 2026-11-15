@@ -16,6 +16,10 @@
 
 #pragma once
 
+namespace nevr {
+class NevrConfig;  // declared only: this interface includes no nevr_config.h (NevrCfgLoadedConfig below)
+}
+
 /// A migrated flat NEVR key read from config.yaml. Null if the key is unmapped or
 /// absent; may be a stable "" if the key is present-but-empty (caller checks [0]).
 const char* NevrCfgGetFlat(const char* flatKey);
@@ -75,6 +79,10 @@ const char* NevrCfgJoinHoldMs();
 /// `update.enabled` from config.yaml (#1200, ADR 0024 section 3): 1 when the key is true, 0 when it is false, -1 when it is absent or
 /// holds no boolean (updates stay on). Only readable after the CLI is parsed, as every config.yaml read.
 int NevrCfgUpdateEnabled();
+
+/// The loaded config.yaml itself (the same object every accessor above reads), for a reader that takes a whole section: the CDN's
+/// settings (runtime/lifecycle/cdn_start.cpp, cdn/cdn_config.h). Only readable after the CLI is parsed, as every config.yaml read.
+const nevr::NevrConfig& NevrCfgLoadedConfig();
 
 /// `update.channel` from config.yaml (#1200): the channel the player asked for, or null when the key is absent or empty. Interned.
 const char* NevrCfgUpdateChannel();

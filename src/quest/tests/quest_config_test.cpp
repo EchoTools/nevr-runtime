@@ -28,8 +28,7 @@ using nevr_quest::LogLevel;
 using nevr_quest::Source;
 
 // Synthetic values; the secrets below must never appear in a log event.
-// quest_config.cpp's kMaxManifestPathBytes, the longest assets.manifest path accepted (an internal constant of that file, stated
-// here so the test pins its edge).
+// cdn/cdn_config.h's kMaxManifestPathBytes, the longest assets.manifest path accepted (stated here so the test pins its edge).
 constexpr std::size_t kMaxManifestPathBytesForTest = 128;
 constexpr const char* kEmbSocket = "wss://emb.example/nevr";
 constexpr const char* kEmbHttp = "https://emb.example:7350";

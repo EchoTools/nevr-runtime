@@ -473,6 +473,8 @@ int NevrCfgUpdateEnabled() {
   return enabled.has_value() ? (*enabled ? 1 : 0) : -1;
 }
 
+const nevr::NevrConfig& NevrCfgLoadedConfig() { return NevrCfg(); }
+
 const char* NevrCfgUpdateChannel() {
   return AccessorBoundary("NevrCfgUpdateChannel", [&]() -> const char* {
     const std::optional<std::string> channel = NevrCfg().GetString("update.channel");

@@ -1,3 +1,4 @@
 {"component":"tools/internal/patchwiring","dir":"tools/internal/patchwiring"}
+{"file":"tools/internal/patchwiring/cdn_settings_wiring_test.go","tests":["go:internal/patchwiring","go:internal/questwiring"]}
 {"file":"tools/internal/patchwiring/doc.go","tests":["go:internal/patchwiring","go:internal/questwiring"]}
 {"file":"tools/internal/patchwiring/new_unlocks_clear_test.go","tests":["go:internal/patchwiring","go:internal/questwiring"]}

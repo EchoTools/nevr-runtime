@@ -1,5 +1,7 @@
 #include "quest/sentinel/quest_config.h"
 
+#include "cdn/cdn_config.h"
+#include "core/config_word.h"
 #include "core/nevr_config.h"
 #include "runtime/lifecycle/service_redirect.h"
 #include "runtime/patch/invite_config.h"
@@ -45,12 +47,7 @@ constexpr const char* kTextureQualitySection = "graphics";
 constexpr const char* kTextureQualityName = "texture_quality";  // a key `graphics` has
 constexpr const char* kHandFlipKey = "graphics.hand_flip";       // Quest only (default false, #2082)
 constexpr const char* kHandFlipName = "hand_flip";               // the other key `graphics` has
-constexpr const char* kAssetsCdnUrlKey = "assets.cdn_url";
-constexpr const char* kAssetsManifestKey = "assets.manifest";
-constexpr const char* kAssetsRequiredOnlyKey = "assets.required_only";
 constexpr const char* kAssetsWholeGameKey = "assets.whole_game";
-constexpr const char* kAssetsLabelsPath = "assets.labels";
-constexpr std::size_t kMaxAssetLabels = 32;
 constexpr const char* kCombatForceKey = "combat.force";           // Quest only (default false, #2170)
 constexpr const char* kCombatHeapsKey = "combat.heaps";           // Quest only (default true, #2175)
 constexpr const char* kCombatMemsysKey = "combat.memsys";         // Quest only (default true, #2175)
@@ -256,16 +253,7 @@ bool ReadInviteCodes(const nevr::NevrConfig& cfg, LoadResult& r) {
 
 // How a rejected texture-quality value is named in the log: the word itself when it is short printable ASCII (a level is
 // a word, not a secret), else what is wrong with it.
-std::string DescribeRejectedWord(const std::string& text) {
-  constexpr std::size_t kMaxNamedBytes = 32;
-  if (text.empty()) return "(empty)";
-  if (text.size() > kMaxNamedBytes) return "(longer than 32 bytes)";
-  for (const char ch : text) {
-    const auto u = static_cast<unsigned char>(ch);
-    if (u <= 0x20 || u >= 0x7f) return "(not printable ASCII without spaces)";
-  }
-  return text;
-}
+using nevr::DescribeRejectedWord;
 
 // What a mistake in graphics.texture_quality gives: `stock`, never the default (texture_quality.h kFallbackLevel), and one
 // Warning that names the key. `why` is a token and carries none of the file's words.
@@ -371,74 +359,18 @@ void ReadUpdate(const nevr::NevrConfig& cfg, LoadResult& r) {
   }
 }
 
-// The CDN host's base: https, a host, no query, fragment or credentials, no control or space character, ending in '/'.
-bool NormalizeCdnBase(const std::string& in, std::string* out) {
-  static const std::string kScheme = "https://";
-  if (in.size() <= kScheme.size() || in.size() > 200 || in.compare(0, kScheme.size(), kScheme) != 0) return false;
-  for (const char c : in) {
-    if (static_cast<unsigned char>(c) <= 0x20 || static_cast<unsigned char>(c) >= 0x7f || c == '?' || c == '#' || c == '@') return false;
-  }
-  const std::size_t hostEnd = in.find('/', kScheme.size());
-  if ((hostEnd == std::string::npos ? in.size() : hostEnd) == kScheme.size()) return false;  // no host
-  *out = in.back() == '/' ? in : in + "/";
-  return true;
-}
-
-// The longest manifest path a config file may name: a bound on a value read from a file, so a line of the file cannot make the URL
-// the core requests (and logs in cdn_manifest's `url`) arbitrarily long. Not a device or game limit.
-constexpr std::size_t kMaxManifestPathBytes = 128;
-
-// A manifest path below the host: relative, plain characters, no "..". Its name decides nothing: the core reads a zstd frame or plain
-// JSON by the body's own bytes (cdn_manifest.h ParseManifestBody).
-bool IsManifestPath(const std::string& p) {
-  if (p.empty() || p.size() > kMaxManifestPathBytes || p[0] == '/') return false;
-  if (p.find("..") != std::string::npos) return false;
-  for (const char c : p) {
-    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-' || c == '/';
-    if (!ok) return false;
-  }
-  return true;
-}
-
-bool IsAssetLabel(const std::string& s) {
-  if (s.empty() || s.size() > 48) return false;
-  for (const char c : s) {
-    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) return false;
-  }
-  return true;
-}
-
-// assets.* (docs/adr/0045). Every key is optional; a wrong one is a Warning naming the key and the default stays.
+// assets.* (docs/adr/0045). Every key is optional; a wrong one is a Warning naming the key and the default stays. The CDN's own keys
+// (cdn_url, manifest, required_only, labels) are read by the one reader the PC uses too (cdn/cdn_config.h ReadSettings); `whole_game`
+// is the Quest's own key and is read here.
 void ReadAssets(const nevr::NevrConfig& cfg, LoadResult& r) {
+  nevr_cdn::ConfigRead shared = nevr_cdn::ReadSettings(cfg);
+  for (const std::string& warning : shared.warnings) Add(r, LogLevel::kWarn, warning);
   AssetsChoice a;
-  bool given = false;
-  if (cfg.Kind(kAssetsCdnUrlKey) != nevr::NodeKind::kAbsent) {
-    const std::optional<std::string> value = cfg.GetString(kAssetsCdnUrlKey);
-    std::string base;
-    if (value && NormalizeCdnBase(*value, &base)) {
-      a.cdnUrl = base;
-      given = true;
-    } else {
-      Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsCdnUrlKey + " rejected reason=not_an_https_address (default stays)");
-    }
-  }
-  if (cfg.Kind(kAssetsManifestKey) != nevr::NodeKind::kAbsent) {
-    const std::optional<std::string> value = cfg.GetString(kAssetsManifestKey);
-    if (value && IsManifestPath(*value)) {
-      a.manifest = *value;
-      given = true;
-    } else {
-      Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsManifestKey + " rejected reason=not_a_relative_path (default stays)");
-    }
-  }
-  if (cfg.Kind(kAssetsRequiredOnlyKey) != nevr::NodeKind::kAbsent) {
-    if (cfg.GetBool(kAssetsRequiredOnlyKey).has_value()) {
-      a.requiredOnly = ReadBool(cfg, kAssetsRequiredOnlyKey, false, r);
-      given = true;
-    } else {
-      Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsRequiredOnlyKey + " rejected reason=not_a_boolean (default stays)");
-    }
-  }
+  a.cdnUrl = std::move(shared.settings.cdn_url);
+  a.manifest = std::move(shared.settings.manifest);
+  a.requiredOnly = shared.settings.required_only;
+  a.labels = std::move(shared.settings.labels);
+  bool given = shared.settings.from_config;
   if (cfg.Kind(kAssetsWholeGameKey) != nevr::NodeKind::kAbsent) {
     if (cfg.GetBool(kAssetsWholeGameKey).has_value()) {
       a.wholeGame = ReadBool(cfg, kAssetsWholeGameKey, false, r);
@@ -451,33 +383,6 @@ void ReadAssets(const nevr::NevrConfig& cfg, LoadResult& r) {
     // The mode serves the game from the manifest `assets.manifest` names; with none there is nothing to serve it from.
     a.wholeGame = false;
     Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsWholeGameKey + " rejected reason=no_manifest (the game's own data stays in use; name assets.manifest)");
-  }
-  const nevr::NodeKind labelsKind = cfg.Kind(kAssetsLabelsPath);
-  if (labelsKind == nevr::NodeKind::kMapping) {
-    std::size_t seen = 0;
-    for (const std::string& label : cfg.MappingKeys(kAssetsLabelsPath)) {
-      if (++seen > kMaxAssetLabels) {
-        Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsLabelsPath + " rejected reason=too_many_labels more=" +
-                                    std::to_string(seen - kMaxAssetLabels) + " (ignored)");
-        break;
-      }
-      if (!IsAssetLabel(label)) {
-        Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsLabelsPath + " rejected reason=bad_label_name name=" +
-                                    DescribeRejectedWord(label) + " (ignored)");
-        continue;
-      }
-      const std::string path = std::string(kAssetsLabelsPath) + "." + label;
-      const std::optional<std::string> state = cfg.GetString(path);
-      if (state && (*state == "on" || *state == "off" || *state == "required")) {
-        a.labels.emplace_back(label, *state);
-        given = true;
-      } else {
-        Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsLabelsPath + " rejected reason=bad_state label=" + label +
-                                    " (the label keeps its default; allowed: on, off, required)");
-      }
-    }
-  } else if (labelsKind != nevr::NodeKind::kAbsent) {
-    Add(r, LogLevel::kWarn, std::string("config file key=") + kAssetsLabelsPath + " rejected reason=not_a_mapping (default stays)");
   }
   a.source = given ? Source::kFile : Source::kAbsent;
   r.config.assets = std::move(a);

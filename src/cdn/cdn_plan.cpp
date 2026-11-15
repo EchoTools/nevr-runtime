@@ -15,19 +15,6 @@ const char* LabelStateName(LabelState state) noexcept {
   return "unknown";
 }
 
-bool ParseLabelState(std::string_view text, LabelState* out) noexcept {
-  if (text == "on") {
-    *out = LabelState::kOn;
-  } else if (text == "off") {
-    *out = LabelState::kOff;
-  } else if (text == "required") {
-    *out = LabelState::kRequired;
-  } else {
-    return false;
-  }
-  return true;
-}
-
 const char* SkipReasonName(SkipReason reason) noexcept {
   switch (reason) {
     case SkipReason::kNone: return "none";

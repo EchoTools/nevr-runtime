@@ -15,6 +15,7 @@ import (
 const (
 	questConfigSrc     = "src/quest/sentinel/quest_config.cpp"
 	exampleConfigDoc   = "docs/reference/example-config.yaml"
+	sharedCdnConfigSrc = "src/cdn/cdn_config.h"
 	questSentenceStart = "The Quest reads exactly these keys:"
 	questSentenceEnd   = "Every other key below"
 )
@@ -32,12 +33,16 @@ var (
 	danglingItem = regexp.MustCompile(`[ ,]$`)
 )
 
-// readerKeys returns the set of keys quest_config.cpp looks up: every dotted string literal outside its comments.
+// readerKeys returns the set of keys the Quest looks up: every dotted string literal outside the comments of quest_config.cpp and of the
+// shared CDN reader it includes.
 func readerKeys(t *testing.T) map[string]bool {
 	t.Helper()
 	keys := map[string]bool{}
-	for _, m := range dottedKeyLiteral.FindAllStringSubmatch(stripComments(read(t, questConfigSrc)), -1) {
-		keys[m[1]] = true
+	// The Quest reads the CDN's four `assets.*` keys through the reader the PC shares (cdn/cdn_config.h, included by quest_config.cpp).
+	for _, src := range []string{questConfigSrc, sharedCdnConfigSrc} {
+		for _, m := range dottedKeyLiteral.FindAllStringSubmatch(stripComments(read(t, src)), -1) {
+			keys[m[1]] = true
+		}
 	}
 	if len(keys) < 50 {
 		t.Fatalf("%s: found %d key literals, want at least 50: the extraction has drifted from the reader's spelling", questConfigSrc, len(keys))

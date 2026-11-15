@@ -30,7 +30,19 @@ namespace nevr_cdn {
 enum class LabelState : std::uint8_t { kOff, kOn, kRequired };
 const char* LabelStateName(LabelState state) noexcept;
 // "on", "off" or "required" (case-sensitive); false for anything else.
-bool ParseLabelState(std::string_view text, LabelState* out) noexcept;
+// Inline, so the config readers (cdn/cdn_config.h) use the one parse without linking the planner.
+inline bool ParseLabelState(std::string_view text, LabelState* out) noexcept {
+  if (text == "on") {
+    *out = LabelState::kOn;
+  } else if (text == "off") {
+    *out = LabelState::kOff;
+  } else if (text == "required") {
+    *out = LabelState::kRequired;
+  } else {
+    return false;
+  }
+  return true;
+}
 
 struct LabelDefault {
   const char* label;
