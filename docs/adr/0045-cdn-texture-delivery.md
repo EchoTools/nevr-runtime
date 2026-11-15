@@ -56,7 +56,7 @@ process.
    this decision (see Not claimed).
 5. **The host is `cargo.echo.taxi`, bucket `nevr-cargo`.** `blobs/sha256/<hex>` (immutable), `v1/manifests/<sha256>.json.zst` (kept by
    hash), `v1/manifest.json.zst` (the current copy, short cache). A test device names `v1/test/manifest.json.zst` through `assets.cdn_url`;
-   `v1/manifest.json.zst` holds no label in this decision. The manifest-publish token is held by the project owner's delegate;
+   `v1/manifest.json.zst` is the manifest every client reads by default and holds the `lobby_posters` label. `cargo-publish` (prefix `v1/`) writes the three kinds of key in that order and never replaces a key that exists, so a manifest that is already there is replaced by a deliberate step outside that tool. The manifest-publish token is held by the project owner's delegate;
    whether an R2 token can be limited to a key prefix is open and not needed here.
 6. **Objects are appended to a few store files and hashed once.** A blob is streamed into `store-<n>.pack` (at most 4 GiB: the engine's
    chunk offset is 32 bits) while it is hashed; its frame header is checked against the record (`cdn_validate.h`); when size, header

@@ -13,10 +13,14 @@
 // and v1/manifests/<sha256 of the frame>.json.zst (under the staging prefix v1-staging/ the second key is
 // <prefix>manifests/<sha256 of the frame>.json.zst, so nothing outside the prefix is written). A plain manifest.json in the set is not read.
 //
-// Blobs are written at <prefix>blobs/sha256/<hex>. Per object: a HEAD on the public domain (200 skips the object, 404
+// Blobs are written at <prefix>blobs/sha256/<hex>, except under the prefix v1/ (the layout of a client with the default
+// base URL, docs/adr/0045-cdn-texture-delivery.md decision 5): there the blobs are at blobs/sha256/<hex> in the bucket root and
+// the manifests at v1/manifests/<sha> and v1/manifest.json.zst. Every blob is sent first, then the by-hash manifest, then
+// <prefix>manifest.json.zst, and an error stops the later phases. Per object: a HEAD on the public domain (200 skips the object, 404
 // puts it, any other status is an error), a PUT with If-None-Match: * (the bucket refuses to overwrite), then a GET on the
-// public domain whose SHA-256 must match. Nothing is deleted, nothing outside the prefix or the manifests directory is
-// written, and no secret is logged. Dry run checks and hashes the set and prints the counts and bytes it would send,
+// public domain whose SHA-256 must match. Nothing is deleted, nothing is overwritten (a manifest key that is present with other content is an
+// error, so this tool never replaces a manifest that exists), nothing outside the prefix is written except, under v1/, the blobs
+// directory of the bucket root and v1/manifests/ (and, under any other prefix, v1/manifests/), and no secret is logged. Dry run checks and hashes the set and prints the counts and bytes it would send,
 // without the network and without any credential.
 //
 // Records are JSON on standard error (Info per uploaded object and for the summary, Debug per skipped object, Error for
@@ -226,7 +230,7 @@ func blobBase(prefix string) string {
 }
 
 // manifestsDirFor is the folder the by-hash copy of the manifest goes to: the shared v1/manifests/, except for a set under
-// the staging prefix, which writes nothing outside it (sprockee decides what reaches v1/).
+// the staging prefix, which writes nothing outside it (what reaches v1/ is a separate, deliberate publish).
 func manifestsDirFor(prefix string) string {
 	if strings.HasPrefix(prefix, stagingPrefix) {
 		return prefix + "manifests/"

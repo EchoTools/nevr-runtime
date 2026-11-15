@@ -606,6 +606,7 @@ func TestLivePrefixPutsBlobsAtTheRootAndManifestsUnderV1(t *testing.T) {
 }
 
 func TestManifestsAreSentOnlyAfterEveryBlob(t *testing.T) {
+	const blobCount = 3
 	dir, frame := writeSet(t, [][]byte{[]byte("alpha"), []byte("bravo!!"), []byte("charlie")})
 	f, srv := newFake(t)
 	cfg := testConfig(srv.URL)
@@ -618,13 +619,13 @@ func TestManifestsAreSentOnlyAfterEveryBlob(t *testing.T) {
 		t.Fatal(err)
 	}
 	order := f.putOrder
-	if len(order) != 5 || string(f.objects["v1/manifest.json.zst"]) != string(frame) {
+	if len(order) != blobCount+2 || string(f.objects["v1/manifest.json.zst"]) != string(frame) {
 		t.Fatalf("puts = %v", order)
 	}
-	if order[3] != manifestsKeyDir+sha256Hex(frame)+manifestFrameExt || order[4] != "v1/manifest.json.zst" {
-		t.Errorf("the last two puts are %v, want the by-hash manifest then the current one", order[3:])
+	if order[blobCount] != manifestsKeyDir+sha256Hex(frame)+manifestFrameExt || order[blobCount+1] != "v1/manifest.json.zst" {
+		t.Errorf("the last two puts are %v, want the by-hash manifest then the current one", order[blobCount:])
 	}
-	for _, k := range order[:3] {
+	for _, k := range order[:blobCount] {
 		if !strings.HasPrefix(k, blobsDir) {
 			t.Errorf("put %s before the manifests is not a blob", k)
 		}
