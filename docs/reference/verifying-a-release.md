@@ -1466,10 +1466,8 @@ file, `nevr-runtime.dll`, that the host loads. What a player's machine does befo
   `src/runtime/ext/plugin_signature.cpp`, pins in `src/runtime/ext/plugin_trust.cpp`). Without that argument unsigned
   plugins load, with a warning for each one (`kDefaultMode` in `src/runtime/ext/plugin_trust.cpp`).
 
-**Not built (proposed in ADR 0012, `docs/adr/0012-static-install-root.md`, status proposed)**
+**Not built**
 
-- Loading `nevr-runtime.dll` from the nevr root, `%LOCALAPPDATA%\nevr\echovr\`, instead of the directory of
-  `BugSplat64.dll`.
 - Any host check of the runtime against `manifest.json`: nothing in `src/runtime/host/` reads it. No ADR in the tree
   decides it. Do not rely on the host to compare the runtime with the manifest: on PC the installer is the only party
   that checks the manifest today.

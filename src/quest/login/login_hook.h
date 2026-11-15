@@ -26,8 +26,8 @@
 // Hook frequency: once per login attempt, on the game's login path. Nothing here sleeps,
 // yields or blocks.
 //
-// Activation (nothing calls TryInstallLoginHook yet, and no IdentitySource other than the test
-// fake exists; another package wires both):
+// Activation (production_steps.cpp, LoginAction, calls TryInstallLoginHook with the TokenIdentitySource of
+// integration/identity_source.h; the test fake is the other IdentitySource):
 //   When   libpnsovr.so is loaded by CSysModule::Load (libr15 0x2a9e16c), which calls
 //          dlopen@plt at 0x2a9e1ec through the BIND_NOW JUMP_SLOT 0x36c6380 of libr15.so
 //          (the only dlopen reference in libr15). A GotHook on that slot (name "dlopen",

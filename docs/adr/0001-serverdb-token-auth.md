@@ -28,8 +28,10 @@ server key on it, so a caller's own `Authorization` header never reaches Nakama.
   The token TTL is about an hour, so it is re-acquired on every registration.
   `src/runtime/server/gameserver_serverdb.cpp` implements this.
 - `nevr_serverdb_uri` and `nevr_socket_uri` stay separate keys. Pointing
-  `nevr_socket_uri` at `/nevr` breaks client login, which still authenticates with
-  `discord_id` and `password` on `/spr`.
+  `nevr_socket_uri` at `/nevr` breaks client login, which goes through `/spr`: the bridge sends the token-auth
+  JWT (`TokenAuth_GetToken`) as the remote's Bearer and as `access_token` in the LoginRequest, and uses `discordid` and
+  `password` URL credentials, with the server key as Bearer, only when the socket URI carries them
+  (`ReadLoginIdentity` and the `hasUrlCredentials` branch in `src/runtime/compat/ws_bridge.cpp`).
 - Token auth is opt-in. When `nevr_serverdb_uri` is unset the server falls back to
   `nevr_socket_uri` with URL-parameter credentials.
 
@@ -43,5 +45,5 @@ valid JWT returns 101; `/nevr` with a garbage token returns 401.
   `ws://g.echovrce.com:80/nevr`). Token-only registration over `/spr` fails, and
   the fallback to `nevr_socket_uri` hides that.
 - The nginx change lives on the production host and is not tracked in an ops repo.
-- The client login bridge still uses `discord_id` and `password` on `/spr`.
-  Moving it to a token touches every client and is a separate decision.
+- The client login bridge is on `/spr` and signs in with the token-auth JWT; the LoginRequest still carries a `password`
+  field (`BuildLoginProfileJson` in `src/runtime/compat/login_profile.cpp`), filled from `auth.password` when it is set.

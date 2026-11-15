@@ -10,33 +10,35 @@ audience: all
 Status: proposed (#575, tracking issue #799). Of the "Order of work", steps 2 (the target split), 3 (the host verifies the runtime and stops the game without it) and 4 (the runtime and the plugins load from the root; the installer and `NEVR_ROOT`) are built, and of step 5 the root, the one-time move (of the sign-in cache, the nEVR logs, the cosmetic packages and the plugins) and the resolution of the sign-in cache, `logs\`, `crashes\` and the caches (`core/nevr_root.h`, `lifecycle/nevr_root_move.cpp`); nothing else in the "Decision" section is. ADR 0010 and ADR 0011 are accepted and
 neither is superseded by this record. **It amends ADR 0008 (`0008-bugsplat-host-and-nevr-runtime.md`) in three places:** `nevr-runtime.dll`
 loads from the root, not from the directory of `BugSplat64.dll`; a refused or missing `nevr-runtime.dll` stops the game, where ADR 0008
-lets it run without the runtime; and the host's log gains a `versions` event. "Relation to other records" says which text of ADR 0008 each replaces. What exists today is named
-under "Context"; each piece that moves is re-measured by the pull request that moves it.
+lets it run without the runtime; and the host's log gains a `versions` event. "Relation to other records" says which text of ADR 0008 each replaces. What exists is named
+under "Context".
 
 The runtime DLL is named `nevr-runtime.dll`, in this record, in ADR 0008, in `src/runtime/host/`, in its tests and in `tools/verify_pe_contract.py`.
 
 ## Context
 
-The game's install folder holds things that change and things that are secret, next to files that never change:
+The game's install folder can hold things that change and things that are secret, next to files that never change, so the tree keeps
+the first two out of it:
 
-- the runtime is `nevr-runtime.dll`, loaded by the host `BugSplat64.dll` from the directory of `BugSplat64.dll` (ADR 0008 in `0008-bugsplat-host-and-nevr-runtime.md`, "The tree today"),
-  so a runtime fix replaces a file in the install folder;
-- plugins load from `plugins\` in the root (`LoadPlugins` in `src/runtime/ext/plugin_loader.cpp`); they used to load from a `plugins/` directory next to the game binary;
+- the runtime is `nevr-runtime.dll`, loaded by the host `BugSplat64.dll` from the nEVR root (`nevr_host::ResolveRuntimePath` and
+  `ResolveRuntimePathFrom` in `src/runtime/host/runtime_load.cpp`: `%LOCALAPPDATA%\nevr\echovr`, and only a development build honours
+  `NEVR_ROOT`), so a runtime fix replaces a file in the root and not in the install folder;
+- plugins load from `plugins\` in the root (`LoadPlugins` in `src/runtime/ext/plugin_loader.cpp`, `nevr_root::PluginsDir`), never from the
+  game folder;
 - `config.yaml` is read from the nEVR root, or from the file `-config-file` names; the `_local` copies beside the game module are
   never read (`nevr_config_yaml::Choose` in `src/runtime/lifecycle/config_yaml_choice.h`);
-- the sign-in cache `.credentials.json` is chosen among the same `_local` directories (`SelectCredentialCacheLocation` in
-  `src/core/auth_token.h`);
-- the log and crash record are written under `%LOCALAPPDATA%\EchoVR\logs`, the original game's own folder
-  (`src/runtime/log/builtin_filter.cpp`, `src/runtime/lifecycle/crash_recovery.cpp`).
+- the sign-in cache `.credentials.json` is the root's file (`SelectCredentialCacheLocation` in `src/core/auth_token.h`, through
+  `nevr_root::CredentialsPath`), one per machine, read by clients and servers alike; without a root there is no cache;
+- the log and crash record are written under the root's `logs\` and `crashes\` (`src/core/run_log_path.h`,
+  `src/runtime/lifecycle/crash_recovery.cpp`), not under `%LOCALAPPDATA%\EchoVR\logs`, the original game's own folder.
 
-Three consequences follow. A shared zip of an install carries the owner's secrets with it (#574). Two roles on one install collide:
-a dedicated server picked up a player's token (#512). Servers and clients sign in one way, by token, from one cache
-(`SelectCredentialCacheLocation` in `src/core/auth_token.h` takes only the executable's directory). And updating the runtime or a plugin needs write access to the install folder, which is `Program Files` or a Steam
-library for many players.
+Three reasons follow for the shape. A shared zip of an install would carry the owner's secrets with it (#574). Two roles on one install
+would collide: a dedicated server picked up a player's token (#512). And updating the runtime or a plugin needs write access to the install
+folder, which is `Program Files` or a Steam library for many players.
 
-The host side already exists in the tree and is not part of the shipped DLL yet: `src/runtime/host/` holds the diagnostics, the
-minidump path, the runtime loader (`nevr_host::ResolveRuntimePath`) and the rendezvous on the game's main wrapper (ADR 0008). The
-host already writes its own files under `%LOCALAPPDATA%\nevr\echovr\{logs,crashes}`.
+The host side is in the shipped `BugSplat64.dll`: `src/runtime/host/` holds the diagnostics, the minidump path, the runtime loader
+(`nevr_host::ResolveRuntimePath`) and the rendezvous on the game's main wrapper (ADR 0008). The host writes its own files under
+`%LOCALAPPDATA%\nevr\echovr\{logs,crashes}`.
 
 ## Decision
 

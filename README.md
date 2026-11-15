@@ -239,7 +239,9 @@ On the first run the runtime moves files it finds in the old places (the previou
 ### The two DLLs
 
 **`src/runtime/host/` → `BugSplat64.dll`** (the host) and the rest of **`src/runtime/` → `nevr-runtime.dll`**
-(the runtime). Both go in the game folder.
+(the runtime). `BugSplat64.dll` goes in the game folder; `nevr-runtime.dll` goes in the nEVR folder
+(`%LOCALAPPDATA%\nevr\echovr`), where the host loads it from (`nevr_host::ResolveRuntimePath` in
+`src/runtime/host/runtime_load.cpp`).
 
 The game statically imports `BugSplat64.dll` (the original crash reporter), so
 replacing it gives the earliest possible hook point — it loads before `WinMain`.

@@ -8,8 +8,14 @@ audience: all
 # ADR 0023: the core install method: every installer verifies the signed manifest, installs what it names, and ends in a known state
 
 Status: proposed. Tracking issue: #1140. Builds on #898 (the signed manifest) and
-`docs/reference/verifying-a-release.md` (the order of checks). Slice 1 of "Order of work" is built by the pull request that
-adds this record; slices 2 to 4 are not. "What is not known" lists what no measurement in this tree covers.
+`docs/reference/verifying-a-release.md` (the order of checks). Of "Order of work", slice 1 is built (`installer/`: library, C ABI, CLI) and so is
+slice 2 on PC and Quest (`tools/package-release/install.ps1` and `tools/quest-install.{sh,ps1}` call the CLI, and
+`tools/package_release.py` ships `install-nevr-runtime.exe` in the Windows zip). In slice 3 the core reads a
+`content-pack` artifact and its `requires_stock_manifest_sha256` (`installer/src/manifest.rs`); the release-signer
+carry-forward and the changes to the three other installers are outside this tree and not established here. In slice 4 the PC
+runtime updates itself through the core (ADR 0024, `src/runtime/lifecycle/update_run.cpp`); the Quest update worker is held
+until the core is linked there (`src/quest/runtime/update_wiring.h`, `StartOutcome::kCoreNotLinked`), and layer 2 is not built.
+"What is not known" lists what no measurement in this tree covers.
 
 ## Requirement
 

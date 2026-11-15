@@ -322,11 +322,12 @@ parser in `src/runtime/lifecycle/cli.cpp`.
   `~/src/nevr-runtime-work/<agent>/`. Every build or test runs the plain recipe, with no job count, slice or MemoryMax (AGENTS.md "Builds"); wait while 2 or more `ninja` run. If no pristine
   copy exists, the run waits for a human; a runtime change is not verified until then
   (maintainers only).
-- **The scripts are writers, not launchers.** `./launch-server.sh` (repo root) deploys
-  `build/mingw-release/bin/BugSplat64.dll` and, if present, `bin/plugins/*` into
-  `$NEVR_GAME_ROOT/echovr/bin/win10` and then runs
-  `wine ./echovr.exe -server -headless -no-console`; it leaves the test DLL and any
-  plugins behind (plugins make `launch-client.sh` abort). It does **not** `unset DISPLAY`
+- **The scripts are writers, not launchers.** `./launch-server.sh` (repo root) copies
+  `build/mingw-release/bin/BugSplat64.dll` into `$NEVR_GAME_ROOT/echovr/bin/win10` and
+  `nevr-runtime.dll` and, if present, `bin/plugins/*` into the nevr root of the Wine prefix
+  (`echovr/.wineprefix/drive_c/users/<user>/AppData/Local/nevr/echovr`, `plugins\` below it), and then runs
+  `wine ./echovr.exe -server -headless -no-console`; it restores nothing and leaves the test DLLs and any
+  plugins behind (plugins and `nevr-runtime.dll` make `launch-client.sh` abort). It does **not** `unset DISPLAY`
   and does not `tee`; output goes to stdout, so under a desktop session this is a
   `DISPLAY`-SET run, not a headless one. `./verify-server.sh <run-name> [flag-set] [seconds]`
   deploys the same way, captures to files under `$NEVR_RUN_SCRATCH_ROOT`
@@ -358,8 +359,10 @@ Hash-verified against a reference tarball (not re-hashed).
 into it** (AGENTS.md "The game install"); the table below says which files are ours
 inside a throwaway COPY (maintainers only: the owner's install).
 
-- **OURS (safe to write, in a copy):** `BugSplat64.dll`, `LibOVRPlatform64_1.dll`,
-  `README.md`, `plugins/**`, `logs/**`, `*.pdb`, `*.dll.dbg`
+- **OURS (safe to write, in a copy):** in the game folder (`echovr/bin/win10`) only `BugSplat64.dll` (AGENTS.md "The game
+  folder": nothing else of ours belongs there). Everything else is in the copy's nevr root,
+  `echovr/.wineprefix/drive_c/users/<user>/AppData/Local/nevr/echovr`: `nevr-runtime.dll`, `config.yaml`, `plugins/**`,
+  `logs/**`, `crashes/**`, `.credentials.json`.
 - **NEVER TOUCH (stock game files):** `echovr.exe`, `pnsrad.dll`,
   `pnsradmatchmaking.dll`, `pnsdemo.dll`, `pnsovr.dll`, `amd_ags_x64.dll`,
   `BsSndRpt64.exe`, `BugSplatRc64.dll`, `OculusSpatializerWwise.dll`,

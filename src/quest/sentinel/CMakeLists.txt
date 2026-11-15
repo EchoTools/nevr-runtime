@@ -221,13 +221,13 @@ add_custom_command(TARGET ovrplatformloader POST_BUILD
 # ── Quest runtime library (libnevr-runtime.so) ──────────────────────────────────────────────────────
 # The runtime is what RunSentinelConstructor runs (integration/production_steps.cpp): the sentinel's sources and libraries,
 # built again as a second shared object that exports one entry point, NEVR_GetRuntimeApi (core/quest_runtime_abi.h,
-# runtime/runtime_entry.cpp). The sentinel is unchanged: it still runs its own copy in process, and nothing in this tree
-# loads libnevr-runtime.so.
+# runtime/runtime_entry.cpp). The shim (libovrplatformloader.so, this file's target above) maps it from its constructor
+# (nevr_sentinel_ctor and StartRuntime in sentinel/entry.cpp, through shim/runtime_load.cpp) and calls its initialize, which runs
+# the constructor sequence.
 #
-# It runs the sentinel's whole constructor sequence (RunSentinelConstructor, in nevr_quest_integration): sentinel::Arm, the
-# crash-first and dlopen hooks, the sentinel log writer, the hook registry (sentinel::RegistrySnapshot) and the process-end
-# hook. A process must not map it while its sentinel is armed (sentinel::Arm has run). Who owns that sequence under the
-# host-as-entry design is held.
+# It runs the sentinel's whole constructor sequence (RunSentinelConstructor, in nevr_quest_integration): the dlopen hooks, the
+# sentinel log sink, the hook registry (sentinel::RegistrySnapshot) and the process-end hook. The shim keeps what a process has
+# once: sentinel::Arm and the crash-first hooks run in the shim's constructor, and sentinel::Arm does nothing in this copy.
 #
 # The sources, libraries, include directories and compile options are read from the sentinel's target above, so the copy
 # cannot drift from it. nevr_quest_integration is the one library the sentinel gets from elsewhere

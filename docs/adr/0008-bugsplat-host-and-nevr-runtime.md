@@ -23,7 +23,7 @@ the stable file, and a runtime that fails to load takes the crash reporter with 
 
 ## Decision
 
-`BugSplat64.dll` is the stable host. `nevr-runtime.dll`, in the same directory, is the changing
+`BugSplat64.dll` is the stable host. `nevr-runtime.dll`, in the nEVR root (`%LOCALAPPDATA%\nevr\echovr`, ADR 0012), is the changing
 runtime. The two speak one versioned C ABI and nothing else crosses between them.
 
 ### The host's PE contract
@@ -200,8 +200,9 @@ validates the dump header, the faulting thread and process, and every record.
 ### Where the runtime loads from
 
 `nevr_host::ResolveRuntimePath` (`src/runtime/host/runtime_load.cpp`) is the one
-function that decides which file is the runtime: `nevr-runtime.dll` in the directory of
-`BugSplat64.dll`, loaded with `LoadLibraryExW` and the DLL-load-directory and
+function that decides which file is the runtime: `nevr-runtime.dll` in the nEVR root
+(`%LOCALAPPDATA%\nevr\echovr`, through `ResolveRuntimePathFrom`; only a development build honours
+`NEVR_ROOT`, a release build ignores it), loaded with `LoadLibraryExW` and the DLL-load-directory and
 System32 search flags. A failed runtime stays mapped: it may already have patched
 something, and unmapping live code is worse than a leaked module.
 
@@ -247,7 +248,7 @@ The shipped `BugSplat64.dll` is the host (`nevr_host`, the sources in `src/runti
 `nevr-runtime.dll` is the runtime (`nevr_runtime`, the rest of `src/runtime/`). `DllMain` and
 `NEVR_SetGameModule` call `nevr_host::OnProcessAttach` and `SetGameModule`
 (`src/runtime/host/host_entry.cpp`), which install the one detour on the wrapper. At the
-wrapper's entry the detour loads `nevr-runtime.dll` from the directory of `BugSplat64.dll`
+wrapper's entry the detour loads `nevr-runtime.dll` from the nEVR root
 (`RuntimeLoader`, `runtime_load.cpp`), calls the runtime's one rendezvous export,
 `NEVR_GetRuntimeApi`, and then `initialize` (`runtime_entry.cpp`), outside the loader lock.
 `initialize` arms `RuntimeGameMain` (`ArmGameMain`, `crash_recovery.cpp`), which holds the

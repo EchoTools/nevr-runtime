@@ -2,8 +2,9 @@
 // Quest entry point for token auth: the Android collaborators (libcurl over the system
 // CA store, the credential cache in the app-internal directory, the sign-in prompt as the
 // login-link file under the external files dir and as the game's login-error text, SystemClock)
-// wired into a Session. NOT yet called from the sentinel: the hook that hands the token to the
-// login path is gated by ADR 0003; this is the part that can be built and tested now.
+// wired into a Session. The sentinel's constructor sequence creates and starts it (production_steps.cpp,
+// QuestTokenAuth::Create), and TokenIdentitySource (integration/identity_source.h) hands its token to the login hook
+// (nevr_quest_login::TryInstallLoginHook, called from production_steps.cpp, LoginAction).
 
 #include "quest/auth/curl_http.h"
 #include "quest/auth/file_store.h"
