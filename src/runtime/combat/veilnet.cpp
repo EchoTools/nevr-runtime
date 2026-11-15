@@ -1993,12 +1993,16 @@ void EnforceLocal(const char *why) {
 
 // nEVR port: the three slot setters are the runtime's detours (patch/equipment_refire.h, #2121); this is their filter: it
 // returns the item the setter is called with, where HookedSlot<I> called through with it.
+void PickTacMod(uint64_t sym);
 uint64_t FilterSlot(int I, void *component, uint32_t idx, uint64_t item) {
     const uint64_t sys = (uint64_t)component;
     const char *what = nullptr;
     uint64_t swap = ClassicSwap(I, item, &what);
-    if (sys == g_equip_cs && (idx & 0xffff) == (*(volatile uint32_t *)(sys + 0x130) & 0xffff))
-        g_asked[I] = swap ? item : 0;              // the local player's own pick
+    const bool local = sys == g_equip_cs && (idx & 0xffff) == (*(volatile uint32_t *)(sys + 0x130) & 0xffff);
+    if (local) g_asked[I] = swap ? item : 0;     // the local player's own pick
+    // nEVR (#2242, EchoCombat 2.0.8): the platform module's profile log line is no longer the only source of the tac mod pick, so the
+    // local tac mod slot's setter gives it too; the profile line is still read (SawLog).
+    if (I == 1 && local) PickTacMod(item);
     if (swap) Log("slot %d of component %u set to %016llx: %s", I, idx & 0xffff, item, what);
     return swap ? swap : item;
 }
@@ -2208,6 +2212,13 @@ void HookSelectionLogs();
 // SawLog (in the platform module's logger hook) hands the selected tac mod to Tick here,
 // so the hook itself never logs; Tick writes the "selected:" line. One producer, one consumer.
 volatile LONG64 g_selected_pending = 0;
+
+// A tac mod put in the local player's slot (FilterSlot), or read from the profile log (SawLog): the selection the tac mod guard reads.
+void PickTacMod(uint64_t sym) {
+    if (!nevr_combat::gate::PickFromSlot(sym, ecr::Load64(g_page + ecr::kEquipSel))) return;
+    ecr::StoreSelected(g_page, sym);                                  // a new selection: re-runs allowed, then the symbol
+    InterlockedExchange64(&g_selected_pending, (LONG64)sym);         // Tick logs it
+}
 
 DWORD WINAPI Tick(LPVOID) {
     volatile LONG *uses = (volatile LONG *)(g_base + USE_COUNTER_RVA);

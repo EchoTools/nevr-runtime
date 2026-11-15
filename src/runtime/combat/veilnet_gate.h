@@ -49,4 +49,20 @@ class HelloTries {
   int unanswered_ = 0;
 };
 
+
+// The seven tac mods' symbols (EchoCombat's names; the same values as ec_rules.h's AbilitySymbol). A selection is one of these.
+inline constexpr std::uint64_t kTacModSymbols[] = {
+    0xe32dc7c9d4804fb5ull, 0xe32dc7cad6864aa4ull, 0xc8c33e48386618b6ull, 0xc8c33e4832761fbcull,
+    0x41d2d43513260b1aull, 0x41d2d4381430080cull, 0x41d2d02f1b2a1316ull,
+};
+inline bool KnownTacMod(std::uint64_t sym) {
+  for (std::uint64_t k : kTacModSymbols)
+    if (k == sym) return true;
+  return false;
+}
+
+// The local player's tac mod slot was set to `sym` (#2242, EchoCombat 2.0.8): a known tac mod that is not the selection already
+// standing (nEVR re-fires the slot setter, which would otherwise restart the selection's re-run count each time).
+inline bool PickFromSlot(std::uint64_t sym, std::uint64_t selected) { return KnownTacMod(sym) && sym != selected; }
+
 }  // namespace nevr_combat::gate

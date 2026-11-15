@@ -72,4 +72,22 @@ TEST(VeilnetGate, AnAnsweringServerIsHelloedEveryTime) {
   EXPECT_EQ(t.Next(kServerA, false), Hello::kSendAndGiveUp);
 }
 
+// The tac mod pick from the local slot (EchoCombat 2.0.8). The seven symbols are EchoCombat's own, stated here.
+TEST(VeilnetGate, TheSevenTacModsAreKnownAndNothingElseIs) {
+  constexpr std::uint64_t kSmoke = 0xe32dc7c9d4804fb5ull, kWraith = 0x41d2d02f1b2a1316ull;
+  EXPECT_TRUE(gate::KnownTacMod(kSmoke));
+  EXPECT_TRUE(gate::KnownTacMod(kWraith));
+  EXPECT_EQ(sizeof(gate::kTacModSymbols) / sizeof(gate::kTacModSymbols[0]), 7u);
+  EXPECT_FALSE(gate::KnownTacMod(0));
+  EXPECT_FALSE(gate::KnownTacMod(kPortA));
+}
+
+TEST(VeilnetGate, ASlotPickIsTakenOnlyWhenItIsANewKnownTacMod) {
+  constexpr std::uint64_t kSmoke = 0xe32dc7c9d4804fb5ull, kPoint = 0xe32dc7cad6864aa4ull;
+  EXPECT_TRUE(gate::PickFromSlot(kSmoke, 0));
+  EXPECT_FALSE(gate::PickFromSlot(kSmoke, kSmoke));   // the same one again: nEVR re-fired the setter
+  EXPECT_TRUE(gate::PickFromSlot(kPoint, kSmoke));
+  EXPECT_FALSE(gate::PickFromSlot(kPortA, 0));       // not a tac mod
+}
+
 }  // namespace
