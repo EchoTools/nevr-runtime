@@ -399,6 +399,20 @@ void QueueDeathFx(void *ctx, const Comp *sound, int nsound) {
     }
 }
 
+// The released-context check (EchoCombat 2.0.4, CtxUsable; #2242): the node's data block at +0xB0 is read before a replay, and a block
+// of 0 means the context was released first (dronekill_rules.h kCtxDataBlockOffset). The read is under EC_TRY, so a context that is not
+// mapped at all reads as released too; the replay's own write is not under a try block (the stub has no unwind table), so it must not run.
+bool CtxUsable(void *ctx) {
+    if (ctx == nullptr) return false;
+    uint64_t block = 0;
+    EC_TRY {
+        block = *reinterpret_cast<const uint64_t *>(reinterpret_cast<const uint8_t *>(ctx) + nevr_dronekill::kCtxDataBlockOffset);
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return nevr_dronekill::CtxDataBlockUsable(block);
+}
+
 // fix_drone_fx.py's spawn and sound stubs (their addresses left by the drone script) with a
 // dead drone's node context: the detonator's explosion and POINT's sound on that drone. Its
 // node state kept round each, as the translocator's dispatcher hook does.
@@ -406,6 +420,7 @@ void SpawnDeathFx(void *ctx) {
     using stub_fn = void(__fastcall *)(void *);
     auto slots = (stub_fn volatile *)((uint8_t *)GetModuleHandleW(nullptr) + DEATH_TOKEN_RVA + 0x28);
     if (!slots[0]) { LogWarning("drone explosion: no spawn stub (drone script unpatched?)"); return; }
+    if (!CtxUsable(ctx)) { LogWarning("drone explosion skipped: its node context is gone"); LogDebug("drone explosion skipped ctx=%p", ctx); return; }
     EC_TRY {
         auto state = (uint64_t *)((uint8_t *)ctx + 0x18);
         uint64_t saved = *state;
@@ -440,6 +455,7 @@ uint64_t WallOf(uint64_t ctx) {                                   // the wall's 
 
 void RunWallFx(void *ctx, uintptr_t stub) {
     using stub_fn = void(__fastcall *)(void *);
+    if (!CtxUsable(ctx)) { LogWarning("NEUTRON effect skipped: its node context is gone"); LogDebug("NEUTRON effect skipped ctx=%p", ctx); return; }
     EC_TRY {
         auto state = (uint64_t *)((uint8_t *)ctx + 0x18);
         uint64_t saved = *state;

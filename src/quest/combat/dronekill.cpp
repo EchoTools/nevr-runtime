@@ -537,6 +537,8 @@ bool EntryOk(std::uintptr_t fn, std::uint64_t offset) noexcept {
   return info(fn, &e) && EntryAt(fn, e.fname, e.fbase, ec::core::kDroneLib, offset);
 }
 
+// KNOWN-WRONG #2242: this replay has no released-context check (PC dronefix.cpp CtxUsable reads the data block at +0xB0 first and
+// skips a null one). The drone library (lib221a0a3a2e56d247.so) is not in revault, so the Quest's spawn entry is not read yet.
 // One explosion at the tick: the drone library's spawn and sound entries with the context kept at the release, its state word at +0x18
 // zeroed round each and put back after both (PC SpawnDeathFx).
 void RunExplosion(const FxCtx& f) noexcept {

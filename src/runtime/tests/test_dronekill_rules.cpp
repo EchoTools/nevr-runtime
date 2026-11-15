@@ -856,3 +856,16 @@ TEST(DroneKillRules, ExpiryWithNoDamageableOffLetsGoAt2500Ms) {
 }
 
 }  // namespace
+
+// EchoCombat 2.0.4 (acc7021, plugin/dronefix.cpp CtxUsable): a node context whose data block at +0xB0 is null is released, and a replay
+// of its node writes through that null block (echovr.exe 0x140de5210 reads [ctx+0xB0] as its block; 0x140de52d3 is mov [rbx], -1). The
+// test pins the offset and the predicate the PC replays use. KNOWN-WRONG #2242: the Quest's RunExplosion does not call this yet.
+// The offset is the one the disassembly reads (0x140de5227, MOV RBX, [RCX+0xB0]), written out here so a changed constant fails.
+constexpr std::uint64_t kSpawnNodeBlockOffset = 0xB0;  // echovr.exe 0x140de5227
+constexpr std::uint64_t kLiveDataBlock = 0x1000;       // any non-null block address: the replay runs
+TEST(DroneKillRules, ACtxWhoseDataBlockIsGoneIsNotReplayed) {
+    EXPECT_EQ(dk::kCtxDataBlockOffset, kSpawnNodeBlockOffset) << "the SpawnParticleEffect node's data block, echovr.exe 0x140de5210";
+    EXPECT_FALSE(dk::CtxDataBlockUsable(0)) << "a null block is a released context";
+    EXPECT_TRUE(dk::CtxDataBlockUsable(kLiveDataBlock)) << "a block that is there: the replay runs";
+    EXPECT_TRUE(dk::CtxDataBlockUsable(1));
+}

@@ -357,4 +357,12 @@ inline ExpiryAction OnDamageableOff(bool alive, bool open, bool haveCtx) {
 // first-system off to that thread's damageable off, and a next first-system off on that thread lets an unfinished one go.
 inline bool ExpiryLetGo(bool open, uint64_t opened, uint64_t now) { return open && now - opened >= kFxSoundHoldMs; }
 
+// The released context (EchoCombat 2.0.4, plugin/dronefix.cpp CtxUsable; #2242). A drone's explosion context is kept at its release,
+// and its node reads its data block at +0xB0 (echovr.exe 0x140de5210 `MOV RBX, [RCX+0xB0]`, then `mov [rbx], -1` at 0x140de52d3 on
+// state 0). A block of 0 is a context released before the drone died: a replay through it writes to address 0 and the game dies with
+// no BugSplat. PC reads the word under its own guard (dronefix.cpp CtxUsable) and skips the replay when this is false. KNOWN-WRONG #2242:
+// the Quest's RunExplosion (quest/combat/dronekill.cpp) does not read the word or call this yet; its drone library is not in revault.
+constexpr uint64_t kCtxDataBlockOffset = 0xB0;
+inline bool CtxDataBlockUsable(uint64_t dataBlock) { return dataBlock != 0; }
+
 }  // namespace nevr_dronekill
