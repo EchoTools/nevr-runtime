@@ -50,5 +50,5 @@ func TestThePerFrameDispatcherCallsThePinAfterTheModules(t *testing.T) {
 
 func TestThePinTickAsksTheGameForNothingWhileNoMapIsListed(t *testing.T) {
 	b := body(t, stripComments(read(t, "src/core/map_session_pin.cpp")), "void TickWith(GameAccess& game) {")
-	before(t, b, "g_view.listed.empty()", "game.Callable()")
+	before(t, b, "g_view().listed.empty()", "game.Callable()")
 }
