@@ -6,6 +6,7 @@
 // replaces and sets the session's step from the type, #1785). The Arena round length is not decided from it: round_time
 // is the game's own value unless config.yaml sets arena.round_time (lifecycle/arena_rules_hook.cpp).
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -18,6 +19,10 @@ std::optional<std::string> SetSessionGameType(std::string_view gameType);
 
 // The stored game type, or nullopt when no session has been created in this process.
 std::optional<std::string> SessionGameType();
+
+// How many session stores this process has made (0: none). Each store moves it on, so a watcher that keeps the last value it
+// read sees each new session once (VeilNet's RULES reset, #2242).
+std::uint64_t SessionGeneration();
 
 #ifdef NEVR_ARENA_ROUND_TIME_TESTING
 // Forgets the stored game type, so a test starts from a process that has seen no session.

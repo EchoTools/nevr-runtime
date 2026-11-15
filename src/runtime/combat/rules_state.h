@@ -32,6 +32,14 @@ inline constexpr std::uint32_t kStationCells = 0x14;
 inline constexpr std::uint32_t kPointRate = 0x2d;
 inline constexpr std::uint32_t kPausedShown = 0x2e;
 inline constexpr std::uint32_t kMatchLive = 0x2f;
+// The bytes a new session starts with (#2242, EchoCombat 2.0.3): LOADOUTS all, SERIES-10 ONLY off, POINT RATE and PAYLOAD SPEED
+// x1 (4 quarters), PAUSE off and nothing queued. The LOADOUTS byte is veilnet.cpp's LOADOUT_ALL, the mailbox's +11h.
+inline constexpr std::uint32_t kClassicShown = 0x11;
+inline constexpr std::uint32_t kChassisShown = 0x2C;
+inline constexpr std::uint32_t kPspeedShown = 0x31;
+inline constexpr std::uint32_t kPauseQueuedShown = 0x34;
+inline constexpr std::uint8_t kLoadoutAll = 0;
+inline constexpr std::uint8_t kRateDefault = 4;
 
 enum class Pause : std::uint8_t { kOff = 0, kOn = 1, kResuming = 2 };
 enum class Team : std::uint8_t { kBlue, kOrange };
@@ -71,5 +79,30 @@ class RulesState {
  private:
   volatile std::uint8_t* m_;
 };
+
+// Writes a new session's defaults into the mailbox at `mailbox` (game base + kMailboxRva): the four scores and T and the
+// capture time read as zero, and the shown bytes of the defaults above. Nothing else of the mailbox is touched.
+inline void ApplyDefaults(volatile std::uint8_t* mailbox) {
+  *reinterpret_cast<volatile float*>(mailbox + kBlueStartScore) = 0.0f;
+  *reinterpret_cast<volatile float*>(mailbox + kOrangeStartScore) = 0.0f;
+  *reinterpret_cast<volatile float*>(mailbox + kRoundTotal) = 0.0f;
+  *reinterpret_cast<volatile float*>(mailbox + kCaptureTime) = 0.0f;
+  mailbox[kClassicShown] = kLoadoutAll;
+  mailbox[kChassisShown] = 0;
+  mailbox[kPointRate] = kRateDefault;
+  mailbox[kPspeedShown] = kRateDefault;
+  mailbox[kPausedShown] = static_cast<std::uint8_t>(Pause::kOff);
+  mailbox[kPauseQueuedShown] = 0;
+}
+
+// VeilNet's once-per-session watch: `generation` is the session store's count (nevr_arena_round_time::SessionGeneration). True
+// when a session has been seen before and this one is another; the first session the process sees is not a new one, and no
+// session yet (generation 0) changes nothing. `seen` takes the generation.
+inline bool NewSessionSeen(std::uint64_t& seen, std::uint64_t generation) {
+  if (generation == 0 || generation == seen) return false;
+  const bool again = seen != 0;
+  seen = generation;
+  return again;
+}
 
 }  // namespace nevr_combat::rules

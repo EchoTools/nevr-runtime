@@ -766,10 +766,39 @@ void InstantCapture() {
         *(volatile float *)g_capture_time = 0.001f;
 }
 
+// Server: a new lobby session starts with the default RULES (#2242, EchoCombat 2.0.3). They live in the RULES mailbox and
+// VeilNet's own state, both kept for the life of the server process, so without this a match took the last private match's
+// POINT UNLOCK / CAPTURE TIME etc. The clients get the defaults with the next hello answers ('R' and 'G', every 2 s).
+// A map switch keeps them: its session start is the engine's, not a new session.
+void ResetRules() {
+    if (g_rules) {
+        EC_TRY {
+            nevr_combat::rules::ApplyDefaults(g_rules);
+        } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    g_classic = LOADOUT_ALL;
+    g_chassis = 0;
+    g_rate = nevr_combat::rules::kRateDefault;
+    g_pspeed = nevr_combat::rules::kRateDefault;
+    g_paused = PAUSE_OFF;
+    g_pause_queued = 0;
+    g_resume_at = 0;
+    Log("new session: RULES back to the defaults");
+}
+
+// The session store's count, read on each datagram the server takes: a new session (another kLobbySessionCreate or a legacy
+// session start, arena_round_time.h) resets the RULES once. The first session the process sees is not one (NewSessionSeen).
+void NoticeNewSession() {
+    static uint64_t seen = 0;
+    if (nevr_combat::rules::NewSessionSeen(seen, nevr_arena_round_time::SessionGeneration())) ResetRules();
+}
+
 void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
     char buf[48];
     if (g_server) {
         Remember(s, from);
+        NoticeNewSession();
         if (p.type == 'C' && !g_match_control) return;   // nEVR port: match control off (combat.match_control)
         if (p.type == 'H') {
             // nEVR port (#2333): the 'A' ("this server has EchoCombat") stays for clients of older builds only: the Quest combat
@@ -777,8 +806,8 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
             // build reads no 'A' and follows the server's lobby settings (server_features.h). It reaches a client once the sendto /
             // recvfrom hooks see the game's datagrams (#2334), and goes when no 6.17.0-era client remains.
             Send(s, from, 'A', g_medigun_on_server ? kAnswerMedigun : 0);
-            uint32_t total = g_rules_total ? *(volatile uint32_t *)g_rules_total : 0;
-            if (total) Send(s, from, 'R', total);                            // its RULES unlock / capture time
+            // its RULES unlock / capture time, 0 too: a new session's reset has to reach the clients (#2242)
+            if (g_rules_total) Send(s, from, 'R', *(volatile uint32_t *)g_rules_total);
             Send(s, from, 'G', RulesWord());                                 // its LOADOUTS / SERIES-10 ONLY
         }
         uint8_t asked_rate = (uint8_t)(p.id >> 8);   // a podium asks for a POINT RATE (the value itself)

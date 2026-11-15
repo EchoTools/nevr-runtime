@@ -2337,6 +2337,12 @@ if(BUILD_TESTING)
     target_link_libraries(test_combat_match_type PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json nevr::plugin_sdk)
     gtest_discover_tests(test_combat_match_type DISCOVERY_MODE PRE_TEST)
 
+    # #2242 (EchoCombat 2.0.3): the RULES defaults a new session starts with, and the once-per-new-session watch (runtime/combat/rules_state.h).
+    add_executable(test_veilnet_rules tests/test_veilnet_rules.cpp)
+    target_include_directories(test_veilnet_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_veilnet_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_veilnet_rules DISCOVERY_MODE PRE_TEST)
+
     # #600: the PowerBoost values his release ships, for a key config.yaml leaves out (runtime/combat/shipped_settings.h).
     add_executable(test_combat_shipped_settings tests/test_combat_shipped_settings.cpp)
     set_source_files_properties(tests/test_combat_shipped_settings.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
