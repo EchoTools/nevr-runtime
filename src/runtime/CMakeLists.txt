@@ -519,9 +519,11 @@ if(NEVR_UPDATE_CORE_ENABLED)
     VERBATIM)
   add_custom_target(nevr_install_core DEPENDS "${NEVR_INSTALL_LIB}")
   endif()
+  # The libraries the Rust std of the static library imports (`cargo rustc --print native-static-libs`; tools/internal/updatewiring checks
+  # this list against the toolchain): synchronization is WaitOnAddress/WakeByAddress*, which Rust 1.100 std uses for its locks.
   add_library(nevr_install STATIC IMPORTED GLOBAL)
   set_target_properties(nevr_install PROPERTIES IMPORTED_LOCATION "${NEVR_INSTALL_LIB}"
-    INTERFACE_LINK_LIBRARIES "bcrypt;advapi32;kernel32;ntdll;userenv;ws2_32;dbghelp")
+    INTERFACE_LINK_LIBRARIES "bcrypt;advapi32;kernel32;ntdll;userenv;ws2_32;dbghelp;synchronization")
   if(TARGET nevr_install_core)
     add_dependencies(nevr_install nevr_install_core)
   endif()
