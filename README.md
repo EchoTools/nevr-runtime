@@ -35,15 +35,18 @@ nEVR is a community project, built on other people's work and tested by the peop
 - **berg**: One of the party of three in #888: left out of the arena match once, and rejoined through a link. Tested nevr-runtime in #nevr-runtime-testing.
 - **[brysonak](https://github.com/brysonak)**: Opened #12, which changed the server log file names and added a flag to keep the old names.
 - **[chinmayee5599](https://github.com/chinmayee5599)**: Opened #510, which renamed three TCP game message symbols in `src/abi/symbols.h`.
+- **Coastermaster77**: Built a custom physics plugin on the nevr-runtime plugin template, and hosts community game servers.
 - **CyanoTex**: Tested nevr-runtime in #nevr-runtime-testing.
 - **[DC Coffey](https://www.dccoffey.com/work/echo-vr)**: Designed the invite and create-game menu (CREATE GAME and JOIN VIA CODE), which Dualgame implemented.
 - **DinkyBoi**: Reported a party of three queuing for arena with one member left out (#888), and the arm tablet's repeated "server full" message when joining a full social lobby (#889). Tested nevr-runtime in #nevr-runtime-testing.
 - **Furo**: Supporter of nevr-runtime.
+- **Grumpy**: Tested release signing on a clean Windows machine, which caught an antivirus false positive before release.
 - **MyGuyChromium**: Code contributions to nevr-runtime. Supporter of nevr-runtime.
 - **Nebula**: Reported install.ps1 failing on a PC with no D: drive (#679) and the idea that it asks for the game folder (#680), the Quest game closing at start (#758), uninstall.ps1 refusing after an update (#759) and the tablet's missing Add friend button (#775). Tested nevr-runtime in #nevr-runtime-testing.
 - **spike4887**: Tested nevr-runtime in #nevr-runtime-testing.
 - **TekEmperor**: Tested nevr-runtime in #nevr-runtime-testing.
 - **Trodd-**: Found the XInput fix that lets the spectator free cam see Xbox One and Series controllers, and brought it to the project (#877). Built the echovrce.com website. Tested nevr-runtime in #nevr-runtime-testing.
+- **Vibinator**: Reported players being split from the party in Echo Combat, and a spectator being disconnected.
 - **zebra**: One of the party of three in #888, left out of the arena match. Tested nevr-runtime in #nevr-runtime-testing.
 
 ### Thanks

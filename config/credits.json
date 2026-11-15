@@ -92,6 +92,16 @@
       ]
     },
     {
+      "name": "Coastermaster77",
+      "section": "people",
+      "headings": ["code-contributions"],
+      "link": "",
+      "what": "Built a custom physics plugin on the nevr-runtime plugin template, and hosts community game servers.",
+      "sources": [
+        "named by the project owner, 11-12"
+      ]
+    },
+    {
       "name": "CyanoTex",
       "section": "people",
       "headings": ["testers"],
@@ -180,6 +190,16 @@
       "what": "Supporter of nevr-runtime.",
       "sources": [
         "named by the project owner, 10-27"
+      ]
+    },
+    {
+      "name": "Grumpy",
+      "section": "people",
+      "headings": ["testers"],
+      "link": "",
+      "what": "Tested release signing on a clean Windows machine, which caught an antivirus false positive before release.",
+      "sources": [
+        "named by the project owner, 11-12"
       ]
     },
     {
@@ -358,6 +378,16 @@
       "sources": [
         "https://github.com/Xenomega/EchoRelay",
         "docs/reference/legacy-translator.md"
+      ]
+    },
+    {
+      "name": "Vibinator",
+      "section": "people",
+      "headings": ["testers"],
+      "link": "",
+      "what": "Reported players being split from the party in Echo Combat, and a spectator being disconnected.",
+      "sources": [
+        "named by the project owner, 11-12"
       ]
     },
     {

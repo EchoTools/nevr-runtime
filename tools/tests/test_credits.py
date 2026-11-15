@@ -28,6 +28,8 @@ THANKS = ["AvaGoosa", "Elominator", "h4ck3r210", "he_is_the_cat", "marshmallow_m
 # Everyone named as having tested in #nevr-runtime-testing (#974): the set, not an order.
 TESTERS = {"Crafter", "Nebula", "CyanoTex", "spike4887", "Trodd-", "DinkyBoi", "he_is_the_cat", "TekEmperor",
            "marshmallow-mia", "arii", "berg", "zebra"}
+# Testers the project owner named (11-12) who tested outside #nevr-runtime-testing: their entries cite the owner, not the channel.
+OWNER_NAMED_TESTERS = {"Vibinator", "Grumpy"}
 PATCHER_SOURCE = "echoApkPatch credit strings"
 TESTING_SOURCE = "tested in #nevr-runtime-testing (Discord)"
 WEBSITE_SOURCE = "echovrce.com website"
@@ -142,12 +144,12 @@ class SharedFile(unittest.TestCase):
             self.tool.ingame_groups(self.data),
             [
                 {"id": "code-contributions", "ingame": "CODE CONTRIBUTIONS",
-                 "names": ["babs", "brysonak", "chinmayee5599", "DC Coffey", "Dualgame", "Ducky", "EchoCombat",
-                           "kfc", "marshmallow-mia", "MyGuyChromium", "Xenomega"]},
+                 "names": ["babs", "brysonak", "chinmayee5599", "Coastermaster77", "DC Coffey", "Dualgame", "Ducky",
+                           "EchoCombat", "kfc", "marshmallow-mia", "MyGuyChromium", "Xenomega"]},
                 {"id": "thanks", "ingame": "THANKS", "names": THANKS},
                 {"id": "testers", "ingame": "TESTERS",
-                 "names": ["arii", "berg", "Crafter", "CyanoTex", "DinkyBoi", "he_is_the_cat", "marshmallow-mia",
-                           "Nebula", "spike4887", "TekEmperor", "Trodd-", "zebra"]},
+                 "names": ["arii", "berg", "Crafter", "CyanoTex", "DinkyBoi", "Grumpy", "he_is_the_cat",
+                           "marshmallow-mia", "Nebula", "spike4887", "TekEmperor", "Trodd-", "Vibinator", "zebra"]},
                 {"id": "supporters", "ingame": "SUPPORTERS", "names": ["Furo", "MyGuyChromium"]},
                 {"id": "special-thanks", "ingame": "SPECIAL THANKS", "names": ["Teth", "Glow", "Spritz"]},
             ],
@@ -223,12 +225,15 @@ class SharedFile(unittest.TestCase):
 
     def test_the_testers_are_exactly_these_people_each_sourced_and_said_so_in_the_readme(self):
         group = next(g for g in self.tool.ingame_groups(self.data) if g["id"] == "testers")
-        self.assertEqual(set(group["names"]), TESTERS)
-        self.assertEqual(len(group["names"]), len(TESTERS), "each tester once")
+        self.assertEqual(set(group["names"]), TESTERS | OWNER_NAMED_TESTERS)
+        self.assertEqual(len(group["names"]), len(TESTERS) + len(OWNER_NAMED_TESTERS), "each tester once")
         for name in TESTERS:
             entry = self.entry(name)
             self.assertIn(TESTING_SOURCE, entry["sources"], name)
             self.assertIn(TESTED_PHRASE, entry["what"].lower(), name)
+        for name in OWNER_NAMED_TESTERS:
+            entry = self.entry(name)
+            self.assertTrue(any(src.startswith("named by the project owner") for src in entry["sources"]), name)
         for entry in self.data["entries"]:
             if "testers" not in entry["headings"]:
                 self.assertNotIn(TESTED_PHRASE, entry["what"].lower(), f"{entry['name']} is not named as a tester")
@@ -541,9 +546,9 @@ class IngameText(unittest.TestCase):
         # Rows of up to four names, three spaces apart, filled in file order up to 64 bytes.
         expected = (
             "CODE CONTRIBUTIONS\n\n"
-            "babs   brysonak   chinmayee5599   DC Coffey\n"
-            "Dualgame   Ducky   EchoCombat   kfc\n"
-            "marshmallow-mia   MyGuyChromium   Xenomega\n"
+            "babs   brysonak   chinmayee5599   Coastermaster77\n"
+            "DC Coffey   Dualgame   Ducky   EchoCombat\n"
+            "kfc   marshmallow-mia   MyGuyChromium   Xenomega\n"
             "\n\n\n"
             "THANKS\n\n"
             "AvaGoosa   Elominator   h4ck3r210   he_is_the_cat\n"
@@ -551,8 +556,9 @@ class IngameText(unittest.TestCase):
             "\n\n\n"
             "TESTERS\n\n"
             "arii   berg   Crafter   CyanoTex\n"
-            "DinkyBoi   he_is_the_cat   marshmallow-mia   Nebula\n"
-            "spike4887   TekEmperor   Trodd-   zebra\n"
+            "DinkyBoi   Grumpy   he_is_the_cat   marshmallow-mia\n"
+            "Nebula   spike4887   TekEmperor   Trodd-\n"
+            "Vibinator   zebra\n"
             "\n\n\n"
             "SUPPORTERS\n\n"
             "Furo   MyGuyChromium\n"
@@ -562,8 +568,8 @@ class IngameText(unittest.TestCase):
             "\n\n\n"
         )
         self.assertEqual(self.tool.ingame_text(self.data), expected.encode("cp1252"))
-        self.assertTrue(expected.startswith("CODE CONTRIBUTIONS\n\nbabs   brysonak   chinmayee5599   DC Coffey\n"))
-        self.assertEqual(expected.count("\n"), 35, "rows: 3 + 2 + 3 + 1 + 1 for the five groups; 8 + 7 + 8 + 6 + 6 lines")
+        self.assertTrue(expected.startswith("CODE CONTRIBUTIONS\n\nbabs   brysonak   chinmayee5599   Coastermaster77\n"))
+        self.assertEqual(expected.count("\n"), 36, "rows: 3 + 2 + 4 + 1 + 1 for the five groups; 8 + 7 + 9 + 6 + 6 lines")
 
     def test_groups_are_separated_by_three_blank_lines(self):
         data = self.data_with({"ONE": ["a", "b"], "TWO": ["c"]})
