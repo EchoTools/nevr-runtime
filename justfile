@@ -73,7 +73,7 @@ worktree-setup:
 install-hooks:
     tools/install-git-hooks.sh
 
-# Land this worktree's branch on origin's main, one lander at a time: lock, fetch, rebase, rerun each --test, push the tip to refs/heads/main never forced, record main before and after (tools/cmd/land; AGENTS.md "Landing")
+# Land this worktree's branch on origin's main, one lander at a time: refuse unless -review <report> holds "Verdict: MERGE <HEAD's sha>", lock, fetch, rebase, rerun each --test, add the Reviewed-by-report trailer, push the tip to refs/heads/main never forced, record main before and after (tools/cmd/land; AGENTS.md "Landing"). Usage: just land -review <report> -test 'just test-changed'
 [positional-arguments]
 land *args: go-tools
     build/go-tools/land "$@"

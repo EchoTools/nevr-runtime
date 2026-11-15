@@ -485,7 +485,11 @@ no primer at all, because it launders a stale fact into a confident report.
 
 ## Required format
 
-End every report with this section. Never omit it.
+End every report with this section. Never omit it. A review report (AGENTS.md "Review in a fresh context before
+landing") goes to the file the dispatch names, and after this section its last line is the verdict, alone on its line,
+`Verdict: MERGE <sha>` or `Verdict: FIX <sha>`, `<sha>` the full 40-hex sha of the commit reviewed (`git rev-parse HEAD`
+in the worktree reviewed). It is the only line of the report that starts `Verdict: `: `just land -review <file>` reads
+that one line, wherever it is, and refuses a report with none or more than one.
 
 ```
 ## PRIMER DRIFT
