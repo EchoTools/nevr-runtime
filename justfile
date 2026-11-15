@@ -784,7 +784,15 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     python3 tools/package_release.py quest-library --lib "$out/loader/libovrplatformloader.so" --version "$ver" --commit "$tag_commit"
     # The variant word names the APK to the sentinel (stamped by the repack, docs/adr/0040 rule 1): empty for the release APK. No APK
     # carries a plugin library (the plugin argument is empty): the combat modules are the sentinel's own (src/quest/combat/).
-    just android-repack-apk "$base" "$out/loader/libovrplatformloader.so" "$out/repack" "" "$ver" "" "" "" "" "" "$pack" "$pack_meta" "$libs" "$variant"
+    # The baseline runtime the shim maps at start (quest-update piece shim-loads-baseline) is not a release asset: it is the sentinel's own
+    # libnevr-runtime.so from this checkout's build, which the HEAD == tag check above makes the tag's commit. The recipe compiles nothing, so it
+    # is built at the tag beforehand, and the repack's stage-runtime refuses an empty file.
+    runtime="build/android-arm64/sentinel/libnevr-runtime.so"
+    [ -s "$runtime" ] || { echo "$label: baseline runtime not found (build the Quest sentinel at $tag first): $runtime" >&2; exit 1; }
+    # The runtime's own NEVR-BUILD literal (core/build_identity.h) must name exactly this release and this commit: a local build is stamped
+    # -dev, and a dev runtime never self-updates (src/quest/runtime/runtime_entry.cpp), so it must not ship as the release's.
+    LC_ALL=C grep -aqP "\x00NEVR-BUILD ${ver//./\\.} ${tag_commit}\x00" "$runtime" || { echo "$label: $runtime does not carry the identity NEVR-BUILD $ver $tag_commit (a release-stamped build of the tag is required, not a development build)" >&2; exit 1; }
+    just android-repack-apk "$base" "$out/loader/libovrplatformloader.so" "$out/repack" "" "$ver" "" "" "" "" "" "$pack" "$pack_meta" "$libs" "$variant" "$PWD/$runtime"
     python3 -I tools/quest_release_loader.py verify-apk --apk "$out/repack/r15_nevr-sentinel_signed.apk" --sha256 "$loader_sha"
     if [ -z "$variant" ]; then
         python3 -I tools/quest_release_base.py check-release --apk "$out/repack/r15_nevr-sentinel_signed.apk" --base "$base" >&2

@@ -79,8 +79,19 @@ class ReleaseQuestApk(unittest.TestCase):
                 calls.append((number, shlex.split(stripped)[2:]))
         self.assertGreaterEqual(len(calls), 4, "package-dev's _quest-apk, the autopilot APK, the store variant and the release body")
         for number, args in calls:
-            self.assertEqual(len(args), 14, f"justfile:{number} passes {len(args)} of the repack's 14 arguments: {args}")
+            self.assertIn(len(args), (14, 15), f"justfile:{number} passes {len(args)} of the repack's 14 arguments (15 with `runtime`): {args}")
             self.assertIn(args[13], ("", "$variant"), f"justfile:{number} passes the variant word {args[13]!r}")
+
+    def test_the_release_repack_is_given_the_baseline_runtime_and_refuses_without_it(self):
+        """The shim maps libnevr-runtime.so from the APK, and the repack's stage-runtime refuses without one. The release asset is the
+        loader alone, so the recipe passes the checkout's built runtime as the repack's last parameter (`runtime`)."""
+        body = recipe("_release-quest-apk")
+        repack = next(line for line in body.splitlines() if line.strip().startswith("just android-repack-apk "))
+        args = shlex.split(repack.strip())[2:]
+        self.assertEqual(len(args), 15, f"the release repack passes {len(args)} arguments, the 15th being the runtime: {args}")
+        self.assertEqual(args[14], "$PWD/$runtime")
+        self.assertIn('runtime="build/android-arm64/sentinel/libnevr-runtime.so"', body)
+        self.assertLess(body.index('[ -s "$runtime" ]'), body.index("just android-repack-apk"))
 
     def test_package_dev_and_the_release_share_one_quest_build(self):
         self.assertIn('just _quest-apk "{{ store_apk }}"', recipe("package-dev"))
@@ -123,16 +134,17 @@ if a[0] == "prepare":
     out.write_bytes(b"reference base")
 """
 # The repack recipe with the same parameters as the real one, writing a "signed APK" that shows what it was given.
-STUB_REPACK = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="":
+STUB_REPACK = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="" runtime="":
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{ workdir }}"
     echo "{{ variant }}" >> "$VARIANTS"
+    echo "{{ runtime }}" >> "$RUNTIMES"
     echo "repack apk={{ apk }} shim={{ shim }} workdir={{ workdir }} plugin={{ plugin }} version={{ version }}" >> "$CALLS"
     printf 'signed plugin=[%s] version=%s' "{{ plugin }}" "{{ version }}" > "{{ workdir }}/r15_nevr-sentinel_signed.apk"
 """
 # The same recipe with the parameters the real one has since the bundled pack (docs/adr/0029-quest-bundled-content-pack.md).
-STUB_REPACK_PACK = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="":
+STUB_REPACK_PACK = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="" runtime="":
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{ workdir }}"
@@ -151,7 +163,7 @@ STUB_Q15T_TRAP = """build-quest-q15t:
 # The old call shape, `<tag> <plugins> <store>`: a plugin library passed in.
 PLUGINS = "/priv/libq15t.so:/priv/other.so"
 # The repack with the script-library parameter (M5): it records the library directory it was given.
-STUB_REPACK_LIBS = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="":
+STUB_REPACK_LIBS = """android-repack-apk apk shim="s" workdir="w" plugin="" version="" extra_rows="" patcher="" json_include="" plugin_early="" plugin_off="" pack="" pack_meta="" extra_libs="" variant="" runtime="":
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{ workdir }}"
@@ -172,6 +184,9 @@ class RecipesRun(unittest.TestCase):
         (self.dir / "tools").mkdir(parents=True)
         self.calls = pathlib.Path(self.tmp.name) / "calls.log"
         self.variants = pathlib.Path(self.tmp.name) / "variants.log"  # the variant word each repack was given, one line each
+        self.runtimes = pathlib.Path(self.tmp.name) / "runtimes.log"  # the baseline runtime path each repack was given, one line each
+        self.runtime_built = self.dir / "build" / "android-arm64" / "sentinel" / "libnevr-runtime.so"
+        self.runtime_built.parent.mkdir(parents=True)
         self.store = pathlib.Path(self.tmp.name) / "store.apk"
         self.store.write_bytes(b"store")
         texts = [recipe(name) for name in ("release-quest-apk", "release-quest-reference-apk", "release-quest-variant-apk",
@@ -189,9 +204,11 @@ class RecipesRun(unittest.TestCase):
         for argv in (["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "x"], ["tag", "v1.2.3"]):
             subprocess.run([*git, *argv], check=True, capture_output=True)
         self.head = subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+        self.identity = b"\x00NEVR-BUILD 1.2.3 " + self.head.encode() + b"\x00"  # the runtime's literal (core/build_identity.h)
+        self.runtime_built.write_bytes(b"baseline runtime built at the tag" + self.identity)
 
     def just(self, *args, **extra_env):
-        env = {**os.environ, "CALLS": str(self.calls), "VARIANTS": str(self.variants), **extra_env}
+        env = {**os.environ, "CALLS": str(self.calls), "VARIANTS": str(self.variants), "RUNTIMES": str(self.runtimes), **extra_env}
         return subprocess.run(["just", *args], cwd=self.dir, capture_output=True, text=True, env=env)
 
     def variants_given(self):
@@ -239,6 +256,29 @@ class RecipesRun(unittest.TestCase):
         for combat in ("nevr-runtime-v1.2.3-quest.apk", "combat", "variant", "base"):
             self.assertFalse((release / combat).exists(), f"{combat} is written only by a recipe asked for by name")
         self.assertIn("release-quest-apk: build/quest-release/v1.2.3/arena/" + name, result.stderr)
+
+    def test_the_repack_is_given_the_built_runtime_and_a_missing_one_stops_the_recipe_before_it(self):
+        result = self.release()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.runtimes.read_text().splitlines(), [str(self.runtime_built)])
+        self.runtime_built.unlink()
+        self.runtimes.unlink()
+        again = self.release()
+        self.assertNotEqual(again.returncode, 0)
+        self.assertIn("baseline runtime not found", again.stderr)
+        self.assertFalse(self.runtimes.exists(), "the repack ran without a runtime")
+
+    def test_a_runtime_not_stamped_with_this_release_and_commit_is_refused_before_the_repack(self):
+        for name, blob in (("a development build", b"\x00NEVR-BUILD 1.2.3-dev.4+abc1234 " + self.head.encode() + b"\x00"),
+                           ("another commit", b"\x00NEVR-BUILD 1.2.3 " + b"0" * 40 + b"\x00"),
+                           ("another release", b"\x00NEVR-BUILD 1.2.30 " + self.head.encode() + b"\x00"),
+                           ("no identity", b"baseline runtime")):
+            with self.subTest(name):
+                self.runtime_built.write_bytes(blob)
+                result = self.release()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"does not carry the identity NEVR-BUILD 1.2.3 {self.head}", result.stderr)
+                self.assertFalse(self.runtimes.exists(), "the repack ran with a runtime of the wrong identity")
 
     def test_the_default_recipe_writes_nothing_when_check_arena_refuses(self):
         result = self.default(FAIL_BASE="check-arena")
