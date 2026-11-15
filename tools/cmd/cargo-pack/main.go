@@ -18,7 +18,9 @@
 // frame>, and one entry. The frame states its content size, carries no checksum and has a window of at most -max-window
 // (the stock chunks' largest window; cargo-extract prints it as stock_frames.max_window). The manifest is written only as the
 // zstd frame <out>/manifest.json.zst, which cargo-publish sends. A duplicate (platform, type, name), a non-power-of-two
-// alignment or one above 4096, or an empty file is refused and nothing is written.
+// alignment or one above 4096 is refused and nothing is written. A file of 0 bytes is not a frame: it is the record's entry in
+// its label's `empty` list (type, name, platform and alignment, no object), the same as a record of 0 bytes in a content pack;
+// it has no stock_size, which an empty record does not carry.
 //
 // Exit codes: 0 done; 1 refused; 2 usage; 74 the run log failed (internal/runlog).
 package main
@@ -291,9 +293,6 @@ func specRecords(specPath string) ([]record, error) {
 		data, err := os.ReadFile(filepath.Join(base, e.File))
 		if err != nil {
 			return nil, err
-		}
-		if len(data) == 0 {
-			return nil, fmt.Errorf("%s is empty: a record of 0 bytes belongs in its label's empty list", e.File)
 		}
 		recs = append(recs, record{label: e.Label, platform: e.Platform, typ: e.Type, name: e.Name, align: e.Align, data: data,
 			stockSize: e.StockSize, source: e.File})
