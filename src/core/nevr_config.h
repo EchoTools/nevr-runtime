@@ -183,6 +183,8 @@ class NevrConfig {
   /// plugin (#1857: the loader keeps list order and two entries may share a name), and `name` is the name it read there, so a
   /// config.yaml that changed in between cannot make the write land on another plugin: the entry's `name` is compared as the
   /// loader reads it (the first `name` scalar, `${VAR}` references resolved) and a mismatch, or an entry with no name, is refused.
+  /// An existing `enabled:` is judged as the loader reads it (true/yes/on/1 and false/no/off/0, any other word enabled), not as YAML
+  /// 1.1 does: `enabled: n` is already on, so asking for on writes nothing and asking for off writes `false`.
   /// On success the loaded `Plugins()[index].enabled` follows the file when that entry is still the plugin `name`; the same lock
   /// as Set covers the whole edit. Never throws.
   ///

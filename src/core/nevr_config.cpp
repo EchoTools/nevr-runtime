@@ -525,6 +525,8 @@ struct NevrConfig::ScalarEdit {
   std::string text;
   bool isBool = false;
   bool boolValue = false;
+  // The bool is a plugin entry's `enabled`: it reads as the loader reads it (ParseBool, anything else enabled), not as yaml-cpp's table does.
+  bool readsAsLoaderEnabled = false;
 };
 
 namespace {
@@ -555,6 +557,7 @@ bool IsPlainWord(const std::string& word) {
 bool ScalarMatches(const YAML::Node& node, const ScalarEdit& edit) {
   if (!node.IsDefined() || !node.IsScalar()) return false;
   if (!edit.isBool) return node.Scalar() == edit.text;
+  if (edit.readsAsLoaderEnabled) return ParseBool(node.Scalar()).value_or(true) == edit.boolValue;
   bool got = false;
   return YAML::convert<bool>::decode(node, got) && got == edit.boolValue;
 }
@@ -780,7 +783,14 @@ Splice SpliceScalar(const std::string* existing, const std::string& section, con
   return result;
 }
 
-// Whether `text` still holds `entryCount` plugin entries and `plugins[index]` reads `enabled` as the edit says.
+// Whether the loader (ParsePlugins) reads this plugin entry as enabled: its `enabled` scalar through ParseBool, enabled when it is
+// absent, not a scalar, or not a boolean word.
+bool LoaderReadsEnabled(const YAML::Node& entry) {
+  const YAML::Node enabledNode = ChildByKey(entry, kEnabledKey);
+  return !enabledNode.IsScalar() || ParseBool(enabledNode.Scalar()).value_or(true);
+}
+
+// Whether `text` still holds `entryCount` plugin entries and the loader reads `plugins[index]` as enabled or not as the edit says.
 bool EnabledReadsBack(const std::string& text, std::size_t index, std::size_t entryCount, const ScalarEdit& edit) {
   try {
     const std::vector<YAML::Node> docs = YAML::LoadAll(text);
@@ -790,7 +800,7 @@ bool EnabledReadsBack(const std::string& text, std::size_t index, std::size_t en
     if (!list.IsDefined() || !list.IsSequence() || list.size() != entryCount || index >= list.size()) return false;
     const YAML::Node entry = list[index];
     if (!entry.IsMap()) return false;
-    return ScalarMatches(static_cast<const YAML::Node&>(entry)[kEnabledKey], edit);
+    return LoaderReadsEnabled(entry) == edit.boolValue;
   } catch (const YAML::Exception&) {
     return false;
   }
@@ -879,6 +889,7 @@ Splice SpliceEnabled(const std::string* existing, std::size_t index, const std::
   edit.text = BoolText(enabled);
   edit.isBool = true;
   edit.boolValue = enabled;
+  edit.readsAsLoaderEnabled = true;
 
   const std::vector<std::size_t> starts = LineStarts(text);
   std::vector<std::pair<YAML::Node, YAML::Node>> hits;

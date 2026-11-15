@@ -963,3 +963,50 @@ TEST(NevrConfigSetPlugin, AnEntryTooDeepOrTooWideToScanIsRefused) {
     EXPECT_EQ(Read(dir.File()), text);
   }
 }
+
+// The loader reads `enabled` through ParseBool (true/yes/on/1 and false/no/off/0, anything else null) and then defaults to enabled,
+// where yaml-cpp's own table reads `n` as false. SetPluginEnabled answers to the loader: what the file says is what the loader reads.
+TEST(NevrConfigSetPlugin, AWordTheLoaderReadsAsEnabledIsTurnedOffByWritingFalse) {
+  Dir dir;
+  Write(dir.File(), "plugins:\n  - name: a\n    enabled: n\n");
+  ASSERT_TRUE(nevr::NevrConfig::LoadFromFile(dir.File()).Plugins()[kAlpha].enabled) << "the loader reads `n` as enabled";
+  const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, false);
+  ASSERT_TRUE(r.ok) << r.reason;
+  EXPECT_TRUE(r.wrote);
+  EXPECT_EQ(Read(dir.File()), "plugins:\n  - name: a\n    enabled: false\n");
+  EXPECT_FALSE(nevr::NevrConfig::LoadFromFile(dir.File()).Plugins()[kAlpha].enabled);
+}
+
+TEST(NevrConfigSetPlugin, AWordTheLoaderReadsAsEnabledIsAlreadyOn) {
+  for (const char* const word : {"n", "N", "maybe"}) {
+    Dir dir;
+    const std::string before = std::string("plugins:\n  - name: a\n    enabled: ") + word + "\n";
+    Write(dir.File(), before);
+    const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, true);
+    EXPECT_TRUE(r.ok) << word << ": " << r.reason;
+    EXPECT_FALSE(r.wrote) << word;
+    EXPECT_EQ(Read(dir.File()), before) << word;
+  }
+}
+
+TEST(NevrConfigSetPlugin, AWordTheLoaderReadsAsDisabledIsTurnedOn) {
+  for (const char* const word : {"no", "off", "0", "False"}) {
+    Dir dir;
+    Write(dir.File(), std::string("plugins:\n  - name: a\n    enabled: ") + word + "\n");
+    const nevr::ConfigSetResult r = SetPluginOn(dir.File(), kAlpha, kNameA, true);
+    ASSERT_TRUE(r.ok) << word << ": " << r.reason;
+    EXPECT_TRUE(r.wrote) << word;
+    EXPECT_EQ(Read(dir.File()), "plugins:\n  - name: a\n    enabled: true\n") << word;
+  }
+}
+
+// `Set` keeps yaml-cpp's table for a section key: `n` there reads false and a request for false is a no-op.
+TEST(NevrConfigSetPlugin, SetOnASectionKeyStillUsesTheYamlTable) {
+  Dir dir;
+  const std::string before = "graphics:\n  hand_flip: n\n";
+  Write(dir.File(), before);
+  const nevr::ConfigSetResult r = SetOn(dir.File(), false);
+  EXPECT_TRUE(r.ok) << r.reason;
+  EXPECT_FALSE(r.wrote);
+  EXPECT_EQ(Read(dir.File()), before);
+}
