@@ -132,7 +132,7 @@ func TestMergeKeepsBaseLabelsFirstAndByteIdentical(t *testing.T) {
 	if want, got := rawLabel(t, baseText, baseLabel), rawLabel(t, mergedText, baseLabel); !bytes.Equal(want, got) {
 		t.Fatalf("lobby_posters changed: %d bytes became %d", len(want), len(got))
 	}
-	if order := labelOrder(t, mergedText); len(order) != 2 || order[0] != baseLabel || order[1] != combatLabel {
+	if order := labelOrder(t, mergedText); len(order) != mergedLabelCount || order[0] != baseLabel || order[1] != combatLabel {
 		t.Fatalf("label order = %v, want [%s %s]", order, baseLabel, combatLabel)
 	}
 	if !bytes.Contains(mergedText, []byte(`"labels":{"`+baseLabel+`":`)) {
@@ -200,7 +200,7 @@ func TestMergeRefusesAShaMismatchOnEitherInput(t *testing.T) {
 	}
 	// A changed byte inside the frame is refused by its hash, before anything is decoded.
 	flipped := append([]byte(nil), add...)
-	flipped[len(flipped)/2] ^= 0xff
+	flipped[len(flipped)/halfDivisor] ^= corruptMask
 	if _, err := merge(base, prodSha, flipped, combatSha); err == nil {
 		t.Error("a changed frame was merged")
 	}
@@ -302,5 +302,143 @@ func TestMergedFrameStatesItsContentSize(t *testing.T) {
 	}
 	if !h.SingleSegment {
 		t.Error("the frame is not single-segment: its window is not its content")
+	}
+}
+
+const (
+	// scriptImageType is the type of the 22 script-image records of the combat label: third-party compiled script DLLs,
+	// which nevr-runtime does not serve (the production manifest does not carry them).
+	scriptImageType = "0x06eace9f64204fd0"
+	// mergedLabelCount is the number of labels the merged manifest holds: lobby_posters and combat_content.
+	mergedLabelCount = 2
+	// excludedTypeCount is the number of types the repeatable -exclude-type test names.
+	excludedTypeCount = 2
+	// corruptMask flips every bit of the byte the corruption test changes; halfDivisor locates the middle of a frame.
+	corruptMask = 0xff
+	halfDivisor = 2
+	// scriptImageEntries is how many entries of that type the combat manifest holds (counted from the data).
+	scriptImageEntries = 22
+	// combatEntriesWithoutScripts is combatEntries less the script images.
+	combatEntriesWithoutScripts = 3655
+)
+
+// entryTypes lists the type of each entry of a label in a merged text.
+func entryTypes(t *testing.T, text []byte, label string) map[string]int {
+	t.Helper()
+	var doc struct {
+		Labels map[string]struct {
+			Entries []struct {
+				Type string `json:"type"`
+			} `json:"entries"`
+		} `json:"labels"`
+	}
+	if err := json.Unmarshal(text, &doc); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]int{}
+	for _, e := range doc.Labels[label].Entries {
+		out[e.Type]++
+	}
+	return out
+}
+
+func TestExcludeTypeDropsItsEntriesFromTheMergedLabel(t *testing.T) {
+	t.Parallel()
+	res, err := mergeExcluding(readFile(t, prodFile), prodSha, readFile(t, combatFile), combatSha, []string{scriptImageType})
+	if err != nil {
+		t.Fatal(err)
+	}
+	types := entryTypes(t, textOf(t, res.Frame), combatLabel)
+	if n := types[scriptImageType]; n != 0 {
+		t.Errorf("%d entries of the excluded type remain", n)
+	}
+	total := 0
+	for _, n := range types {
+		total += n
+	}
+	if total != combatEntriesWithoutScripts {
+		t.Errorf("combat_content holds %d entries, want %d", total, combatEntriesWithoutScripts)
+	}
+	if res.Dropped[scriptImageType] != scriptImageEntries {
+		t.Errorf("dropped %d of type %s, want %d", res.Dropped[scriptImageType], scriptImageType, scriptImageEntries)
+	}
+	if len(res.Dropped) != 1 {
+		t.Errorf("dropped has %d types, want 1: %v", len(res.Dropped), res.Dropped)
+	}
+	// The empties of the label are records of 0 bytes, not entries: the exclusion leaves them.
+	var doc struct {
+		Labels map[string]struct {
+			Empty []json.RawMessage `json:"empty"`
+		} `json:"labels"`
+	}
+	if err := json.Unmarshal(textOf(t, res.Frame), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Labels[combatLabel].Empty) != combatEmpties {
+		t.Errorf("combat_content holds %d empties, want %d", len(doc.Labels[combatLabel].Empty), combatEmpties)
+	}
+}
+
+func TestExcludeTypeLeavesTheBaseLabelAlone(t *testing.T) {
+	t.Parallel()
+	baseFrame := readFile(t, prodFile)
+	// 0x489bb35d53ca50e9 is the Quest payload type of lobby_posters: the exclusion is for the merged-in label only.
+	res, err := mergeExcluding(baseFrame, prodSha, readFile(t, combatFile), combatSha, []string{"0x489bb35d53ca50e9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want, got := rawLabel(t, textOf(t, baseFrame), baseLabel), rawLabel(t, textOf(t, res.Frame), baseLabel); !bytes.Equal(want, got) {
+		t.Fatal("the base label changed under an exclusion")
+	}
+	if res.Dropped["0x489bb35d53ca50e9"] != 0 {
+		t.Errorf("an exclusion dropped %d base entries", res.Dropped["0x489bb35d53ca50e9"])
+	}
+	// The base's report still counts every base entry, of the excluded type or not.
+	if res.Labels[0].Name != baseLabel || res.Labels[0].Entries != baseLabelEntries {
+		t.Errorf("base report = %+v, want %d entries", res.Labels[0], baseLabelEntries)
+	}
+}
+
+func TestExcludeTypeIsRepeatableAndCountsEveryTypeNamed(t *testing.T) {
+	t.Parallel()
+	absent := "0x0000000000000001"
+	res, err := mergeExcluding(readFile(t, prodFile), prodSha, readFile(t, combatFile), combatSha, []string{scriptImageType, absent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Dropped[scriptImageType] != scriptImageEntries || res.Dropped[absent] != 0 || len(res.Dropped) != excludedTypeCount {
+		t.Errorf("dropped = %v, want %s: %d and %s: 0", res.Dropped, scriptImageType, scriptImageEntries, absent)
+	}
+}
+
+func TestRunPrintsTheDroppedCountsPerType(t *testing.T) {
+	t.Parallel()
+	out := filepath.Join(t.TempDir(), "merged")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-base", prodFile, "-base-sha256", prodSha, "-add", combatFile, "-add-sha256", combatSha,
+		"-exclude-type", scriptImageType, "-out", out}, &stdout, &stderr, quiet())
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	var sum struct {
+		Dropped map[string]int `json:"dropped"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sum); err != nil {
+		t.Fatalf("stdout %q: %v", stdout.String(), err)
+	}
+	if sum.Dropped[scriptImageType] != scriptImageEntries {
+		t.Errorf("printed dropped = %v, want %d of %s", sum.Dropped, scriptImageEntries, scriptImageType)
+	}
+}
+
+func TestExcludeTypeRefusesAMalformedType(t *testing.T) {
+	t.Parallel()
+	for _, bad := range []string{"0x06eace9f64204fd", "06eace9f64204fd0", "0x06EACE9F64204FD0", "0x06eace9f64204fd0x"} {
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"-base", prodFile, "-base-sha256", prodSha, "-add", combatFile, "-add-sha256", combatSha,
+			"-exclude-type", bad, "-out", t.TempDir()}, &stdout, &stderr, quiet())
+		if code != exitUsage {
+			t.Errorf("-exclude-type %q: exit %d, want %d", bad, code, exitUsage)
+		}
 	}
 }

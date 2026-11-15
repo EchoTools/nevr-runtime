@@ -31,6 +31,11 @@ import (
 const (
 	setA = "48037dc70b0ecab2"
 	setB = "2b47aab238f60515"
+	// gameEntries is the number of entries of the game label the fixture's whole-game set holds.
+	gameEntries = 7
+	// emptyAlign is the alignment of the fixture's record of 0 bytes; emptyAlignSmall is the alignment of the one a case adds.
+	emptyAlign      = 16
+	emptyAlignSmall = 4
 )
 
 type res struct {
@@ -237,7 +242,7 @@ func TestExtractThenVerifyPasses(t *testing.T) {
 		t.Errorf("manifest = %+v", doc)
 	}
 	entries := doc.Labels["game"].Entries
-	if len(entries) != 7 || len(doc.Labels["game"].Empty) != 1 || doc.Labels["game"].Empty[0] != (emptyDoc{Platform: "windows-x86_64", Type: "0x0000000000000020", Name: "0x0000000000000001", Align: 16}) || len(doc.Empty) != 0 {
+	if len(entries) != gameEntries || len(doc.Labels["game"].Empty) != 1 || doc.Labels["game"].Empty[0] != (emptyDoc{Platform: "windows-x86_64", Type: "0x0000000000000020", Name: "0x0000000000000001", Align: emptyAlign}) || len(doc.Empty) != 0 {
 		t.Fatalf("%d entries, label empty = %+v, top-level empty = %+v", len(entries), doc.Labels["game"].Empty, doc.Empty)
 	}
 	want := map[string][]byte{}
@@ -349,7 +354,7 @@ func TestEmptyRecordsAreListedAndNotStored(t *testing.T) {
 			t.Errorf("the empty record is an entry: %+v", e)
 		}
 	}
-	if len(doc.Labels["game"].Empty) != sum.ZeroByteRecords || doc.Labels["game"].Empty[0].Align != 16 || len(doc.Empty) != 0 {
+	if len(doc.Labels["game"].Empty) != sum.ZeroByteRecords || doc.Labels["game"].Empty[0].Align != emptyAlign || len(doc.Empty) != 0 {
 		t.Errorf("label empty = %+v, top-level empty = %+v", doc.Labels["game"].Empty, doc.Empty)
 	}
 }
@@ -773,13 +778,13 @@ func TestVerifyNamesTheFirstDifference(t *testing.T) {
 		}, "the manifest lists it twice"},
 		{"a record of bytes listed as empty", func(t *testing.T, _, out string, doc manifestDoc) {
 			l := doc.Labels["game"]
-			l.Empty = append(l.Empty, emptyDoc{Platform: "windows-x86_64", Type: "0x0000000000000040", Name: "0x0000000000000001", Align: 4})
+			l.Empty = append(l.Empty, emptyDoc{Platform: "windows-x86_64", Type: "0x0000000000000040", Name: "0x0000000000000001", Align: emptyAlignSmall})
 			l.Entries = append(l.Entries[:find(doc, "0x0000000000000040", "0x0000000000000001")], l.Entries[find(doc, "0x0000000000000040", "0x0000000000000001")+1:]...)
 			doc.Labels["game"] = l
 			writeDoc(t, out, doc)
 		}, "it is listed as empty with alignment 4, the stock record is 50 bytes"},
 		{"a record of 0 bytes left in the top-level empty list", func(t *testing.T, _, out string, doc manifestDoc) {
-			doc.Empty = append(doc.Empty, emptyDoc{Platform: "windows-x86_64", Type: "0x0000000000000040", Name: "0x0000000000000001", Align: 4})
+			doc.Empty = append(doc.Empty, emptyDoc{Platform: "windows-x86_64", Type: "0x0000000000000040", Name: "0x0000000000000001", Align: emptyAlignSmall})
 			writeDoc(t, out, doc)
 		}, "they belong under their label"},
 	}

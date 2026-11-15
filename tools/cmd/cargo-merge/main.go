@@ -32,6 +32,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/klauspost/compress/zstd"
 
@@ -43,6 +44,7 @@ const (
 	schemaVersion = 1
 	manifestName  = "manifest.json.zst"
 	sha256HexLen  = 2 * sha256.Size
+	typeHexDigits = 16 // a type is 0x and 16 lower-case hex digits (cdn_format.h ParseHex64)
 	exitRefused   = 1
 	exitUsage     = 2
 	dirPerm       = 0o755
@@ -54,7 +56,23 @@ const (
 	keyEmpty      = "empty"
 )
 
-var hexSha = regexp.MustCompile(fmt.Sprintf("^[0-9a-f]{%d}$", sha256HexLen))
+var (
+	hexSha = regexp.MustCompile(fmt.Sprintf("^[0-9a-f]{%d}$", sha256HexLen))
+	typeRe = regexp.MustCompile(fmt.Sprintf("^0x[0-9a-f]{%d}$", typeHexDigits))
+)
+
+// excludeTypes is the repeatable -exclude-type flag: each value is a type that is dropped from the added label.
+type excludeTypes []string
+
+func (e *excludeTypes) String() string { return strings.Join(*e, ",") }
+
+func (e *excludeTypes) Set(v string) error {
+	if !typeRe.MatchString(v) {
+		return fmt.Errorf("-exclude-type %q: a type is 0x and %d lower-case hex digits", v, typeHexDigits)
+	}
+	*e = append(*e, v)
+	return nil
+}
 
 // emptyDoc is a record of 0 bytes: there is no object for it, and it names its platform in its label.
 type emptyDoc struct {
@@ -99,14 +117,17 @@ type mergeResult struct {
 	Sha256 string
 	Text   []byte
 	Labels []labelReport
+	// Dropped counts the entries the exclusion dropped, per excluded type (every excluded type is named, 0 when absent).
+	Dropped map[string]int
 }
 
 // summary is the one line cargo-merge prints.
 type summary struct {
-	Labels         []labelReport `json:"labels"`
-	ManifestSha256 string        `json:"manifest_sha256"`
-	ManifestBytes  int           `json:"manifest_frame_bytes"`
-	TextBytes      int           `json:"manifest_text_bytes"`
+	Labels         []labelReport  `json:"labels"`
+	ManifestSha256 string         `json:"manifest_sha256"`
+	ManifestBytes  int            `json:"manifest_frame_bytes"`
+	TextBytes      int            `json:"manifest_text_bytes"`
+	Dropped        map[string]int `json:"dropped"`
 }
 
 func main() {
@@ -128,6 +149,8 @@ func run(args []string, stdout, stderr io.Writer, log *slog.Logger) int {
 	addPath := fs.String("add", "", "the added manifest frame")
 	addSha := fs.String("add-sha256", "", "the sha256 the added frame must hash to")
 	out := fs.String("out", "", "the output directory; the merged manifest is written as "+manifestName)
+	var exclude excludeTypes
+	fs.Var(&exclude, "exclude-type", "a type (0x and 16 hex digits) whose entries the added label drops; repeatable")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -143,14 +166,14 @@ func run(args []string, stdout, stderr io.Writer, log *slog.Logger) int {
 	if err != nil {
 		return refuse(stderr, log, err)
 	}
-	res, err := merge(baseFrame, *baseSha, addFrame, *addSha)
+	res, err := mergeExcluding(baseFrame, *baseSha, addFrame, *addSha, exclude)
 	if err != nil {
 		return refuse(stderr, log, err)
 	}
 	if err := writeOnce(filepath.Join(*out, manifestName), res.Frame); err != nil {
 		return refuse(stderr, log, err)
 	}
-	line, err := json.Marshal(summary{Labels: res.Labels, ManifestSha256: res.Sha256, ManifestBytes: len(res.Frame), TextBytes: len(res.Text)})
+	line, err := json.Marshal(summary{Labels: res.Labels, ManifestSha256: res.Sha256, ManifestBytes: len(res.Frame), TextBytes: len(res.Text), Dropped: res.Dropped})
 	if err != nil {
 		return refuse(stderr, log, err)
 	}
@@ -200,6 +223,12 @@ func framedText(frame []byte, pinned, which string) ([]byte, error) {
 
 // merge joins the two pinned frames into one manifest frame.
 func merge(baseFrame []byte, baseSha string, addFrame []byte, addSha string) (*mergeResult, error) {
+	return mergeExcluding(baseFrame, baseSha, addFrame, addSha, nil)
+}
+
+// mergeExcluding is merge with the types dropped from the added label: each of its entries of an excluded type is left
+// out of the merged text (the blobs are not the merge's to touch). The base's labels are never filtered.
+func mergeExcluding(baseFrame []byte, baseSha string, addFrame []byte, addSha string, exclude []string) (*mergeResult, error) {
 	baseText, err := framedText(baseFrame, baseSha, "base")
 	if err != nil {
 		return nil, err
@@ -222,6 +251,7 @@ func merge(baseFrame []byte, baseSha string, addFrame []byte, addSha string) (*m
 	if err := moveTopLevelEmpties(&add); err != nil {
 		return nil, err
 	}
+	dropped := excludeEntries(&add, exclude)
 	if err := checkCollisions(base, add); err != nil {
 		return nil, err
 	}
@@ -233,7 +263,33 @@ func merge(baseFrame []byte, baseSha string, addFrame []byte, addSha string) (*m
 	if err != nil {
 		return nil, fmt.Errorf("manifest frame: %w", err)
 	}
-	return &mergeResult{Frame: frame, Sha256: sha256Hex(frame), Text: text, Labels: reports}, nil
+	return &mergeResult{Frame: frame, Sha256: sha256Hex(frame), Text: text, Labels: reports, Dropped: dropped}, nil
+}
+
+// excludeEntries drops the entries of the excluded types from the added manifest's labels, and counts them per type. Every
+// excluded type is in the count, so a type the input does not hold reads 0.
+func excludeEntries(add *manifestIn, exclude []string) map[string]int {
+	dropped := make(map[string]int, len(exclude))
+	skip := make(map[string]bool, len(exclude))
+	for _, t := range exclude {
+		skip[t] = true
+		dropped[t] = 0
+	}
+	for i := range add.labels {
+		l := &add.labels[i]
+		var raws []json.RawMessage
+		var keys []entryKey
+		for j, k := range l.keys {
+			if skip[k.Type] {
+				dropped[k.Type]++
+				continue
+			}
+			raws = append(raws, l.entries[j])
+			keys = append(keys, k)
+		}
+		l.entries, l.keys = raws, keys
+	}
+	return dropped
 }
 
 // parseManifest reads a manifest in document order. A top-level key it does not know is refused, and so is a label
