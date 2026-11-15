@@ -30,6 +30,51 @@ inline bool Recent(std::uint64_t at, std::uint64_t now, std::uint64_t window) { 
 // server to state that it runs EchoCombat. `answered` is that statement (nevr_server_features::Client().Current().echoCombat).
 inline bool SendAllowed(std::uint8_t type, bool answered) { return type == 'H' || answered; }
 
+// When the game last sent to each destination: the one table both platforms keep (PC: veilnet.cpp, Quest: quest/combat/ec.cpp), keyed by
+// socket, address and port as BasicState<Sock>::dests is, with the clock passed in (ms). The caller holds its own lock around every call.
+template <typename Sock>
+class SentTo {
+ public:
+  // One entry per destination the pick can hold (BasicState::dests).
+  static constexpr int kSlots = 16;
+  static_assert(sizeof(nevr_ec::BasicState<Sock>::dests) / sizeof(nevr_ec::BasicDest<Sock>) == kSlots,
+                "one entry per destination the server pick can hold");
+
+  // The game sent to this destination at `nowMs`. A known destination is stamped again, else the oldest entry is taken. The stamp is at
+  // least kFirstStamp: 0 means a free entry.
+  void Note(Sock sock, std::uint32_t addr, std::uint16_t port, std::uint64_t nowMs) {
+    int slot = -1, oldest = 0;
+    for (int i = 0; i < kSlots; ++i) {
+      const Entry& e = entries_[i];
+      if (e.at != 0 && e.sock == sock && e.addr == addr && e.port == port) {
+        slot = i;
+        break;
+      }
+      if (e.at < entries_[oldest].at) oldest = i;
+    }
+    entries_[slot < 0 ? oldest : slot] = Entry{sock, addr, port, nowMs != 0 ? nowMs : kFirstStamp};
+  }
+  // Did the game send to `d` within kDestQuietMs of `nowMs`?
+  bool SentRecently(const nevr_ec::BasicDest<Sock>& d, std::uint64_t nowMs) const {
+    for (const Entry& e : entries_)
+      if (e.at != 0 && e.sock == d.sock && e.addr == d.addr && e.port == d.port) return Recent(e.at, nowMs, kDestQuietMs);
+    return false;
+  }
+  void Clear() {
+    for (Entry& e : entries_) e = Entry{};
+  }
+
+ private:
+  static constexpr std::uint64_t kFirstStamp = 1;
+  struct Entry {
+    Sock sock{};
+    std::uint32_t addr = 0;
+    std::uint16_t port = 0;
+    std::uint64_t at = 0;  // 0: a free entry
+  };
+  Entry entries_[kSlots] = {};
+};
+
 enum class Hello { kNone, kSend, kSendAndGiveUp };
 
 // The hello count for the server the game is talking to. Call once per hello tick with that server's key (0: none) and whether it has

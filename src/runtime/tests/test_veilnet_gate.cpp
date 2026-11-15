@@ -146,4 +146,42 @@ TEST(VeilnetChassis, ASwapHappensForThePodiumRuleOrTheServersStandardChassisNeve
   EXPECT_FALSE(gate::SwapChassisWanted(false, true, true, kInsideOursTwice));
 }
 
+// The sent-to table both platforms keep (gate::SentTo): a destination is recent while the game sent to it within kDestQuietMs.
+TEST(VeilnetGate, ADestinationIsRecentFromTheGamesLastSendOnly) {
+  gate::SentTo<int> t;
+  constexpr int kSock = 7;
+  const nevr_ec::BasicDest<int> a{kSock, kAddrA, kPortA, 0}, b{kSock, kAddrB, kPortB, 0};
+  EXPECT_FALSE(t.SentRecently(a, kSentAt));
+  t.Note(kSock, kAddrA, kPortA, kSentAt);
+  EXPECT_TRUE(t.SentRecently(a, kSentAt + kCatDestQuietMs - 1));
+  EXPECT_FALSE(t.SentRecently(a, kSentAt + kCatDestQuietMs));
+  EXPECT_FALSE(t.SentRecently(b, kSentAt));                       // another destination
+  t.Note(kSock, kAddrA, kPortA, kLater);                          // the next send stamps it again
+  EXPECT_TRUE(t.SentRecently(a, kLater));
+  const nevr_ec::BasicDest<int> otherSock{kSock + 1, kAddrA, kPortA, 0};
+  EXPECT_FALSE(t.SentRecently(otherSock, kLater));                // the socket is part of the key
+  t.Clear();
+  EXPECT_FALSE(t.SentRecently(a, kLater));
+}
+
+TEST(VeilnetGate, AStampOfZeroIsStillASend) {
+  gate::SentTo<int> t;
+  const nevr_ec::BasicDest<int> a{1, kAddrA, kPortA, 0};
+  t.Note(1, kAddrA, kPortA, 0);
+  EXPECT_TRUE(t.SentRecently(a, 1));  // stamped 1, not the free-entry 0
+}
+
+TEST(VeilnetGate, ANewDestinationTakesTheOldestEntryWhenTheTableIsFull) {
+  gate::SentTo<int> t;
+  constexpr int kSock = 3;
+  constexpr std::uint16_t kFirstPort = 1000;
+  for (int i = 0; i < gate::SentTo<int>::kSlots; ++i)
+    t.Note(kSock, kAddrA, static_cast<std::uint16_t>(kFirstPort + i), kSentAt + static_cast<std::uint64_t>(i));
+  t.Note(kSock, kAddrB, kPortB, kLater);  // one more than the table holds
+  const nevr_ec::BasicDest<int> oldest{kSock, kAddrA, kFirstPort, 0}, next{kSock, kAddrA, static_cast<std::uint16_t>(kFirstPort + 1), 0};
+  EXPECT_FALSE(t.SentRecently(oldest, kSentAt));   // the oldest was replaced
+  EXPECT_TRUE(t.SentRecently(next, kSentAt + 1));  // the others stay
+  EXPECT_TRUE(t.SentRecently(nevr_ec::BasicDest<int>{kSock, kAddrB, kPortB, 0}, kLater));
+}
+
 }  // namespace

@@ -25,6 +25,7 @@
 #include "quest/cdn/cdn_worker.h"
 #include "quest/combat/combat_active.h"
 #include "quest/combat/combat_install.h"
+#include "quest/combat/ec.h"
 #include "quest/combat/equip_refire.h"
 #include "quest/combat/match_tags.h"
 #include "quest/combat/new_unlocks_clear.h"
@@ -223,7 +224,11 @@ bool InstallMatchTagsHook() noexcept { return nevr_quest::combat::match_tags::In
 // setters, a word that holds anything but the setter refused on its own, and a frame work on the game thread. Its
 // combat_equip_refire_install line says which words went in; a refused install leaves the game's calls as they are. The sequence
 // asks only where combat runs (docs/adr/0047).
-bool InstallEquipRefireHook() noexcept { return nevr_quest::combat::equip_refire::Install(); }
+bool InstallEquipRefireHook() noexcept {
+    // The local tac mod slot is also the EC client's selection (#2242, EchoCombat 2.0.8).
+    nevr_quest::combat::equip_refire::OnLocalTacMod(&nevr_quest::combat::ec::TacModPicked);
+    return nevr_quest::combat::equip_refire::Install();
+}
 
 // The Vulkan extension window (#868): the device extensions libr15 requires stay inside the 128 entries it reads. A
 // refused install is logged by GotHook and leaves the game's calls intact.

@@ -44,6 +44,7 @@
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/combat_libr15_image.h"
 #include "quest/tests/combat_scope_world.h"
+#include "runtime/combat/veilnet_gate.h"
 #include "runtime/compat/server_features.h"
 
 // The arena path's read count, through safe_read.h's test seam: every SafeRead after StartReadCount adds one.
@@ -1073,17 +1074,28 @@ static void LeavePickTests() {
         "the hello did not go to the server the game sends to: %zu sent, the first on fd %d", g_sent.size(), g_sent.empty() ? -1 : g_sent[0].fd);
 }
 
+// The hellos (a 16-byte datagram of type 'H') among the packets sent since g_sent was cleared; the game's own 8-byte sends are not.
+static int HelloCount() {
+  int n = 0;
+  for (const Sent& s : g_sent) n += s.len == sizeof(Packet) && s.bytes[4] == 'H';
+  return n;
+}
+// The client's 2 s hello period and the test's own step. (The gate's windows are gate::kDestQuietMs and gate::kHelloTries.)
+constexpr uint64_t kHelloSlotMs = 2000;
+constexpr uint64_t kStepMs = 100;
+
 static void StepTests() {
   // use counters -> packets twice to the server, hello every 2 s, server line once
   ResetAll();
   InstallOk();
+  ServerStates(true);  // #2242: only a server that states EchoCombat gets the use packets
   Step(g_now100);  // no server yet
   uint8_t* page = EcPage();
   __atomic_store_n(reinterpret_cast<uint32_t*>(page + kLocUse), 1u, __ATOMIC_SEQ_CST);
   AdvanceMs(5);
   Step(g_now100);
   CHECK(g_sent.empty(), "a use sent with no server");
-  CHECK(HasLine("\"sent\":\"no (no server seen yet)\""), "no record for a use without a server");
+  CHECK(HasLine("\"sent\":\"no (no server the game is sending to)\""), "no record for a use without a server");
   GameTalks(7);
   g_sent.clear();
   __atomic_store_n(reinterpret_cast<uint32_t*>(page + kLocUse), 2u, __ATOMIC_SEQ_CST);
@@ -1105,14 +1117,20 @@ static void StepTests() {
   Step(g_now100);
   CHECK(g_sent.size() == 1 && g_sent[0].bytes[4] == 'H' && HasLine("\"event\":\"combat_ec_server\"") && HasLine("\"addr\":\"1.0.0.10\""), "hello + server line");
   g_sent.clear();
+  int early = 0;
   for (int i = 0; i < 19; ++i) {
-    AdvanceMs(100);
+    AdvanceMs(kStepMs);
+    GameTalks();  // the game keeps sending to its server (the hello goes only to a destination it still uses)
+    g_sent.clear();
     Step(g_now100);
+    early += HelloCount();
   }
-  CHECK(g_sent.empty(), "hello sent more than every 2 s: %zu in 1.9 s", g_sent.size());
-  AdvanceMs(100);
+  CHECK(early == 0, "hello sent more than every 2 s: %d in 1.9 s", early);
+  AdvanceMs(kStepMs);
+  GameTalks();
+  g_sent.clear();
   Step(g_now100);
-  CHECK(g_sent.size() == 1, "no hello after 2 s: %zu", g_sent.size());
+  CHECK(HelloCount() == 1, "no hello after 2 s: %d", HelloCount());
   // a V use gives a local token and sends twice
   g_sent.clear();
   __atomic_store_n(reinterpret_cast<uint32_t*>(page + kVeilUse), 1u, __ATOMIC_SEQ_CST);
@@ -1164,6 +1182,137 @@ static void StepTests() {
   Step(g_now100);
   Stats s = StatsNow();
   CHECK(s.serverAddr == 0x0a000003 && s.serverFd == 8, "the busiest destination of the last second is not the server");
+}
+
+// #2242 (EchoCombat 2.0.6): the picked server is the server only while the game still sends to it, and a server that never states EchoCombat
+// gets gate::kHelloTries hellos, then none until the game connects to another server or it states it. The windows are the shared gate's.
+constexpr int kHellosPastTheLimit = 3;  // slots stepped after the last hello, to see that none follows
+static void HelloGateTests() {
+  using ::nevr_combat::gate::kDestQuietMs;
+  using ::nevr_combat::gate::kHelloTries;
+  // a destination the game has left gets nothing: no hello, no use packet; the game's next send brings it back
+  ResetAll();
+  InstallOk();
+  ServerStates(true);
+  GameTalks();
+  Step(g_now100);  // arms the 2 s slot
+  AdvanceMs(kHelloSlotMs);
+  GameTalks();
+  g_sent.clear();
+  Step(g_now100);
+  CHECK(HelloCount() == 1, "the hello did not go to a server the game just sent to: %d", HelloCount());
+  g_sent.clear();
+  AdvanceMs(kDestQuietMs);  // the game says nothing more to it
+  AdvanceMs(kHelloSlotMs);
+  uint8_t* page = EcPage();
+  __atomic_store_n(reinterpret_cast<uint32_t*>(page + kLocUse), 1u, __ATOMIC_SEQ_CST);
+  Step(g_now100);
+  CHECK(g_sent.empty(), "a destination the game left for %llu ms was sent %zu packet(s), the first '%c'",
+        static_cast<unsigned long long>(kDestQuietMs + kHelloSlotMs), g_sent.size(), g_sent.empty() ? '-' : static_cast<char>(g_sent[0].bytes[4]));
+  CHECK(HasLine("no (no server the game is sending to)"), "the use that was not sent is not said");
+  AdvanceMs(kHelloSlotMs);
+  GameTalks();
+  g_sent.clear();
+  Step(g_now100);
+  CHECK(HelloCount() == 1, "the game's send did not bring the hello back: %d", HelloCount());
+
+  // a server that never states EchoCombat: kHelloTries hellos, the last says so, then none
+  ResetAll();
+  InstallOk();
+  ServerStates(false);
+  GameTalks();
+  g_sent.clear();
+  Step(g_now100);  // the first pass sends the first hello
+  int hellos = HelloCount();
+  for (int i = 0; i < kHelloTries + kHellosPastTheLimit; ++i) {
+    AdvanceMs(kHelloSlotMs);
+    GameTalks();
+    g_sent.clear();
+    Step(g_now100);
+    hellos += HelloCount();
+  }
+  CHECK(hellos == kHelloTries, "an unanswered server got %d hellos, not %d", hellos, kHelloTries);
+  CHECK(HasLine("\"event\":\"combat_ec_hello_end\"") && HasLine("no more hellos"), "the last hello does not say the server never stated EchoCombat");
+  // a use is not sent to a server that has not stated it
+  __atomic_store_n(reinterpret_cast<uint32_t*>(page + kLocUse), 1u, __ATOMIC_SEQ_CST);
+  AdvanceMs(kStepMs);
+  GameTalks();
+  g_sent.clear();
+  Step(g_now100);
+  int uses = 0;
+  for (const Sent& s : g_sent) uses += s.len == sizeof(Packet) && s.bytes[4] != 'H';
+  CHECK(uses == 0, "%d use packet(s) went to a server that has not stated EchoCombat", uses);
+  CHECK(HasLine("no (the server has not stated EchoCombat)"), "the use that was not sent is not said");
+  // it states EchoCombat: the hellos start again
+  ServerStates(true);
+  AdvanceMs(kHelloSlotMs);
+  GameTalks();
+  g_sent.clear();
+  Step(g_now100);
+  CHECK(HelloCount() == 1, "the hellos did not start again when the server stated EchoCombat: %d", HelloCount());
+
+  // the count starts again after a leave from combat scope: a server that was given up on gets hellos when the game is back on it
+  ResetAll();
+  InstallOk();
+  ServerStates(false);
+  GameTalks();
+  g_sent.clear();
+  Step(g_now100);
+  hellos = HelloCount();
+  for (int i = 0; i < kHelloTries + kHellosPastTheLimit; ++i) {
+    AdvanceMs(kHelloSlotMs);
+    GameTalks();
+    g_sent.clear();
+    Step(g_now100);
+    hellos += HelloCount();
+  }
+  CHECK(hellos == kHelloTries, "setup: an unanswered server got %d hellos, not %d", hellos, kHelloTries);
+  ForceScopeForTest(0);
+  CHECK(!RefreshScope(static_cast<uint64_t>(ScopeClock())), "setup: still in scope");
+  AdvanceMs(kDestQuietMs);
+  ForceScopeForTest(1);
+  CHECK(RefreshScope(static_cast<uint64_t>(ScopeClock())), "setup: not back in scope");
+  GameTalks();  // the same server, the same socket
+  g_sent.clear();
+  Step(g_now100);
+  CHECK(HelloCount() == 1, "back in scope on the server it gave up on, the hellos did not start again: %d", HelloCount());
+}
+
+// #2242 (EchoCombat 2.0.8): the local tac mod slot gives the selection (TacModPicked); the profile line still does.
+static void TacModPickTests() {
+  // a pick made before Install has published the module's words stores nothing (the setter's hook is installed first)
+  ResetAll();
+  InstallOk();
+  SetInstalledForTest(false);
+  TacModPicked(kSymSmoke);
+  CHECK(Load64(EcPage() + kEquipSel) == 0, "a pick before Install stored the tac mod");
+  SetInstalledForTest(true);
+  TacModPicked(kSymSmoke);
+  CHECK(Load64(EcPage() + kEquipSel) == kSymSmoke, "a pick after Install was not stored");
+
+  constexpr uint64_t kReruns = 5;
+  ResetAll();
+  InstallOk();
+  uint8_t* page = EcPage();
+  TacModPicked(kSymSmoke);
+  CHECK(Load64(page + kEquipSel) == kSymSmoke, "the slot's tac mod was not stored");
+  CHECK(HasLine("\"event\":\"combat_ec_sel\"") && HasLine("\"source\":\"tac_mod_slot\""), "no sel record for the slot's pick");
+  // the setter is re-fired with the same value: not stored again (the re-run count stays)
+  *reinterpret_cast<uint32_t*>(page + kEquipReruns) = kReruns;
+  TacModPicked(kSymSmoke);
+  CHECK(Load32(page + kEquipReruns) == kReruns, "the selection already standing was stored again");
+  // a new tac mod: stored, re-runs cleared
+  TacModPicked(kSymPoint);
+  CHECK(Load64(page + kEquipSel) == kSymPoint && Load32(page + kEquipReruns) == 0, "a new tac mod was not stored with the re-runs cleared");
+  // not a tac mod (a weapon's item, zero): nothing
+  TacModPicked(0);
+  TacModPicked(kMagic);
+  CHECK(Load64(page + kEquipSel) == kSymPoint, "a value that is not a tac mod replaced the selection");
+  // noequip: nothing stored
+  ResetAll();
+  InstallOk("types=T noequip");
+  TacModPicked(kSymSmoke);
+  CHECK(Load64(EcPage() + kEquipSel) == 0, "noequip stored the slot's pick");
 }
 
 static void HideTests() {
@@ -1655,6 +1804,8 @@ int main() {
   LeaveTests();
   LeavePickTests();
   StepTests();
+  HelloGateTests();
+  TacModPickTests();
   HideTests();
   SelectionTests();
   PlatformTests();

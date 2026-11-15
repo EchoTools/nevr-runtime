@@ -45,9 +45,10 @@
  *
  * Frequency (ADR 0038). The setters run once per loadout event (a station button press, a bot cycling its gun, the game restoring a
  * loadout), reached from script nodes and the deferred queue, never per frame (the callers were read in ReVault; calls per frame were not
- * measured). A wrapper's cost is at most 21 reads (6 for an unchanged value), each a scan of /proc/self/maps (mapping_perms.h), and a lock per
- * call; the per-frame cost is the frame work: one lock, one clock read and an empty-table test, once per CR15NetGame::Update. The
- * cost of a read was not measured on a headset.
+ * measured). A wrapper's cost is at most 21 reads (6 for an unchanged value of the weapon or ordnance slot; 20 for an unchanged tac mod
+ * value once a pick is registered: the 6 and IsLocalRecord's 14, DenseIndex 4, ReadActorKey 5, the probe 1, LocalSlotHandle 4, all in
+ * equipment_refire_rules.h), each a scan of /proc/self/maps (mapping_perms.h), and a lock per call; the per-frame cost is the frame work:
+ * one lock, one clock read and an empty-table test, once per CR15NetGame::Update. The cost of a read was not measured on a headset.
  *
  * Owner (ADR 0039). This file owns re-sending the slot's change event after the local player's last change of a slot. The arguments and
  * the result of the setters are not changed.
@@ -99,6 +100,12 @@ inline constexpr std::size_t kSlotCount = 3;                 // weapon, tac mod,
 inline constexpr std::size_t kWordsPerSlot = 2;              // JUMP_SLOT, GLOB_DAT
 inline constexpr std::size_t kWordCount = kSlotCount * kWordsPerSlot;
 inline constexpr std::size_t kChangeLines = 256;             // per-call debug records written per process, then counted only
+
+// The local player's tac mod slot was set to `value` (the setter that SetAbilitySlot's two words call; every call on the local record, changed or not):
+// the EC client takes the selection from it (#2242, EchoCombat 2.0.8). Called on the thread that called the setter, after the game's
+// setter returned. nullptr clears it. Wired by the sentinel entry (ec::TacModPicked), so this file names no EC symbol.
+using TacModFn = void (*)(std::uint64_t value) noexcept;
+void OnLocalTacMod(TacModFn fn) noexcept;
 
 // "installed" when all six words took their thunk, "partial" when some did, "refused" when none did.
 const char* InstallResultName(std::size_t installed) noexcept;

@@ -306,26 +306,9 @@ void PickServer() {
 
 // nEVR port (#2242, EchoCombat 2.0.6): when the game last sent to each destination (nevr_combat::gate::Recent). ServerDest gives the
 // picked server only while the game still sends there, so a server the game has left gets nothing from VeilNet.
-struct SentTo { SOCKET sock; uint32_t addr; uint16_t port; ULONGLONG at; };   // at 0: a free entry
-constexpr int kSentToSlots = 16;                 // as g_dests: the destinations the game is known to send to
-SentTo g_sent_to[kSentToSlots];                  // under g_lock
-void NoteSent(SOCKET s, uint32_t addr, uint16_t port) {
-    const ULONGLONG now = GetTickCount64();
-    int slot = -1, oldest = 0;
-    for (int i = 0; i < kSentToSlots; ++i) {
-        const SentTo &e = g_sent_to[i];
-        if (e.at && e.sock == s && e.addr == addr && e.port == port) { slot = i; break; }
-        if (e.at < g_sent_to[oldest].at) oldest = i;
-    }
-    g_sent_to[slot < 0 ? oldest : slot] = SentTo{s, addr, port, now};
-}
-bool SentRecently(const ecr::BasicDest<SOCKET> &d) {
-    const ULONGLONG now = GetTickCount64();
-    for (const SentTo &e : g_sent_to)
-        if (e.at && e.sock == d.sock && e.addr == d.addr && e.port == d.port)
-            return nevr_combat::gate::Recent(e.at, now, nevr_combat::gate::kDestQuietMs);
-    return false;
-}
+nevr_combat::gate::SentTo<SOCKET> g_sent_to;     // under g_lock
+void NoteSent(SOCKET s, uint32_t addr, uint16_t port) { g_sent_to.Note(s, addr, port, GetTickCount64()); }
+bool SentRecently(const ecr::BasicDest<SOCKET> &d) { return g_sent_to.SentRecently(d, GetTickCount64()); }
 // nEVR port (#2358): ecr::BasicState::SawSend, keyed by socket, address and port.
 void SawSend(SOCKET s, const sockaddr *to) {
     if (!to || to->sa_family != AF_INET) return;

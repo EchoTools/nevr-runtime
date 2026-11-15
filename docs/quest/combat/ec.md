@@ -99,9 +99,11 @@ first. The platform library's slot may hold its own WriteLogV or libr15's (which
   `echocombat` opens the gate the tac-mod hide follows; any other document, or none, keeps it closed. A session in another lobby clears it
   (`src/runtime/compat/session_router.cpp`).
 - **The thread**, on a combat map or the combat lobby every 5 ms: the use counters become 'V' / 'P' / 'T' / 'O' packets sent twice to the server
-  (the busiest sendto destination of the last second), the hello 'H' every 2 s (the server relays only to clients that said hello), the page's +0x40 word (the server states EchoCombat), the summary every 10 s.
+  (the busiest sendto destination of the last second, and only while the game still sends to it: `kDestQuietMs`, `src/runtime/combat/veilnet_gate.h`), the hello 'H' every 2 s (the server relays only to clients that said hello; at most `kHelloTries` to a server that never states EchoCombat, until the game connects to another server or it states it), the page's +0x40 word (the server states EchoCombat), the summary every 10 s. A server that has not stated EchoCombat gets only the hello (`gate::SendAllowed`, EchoCombat 2.0.6).
 - **The selected tac mod**: the line `[NSUSER] sent profile update: %s` carries the profile json; its `ability` names the tac mod, and a known EC
-  one is stored at +0xe80 (with `equip`; `noequip` logs only).
+  one is stored at +0xe80 (with `equip`; `noequip` logs only). The local player's tac mod slot gives it too (EchoCombat 2.0.8): every call
+  on that slot's record, through either setter word of `equip_refire`, changed or not, calls `ec::TacModPicked`, which stores a known tac mod that
+  is not the selection already standing (`gate::PickFromSlot`, `combat_ec_sel` with `source` `tac_mod_slot`).
 - **The hide** (with `hide`, the gear gate in): on a server that does not answer, once the selection has been still for 2000 ms, the tac-mod list's
   count is lowered by 3 (smoke, buff, point are the list's last three, re-checked by name before any write; the count is written by
   compare-and-swap); it is put back when the server answers, and never cut while one of the three is selected. Reload and Unload of the
@@ -170,7 +172,7 @@ plugin's data directory is a Warning (`combat_ec_legacy_switch`, `combat_ecfx_le
     {"event":"combat_ec_scope","in_scope":0|1,"level_class":"combat_or_lobby|echo_arena|other|no_look|stale","level":"0x..","msg":".."}   (combat_scope.h LookClassName; level: the look's)
     {"event":"combat_ec_platform","lib":"libpnsovr|libpnsrad","status":"..","msg":".."}
     {"event":"combat_ec_server","addr":"..","port":<n>,"fd":<n>}   {"event":"combat_ec_server_features","state":"stated|not_stated"}
-    combat_ec_used, combat_ec_token, combat_ec_kill, combat_ec_sel, combat_ec_tacmods, combat_ec_skip, combat_ec_prelude, combat_ec_loc, combat_ec_wall
+    combat_ec_used, combat_ec_hello_end, combat_ec_token, combat_ec_kill, combat_ec_sel, combat_ec_tacmods, combat_ec_skip, combat_ec_prelude, combat_ec_loc, combat_ec_wall
     (48 each per process, kill 16), combat_ec_sum (every 10 s, 60 in all), combat_ec_legacy_switch (Warning)
     combat_ecfx_install, combat_ecfx_waiting (once), combat_ecfx_attach, combat_ecfx_gate (once), combat_ecfx_ran / combat_ecfx_drain (the first 96),
     combat_ecfx_lines (once: later ones are counted), combat_ecfx_sum (the counts, at most every 10 s and after 10 s quiet)

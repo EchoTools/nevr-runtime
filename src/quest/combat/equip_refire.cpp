@@ -47,6 +47,7 @@ std::atomic<std::uint64_t> g_refired{0};
 std::atomic<std::uint64_t> g_skipped{0};
 std::atomic<std::uint64_t> g_changeLines{0};
 std::atomic<bool> g_frameWorkRegistered{false};
+std::atomic<TacModFn> g_tacMod{nullptr};
 
 // A test's stand-ins for the five game functions; unset in production, where they are base + the pinned addresses.
 GameFunctions g_testFunctions;
@@ -159,8 +160,19 @@ template <int Slot, int Word>
 void SetterHandler(typename pinned::LibR15EquipmentSetterThunk<Slot, Word>::Fn original, void* component, std::uint32_t handle,
                    std::uint64_t value) noexcept {
   QuestEnv env{Word};
-  rules::OnSetter(env, g_tracker, static_cast<rules::Slot>(Slot), reinterpret_cast<std::uintptr_t>(component), handle, value,
-                  /*server=*/false, [&] { original(component, handle, value); });
+  const rules::SetterResult r = rules::OnSetter(env, g_tracker, static_cast<rules::Slot>(Slot), reinterpret_cast<std::uintptr_t>(component),
+                                                handle, value, /*server=*/false, [&] { original(component, handle, value); });
+  // #2242 (EchoCombat 2.0.8): a change of the local player's own tac mod slot is also the EC client's selection. The original has returned,
+  // so no game setter is live under the callback.
+  // Every local call is a pick, as on PC and in EchoCombat: a call that changed nothing was not asked who owns the record, so it is asked here
+  // (the pick drops a value that is already the selection).
+  if (static_cast<rules::Slot>(Slot) == rules::Slot::kTacMod) {
+    const TacModFn pick = g_tacMod.load(std::memory_order_acquire);
+    if (pick != nullptr) {
+      const bool local = r.local || (r.read && !r.changed && rules::IsLocalRecord(env, reinterpret_cast<std::uintptr_t>(component), handle));
+      if (local) pick(value);
+    }
+  }
 }
 
 template <int Slot, int Word>
@@ -308,6 +320,8 @@ bool InstallAt(sentinel::ImageLookup lookup) noexcept {
 
 bool Install() noexcept { return InstallAt(&sentinel::FindLoadedImage); }
 
+void OnLocalTacMod(TacModFn fn) noexcept { g_tacMod.store(fn, std::memory_order_release); }
+
 Counts CurrentCounts() noexcept {
   return {g_tracked.load(std::memory_order_relaxed),    g_unchanged.load(std::memory_order_relaxed),
           g_notLocal.load(std::memory_order_relaxed),   g_unreadable.load(std::memory_order_relaxed),
@@ -343,6 +357,7 @@ void ResetForTest() noexcept {
   g_netGame.store(0);
   g_userId.store(0);
   g_clock.store(nullptr);
+  g_tacMod.store(nullptr);
   g_useTestFunctions.store(false);
   g_frameWorkRegistered.store(false);
   g_tracked.store(0);

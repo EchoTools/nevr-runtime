@@ -21,6 +21,7 @@
 #include "quest/sentinel/ec_page.h"
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
+#include "runtime/combat/veilnet_gate.h"  // the decisions PC and Quest share: Recent, SendAllowed, HelloTries, ServerKey, PickFromSlot (#2242)
 #include "runtime/compat/server_features.h"
 
 namespace nevr_quest::combat::ec {
@@ -61,6 +62,10 @@ constexpr unsigned kStepUs = 5000;            // the thread's period in scope
 
 pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 State g_st;  // under g_mu
+
+// #2242 (EchoCombat 2.0.6): when the game last sent to each destination, the table PC's veilnet.cpp keeps too (veilnet_gate.h). The picked
+// server is the server only while the game still sends to it.
+::nevr_combat::gate::SentTo<int> g_sentTo;  // under g_mu
 std::atomic<std::uint64_t> g_sends{0}, g_passed{0}, g_consumed{0}, g_capped{0};
 std::atomic<int> g_killLines{0}, g_tokenLines{0}, g_selLines{0};
 std::atomic<DroneKilledFn> g_droneKilled{nullptr};
@@ -120,6 +125,8 @@ sentinel::ImageLookup Lookup() noexcept {
 
 const char* LogLibName(int i) noexcept { return i == 0 ? "libr15" : i == 1 ? "libpnsovr" : "libpnsrad"; }
 
+constexpr std::uint64_t kMsIn100ns = 10000;  // Now100() counts 100 ns
+
 // ---- the handlers ----
 
 // The in-scope halves are out of line, so the out-of-scope path of a handler is the scope load and a tail call (ADR 0038: it runs per datagram
@@ -130,6 +137,7 @@ __attribute__((noinline)) ssize_t SendInScope(SendThunk::Fn real, int fd, const 
     const sockaddr_in* a = reinterpret_cast<const sockaddr_in*>(to);
     LockG l;
     g_st.SawSend(fd, a->sin_addr.s_addr, a->sin_port);
+    g_sentTo.Note(fd, a->sin_addr.s_addr, a->sin_port, Now100() / kMsIn100ns);
   }
   g_sends.fetch_add(1, std::memory_order_relaxed);
   return real(fd, buf, len, flags, to, tolen);
@@ -218,8 +226,7 @@ ssize_t RecvHandler(RecvThunk::Fn real, int fd, void* buf, size_t len, int flags
 }
 
 // Runs on whichever thread logs the profile update: two atomic page stores and capped lines.
-// KNOWN-WRONG #2242: the Quest's tac mod pick comes from the profile log line only. The PC also takes it from the local tac mod slot
-// (runtime/combat/veilnet.cpp PickTacMod, EchoCombat 2.0.8); a profile line that is never logged under nEVR leaves the selection stale.
+// The profile line is one of two sources of the selection; the other is the local tac mod slot (TacModPicked below).
 void SawProfile(const char* json, int lib) noexcept {
   char name[24];
   const std::uint64_t sym = SelectedFromJson(json, name, sizeof name);
@@ -441,6 +448,7 @@ struct Loop {
   bool keepWas = false;
   SelectionSettle settle;  // a cut waits till the selection is still (ec_rules.h)
   Dest logged = {};
+  ::nevr_combat::gate::HelloTries hello;  // #2242: the hellos a server that never answers gets
   bool answered = false, pageAns = false;
   int lines = 0, summaries = 0, locLines = 0;
   std::uint32_t pid = 0;
@@ -547,6 +555,8 @@ bool RefreshScope(std::uint64_t nowMs) noexcept {
         LockG l;
         for (Dest& d : g_st.dests) d = Dest{};
         g_st.best = -1;
+        g_sentTo.Clear();
+        g_loop.hello = ::nevr_combat::gate::HelloTries{};  // the count starts again for whichever server the game connects to next
       }
       g_gameFd.store(-1, std::memory_order_relaxed);
       Store32(sentinel::EcPage() + kQuestEcServer, 0);
@@ -574,6 +584,23 @@ bool OnNetTick(NetTickFn tick) noexcept {
 }
 
 void OnDroneKilled(DroneKilledFn handler) noexcept { g_droneKilled.store(handler, std::memory_order_release); }
+
+// The local player's tac mod slot was set to `sym` (equip_refire.h OnLocalTacMod; #2242, EchoCombat 2.0.8): the selection is also taken from
+// the slot setter, which the profile line alone cannot give (a profile line that is never logged leaves the selection stale and the tac mod
+// guard then skips the one equipped). Same store as SawProfile, gated the same (equip word); a pick that is the selection already standing
+// is not stored again (the setter is re-fired, and a store restarts the selection's re-run count).
+void TacModPicked(std::uint64_t sym) noexcept {
+  // The equip_refire setter can run before ec::Install (its ctor step comes first): g_equipStore is written by Install and published by the
+  // release store of g_installed, so it is read only after the acquire load.
+  if (!Installed() || !g_equipStore) return;
+  std::uint8_t* const page = sentinel::EcPage();
+  if (!::nevr_combat::gate::PickFromSlot(sym, Load64(page + kEquipSel))) return;
+  StoreSelected(page, sym);
+  if (g_selLines.fetch_add(1, std::memory_order_relaxed) >= kLineCap) return;
+  char symText[sentinel::kHexStringSize];
+  sentinel::LogFields(LogLevel::kInfo, "combat_ec_sel",
+                      {{"sym", sentinel::HexString(symText, sym)}, {"source", "tac_mod_slot"}, {"result", "stored at +e80"}});
+}
 
 bool Installed() noexcept { return g_installed.load(std::memory_order_acquire); }
 
@@ -711,7 +738,7 @@ void Step(std::uint64_t now100) noexcept {
   }
   Use uses[4];
   Dest d{};
-  bool haveDest, ans;
+  bool picked, haveDest, ans;
   int n;
   {
     LockG l;
@@ -720,28 +747,41 @@ void Step(std::uint64_t now100) noexcept {
       L.nextPick = nowMs + 1000;
       g_st.PickServer();
     }
-    haveDest = g_st.Server(&d);
+    picked = g_st.Server(&d);
+    haveDest = picked && g_sentTo.SentRecently(d, nowMs);  // #2242: the server only while the game still sends to it
   }
   ans = nevr_server_features::Client().Current().echoCombat;  // #2333: the server's statement, not an answer to the hello
-  g_gameSrc.store(haveDest ? (static_cast<std::uint64_t>(d.addr) << 16) | d.port : 0, std::memory_order_relaxed);
-  g_gameFd.store(haveDest ? d.sock : -1, std::memory_order_relaxed);  // cleared when no server is picked
+  // The receive side follows the pick (the game's own socket); the sends below follow the pick only while the game still sends there.
+  g_gameSrc.store(picked ? ::nevr_combat::gate::ServerKey(d.addr, d.port) : 0, std::memory_order_relaxed);
+  g_gameFd.store(picked ? d.sock : -1, std::memory_order_relaxed);  // cleared when no server is picked
   for (int i = 0; i < n; ++i) {
-    if (haveDest) {
+    // only the hello goes to a server that has not stated EchoCombat (EchoCombat 2.0.6, gate::SendAllowed)
+    const bool sends = haveDest && ::nevr_combat::gate::SendAllowed(uses[i].type, ans);
+    if (sends) {
       for (int rep = 0; rep < 2; ++rep) SendPacket(d, uses[i].type, uses[i].id);  // twice, as upstream
     }
     if (StepLine()) {
       const char t[2] = {static_cast<char>(uses[i].type), 0};
       char idText[19];
       sentinel::LogFields(LogLevel::kInfo, "combat_ec_used",
-                          {{"type", t}, {"id", sentinel::HexString(idText, uses[i].id)}, {"sent", haveDest ? "twice to the server" : "no (no server seen yet)"}});
+                          {{"type", t}, {"id", sentinel::HexString(idText, uses[i].id)}, {"sent", sends ? "twice to the server"
+                                         : haveDest ? "no (the server has not stated EchoCombat)"
+                                                    : "no (no server the game is sending to)"}});
     }
   }
   if (nowMs >= L.nextHello) {
     L.nextHello = nowMs + 2000;
-    if (haveDest) {
-      // KNOWN-WRONG #2242: the hello goes to a destination the game left, every 2 s, for as long as the game runs (the PC stopped
-      // this in EchoCombat 2.0.6: kDestQuietMs and kHelloTries, runtime/combat/veilnet_gate.h). Not ported to the Quest yet.
+    // #2242 (EchoCombat 2.0.6): no hello to a destination the game has left, and at most gate::kHelloTries to a server that never states
+    // EchoCombat, until the game connects to another one or it states it.
+    const ::nevr_combat::gate::Hello hello =
+        L.hello.Next(haveDest ? ::nevr_combat::gate::ServerKey(d.addr, d.port) : 0, ans);
+    if (hello != ::nevr_combat::gate::Hello::kNone) {
       SendPacket(d, 'H', 0);
+      if (hello == ::nevr_combat::gate::Hello::kSendAndGiveUp && StepLine()) {
+        sentinel::LogFields(LogLevel::kInfo, "combat_ec_hello_end",
+                            {{"hellos", ::nevr_combat::gate::kHelloTries}, {"fd", d.sock},
+                             {"msg", "ec: the server never stated EchoCombat: no more hellos until the game connects to another server"}});
+      }
       if ((d.addr != L.logged.addr || d.port != L.logged.port) && StepLine()) {
         L.logged = d;
         char ip[24];
@@ -915,6 +955,7 @@ void ResetForTest() noexcept {
   {
     LockG l;
     g_st = State();
+    g_sentTo.Clear();
   }
   std::memset(sentinel::EcPage(), 0, sentinel::kEcPageSize);
   g_sends = 0;

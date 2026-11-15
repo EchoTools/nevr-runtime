@@ -36,8 +36,7 @@ func TestVeilnetWantMaskAndDestinationTableSizeAndBound(t *testing.T) {
 	raw := readSource(t, veilnet)
 	for _, want := range []string{
 		"constexpr uint32_t WANT_KIND_MASK = 0xF0000000;",
-		"constexpr int kSentToSlots = 16;",
-		"SentTo g_sent_to[kSentToSlots];",
+		"nevr_combat::gate::SentTo<SOCKET> g_sent_to;",
 	} {
 		if !strings.Contains(raw, want) {
 			t.Errorf("veilnet.cpp no longer declares %q", want)
@@ -47,9 +46,13 @@ func TestVeilnetWantMaskAndDestinationTableSizeAndBound(t *testing.T) {
 	if !strings.Contains(hello, "const uint64_t key = have ? nevr_combat::gate::ServerKey(d.addr.sin_addr.s_addr, d.addr.sin_port) : 0;") {
 		t.Error("the hello tick does not key the server by gate::ServerKey (address and port)")
 	}
-	noteSent := body(t, code(t, veilnet), "void NoteSent(SOCKET s, uint32_t addr, uint16_t port) {")
-	if !strings.Contains(noteSent, "for (int i = 0; i < kSentToSlots; ++i) {") {
-		t.Errorf("NoteSent does not scan the whole destination table: %s", noteSent)
+	gateHeader := code(t, "src/runtime/combat/veilnet_gate.h")
+	note := body(t, gateHeader, "void Note(Sock sock, std::uint32_t addr, std::uint16_t port, std::uint64_t nowMs) {")
+	if !strings.Contains(note, "for (int i = 0; i < kSlots; ++i) {") {
+		t.Errorf("the shared sent-to table does not scan the whole destination table: %s", note)
+	}
+	if !strings.Contains(raw, "g_sent_to.Note(") || !strings.Contains(raw, "g_sent_to.SentRecently(") {
+		t.Error("veilnet.cpp does not use the shared sent-to table")
 	}
 }
 
