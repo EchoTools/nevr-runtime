@@ -32,6 +32,7 @@
 #include "got_hook.h"
 #include "hook_log.h"
 #include "hook_report.h"
+#include "quest/redirect/connect_log.h"
 #include "quest/redirect/hook_adapter.h"
 #include "quest/redirect/service_redirector.h"
 #include "quest/redirect/tstring_thunks.h"
@@ -193,10 +194,11 @@ TStringFn MmEntry() { return reinterpret_cast<TStringFn>(ThunkEntry(Slot::kMatch
 // it receives and the handle slot, and returns a value the test checks comes back unchanged.
 const char* g_connectUrl = nullptr;
 unsigned long* g_connectHandle = nullptr;
+constexpr int kFakeConnectResult = 7;  // what the fake original returns
 int FakeCreateConnection(unsigned long* handle, const char* url) {
   g_connectUrl = url;
   g_connectHandle = handle;
-  return 7;
+  return kFakeConnectResult;
 }
 using CreateConnectionFn = int (*)(unsigned long*, const char*);
 CreateConnectionFn ConnectEntry() { return reinterpret_cast<CreateConnectionFn>(ThunkEntry(Slot::kCreateConnection)); }
@@ -1296,6 +1298,83 @@ void ProductionEntryPassesTheBridgeProbe() {
 
 }  // namespace
 
+// ---- the host and result of every CreateConnection call (connect_log.h) ------------------------------------------
+
+std::vector<std::string> HttpConnectLines() {
+  std::vector<std::string> found;
+  for (const std::string& l : Lines()) {
+    if (l.find("\"event\":\"http_connect\"") != std::string::npos) found.push_back(l);
+  }
+  return found;
+}
+
+// The host is what the log gets: no scheme, userinfo, path, query or fragment, so the status request's query (and a key in it) stays out.
+void HostOfUrlKeepsOnlyTheHostAndPort() {
+  ConnectHost h;
+  HostOfUrl("https://api.readyatdawn.com/status/services,news?env=live&projectid=rad14&key=SECRET", &h);
+  QCHECK(std::strcmp(h.text, "api.readyatdawn.com") == 0 && !h.truncated);
+  HostOfUrl("HTTPS://Api-Live.ReadyAtDawn.com:7350/x#f", &h);
+  QCHECK(std::strcmp(h.text, "Api-Live.ReadyAtDawn.com:7350") == 0);
+  HostOfUrl("http://user:pass@host.example:8080?q=1", &h);
+  QCHECK(std::strcmp(h.text, "host.example:8080") == 0);  // userinfo dropped
+  HostOfUrl("RAD.bugsplat.com", &h);                       // CreateConnection takes a bare host too
+  QCHECK(std::strcmp(h.text, "RAD.bugsplat.com") == 0);
+  HostOfUrl(nullptr, &h);
+  QCHECK(h.text[0] == '\0' && !h.truncated);
+  HostOfUrl("", &h);
+  QCHECK(h.text[0] == '\0');
+  const std::string longHost = "https://" + std::string(kConnectHostBytes * 2, 'a') + ".example/p";
+  HostOfUrl(longHost.c_str(), &h);
+  QCHECK(h.truncated && std::strlen(h.text) == kConnectHostBytes - 1);
+}
+
+// Each connection the game opens becomes one `http_connect` line on the reporter's drain, naming the game's host, its class, what the
+// redirect and the block decided, the host the original was given and what the original returned (7, the fake's answer). The hooked
+// call itself logs nothing, and no path, query or key reaches the line.
+void EveryConnectNamesItsHostDecisionAndResult() {
+  Scenario s(Config(kRedirectOn));
+  ResetConnectLogForTest();
+  unsigned long handle = 0;
+  constexpr std::size_t kConnects = 4;  // the four calls below
+  ConnectEntry()(&handle, "https://api.readyatdawn.com/status/services,news?env=live&projectid=rad14&key=SECRET");
+  ConnectEntry()(&handle, "https://status.readyatdawn.com:443/status/services,news?env=live");
+  ConnectEntry()(&handle, "https://RAD.bugsplat.com");
+  ConnectEntry()(&handle, "https://cdn.example.com/asset?token=SECRET");
+  QCHECK(HttpConnectLines().empty());  // the hooked calls logged nothing
+  DrainConnectLog();
+  const std::vector<std::string> lines = HttpConnectLines();
+  QCHECK(lines.size() == kConnects);
+  if (lines.size() == kConnects) {
+    QCHECK(lines[0].find("\"seq\":1,\"game_host\":\"api.readyatdawn.com\",\"class\":\"api_base\",\"decision\":\"redirected\","
+                         "\"used_host\":\"api.nevr.example:7350\",\"result\":" + std::to_string(kFakeConnectResult)) != std::string::npos);
+    QCHECK(lines[1].find("\"game_host\":\"status.readyatdawn.com:443\",\"class\":\"readyatdawn_other\",\"decision\":\"pass_through\","
+                         "\"used_host\":\"status.readyatdawn.com:443\",\"result\":" + std::to_string(kFakeConnectResult)) != std::string::npos);
+    QCHECK(lines[2].find("\"game_host\":\"RAD.bugsplat.com\",\"class\":\"rad_bugsplat\",\"decision\":\"refused\","
+                         "\"used_host\":\"127.0.0.1:9\",\"result\":" + std::to_string(kFakeConnectResult)) != std::string::npos);
+    QCHECK(lines[3].find("\"game_host\":\"cdn.example.com\",\"class\":\"external\",\"decision\":\"pass_through\"") != std::string::npos);
+  }
+  for (const std::string& l : Lines()) {
+    QCHECK(l.find("SECRET") == std::string::npos);
+    QCHECK(l.find("projectid") == std::string::npos);
+    QCHECK(l.find("/status") == std::string::npos);
+  }
+  Lines().clear();
+  DrainConnectLog();
+  QCHECK(Lines().empty());  // a connection is said once
+}
+
+// More connections than the ring holds between two drains: the newest kConnectLogSlots are named, the rest are counted and said once.
+void ConnectionsPastTheRingAreCountedNotLost() {
+  Scenario s(Config(kRedirectOn));
+  ResetConnectLogForTest();
+  unsigned long handle = 0;
+  constexpr std::size_t kExtra = 8;
+  for (std::size_t i = 0; i < kConnectLogSlots + kExtra; ++i) ConnectEntry()(&handle, "https://cdn.example.com");
+  DrainConnectLog();
+  QCHECK(HttpConnectLines().size() == kConnectLogSlots);
+  QCHECK(AnyLineContains(("\"event\":\"http_connect_dropped\",\"total\":" + std::to_string(kExtra)).c_str()));
+}
+
 int main(int argc, char** argv) {
   const std::string dir = argc > 1 ? argv[1] : ".";
   sentinel::SetLogSink(&Sink);
@@ -1334,6 +1413,9 @@ int main(int argc, char** argv) {
   EachRefusedHostHasItsOwnCounterAndNothingLogs();
   ARefusedApiHostIsStillCountedAsNotRedirected();
   TheReporterNamesTheCallAndTheHostOfEachRefusal();
+  HostOfUrlKeepsOnlyTheHostAndPort();
+  EveryConnectNamesItsHostDecisionAndResult();
+  ConnectionsPastTheRingAreCountedNotLost();
   CacheFullAndStaleBridgeBehaviour();
   LoginFallbackComposesTheStockDefaultOnce();
   LoginFallbackKeepsAFallbackThatHasAQuery();

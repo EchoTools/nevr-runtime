@@ -39,6 +39,12 @@ void SetApply(ApplyFn apply) noexcept;  // nullptr: handlers pass the original r
 using ApplyUrlFn = const char* (*)(const char* url) noexcept;
 void SetApplyUrl(ApplyUrlFn apply) noexcept;  // nullptr: the original URL is passed through
 
+// The record of one finished CreateConnection call: the URL the game passed, the URL the original was given and what the original
+// returned. Called after the original returns, so a game connection that threw never reaches it. Same constraints as ApplyFn
+// (noexcept, no game code, reached through a pointer, and it must not log or allocate: it runs on the game's thread).
+using NoteConnectFn = void (*)(const char* gameUrl, const char* usedUrl, int result) noexcept;
+void SetNoteConnect(NoteConnectFn note) noexcept;  // nullptr: nothing is recorded
+
 // The fallback decision for CJson::TString: runs before the original, receives the key and the fallback
 // the caller passed, and answers with the fallback itself or a stable pointer that outlives the call.
 // Same constraints as ApplyFn (noexcept, no game code, reached through a pointer).

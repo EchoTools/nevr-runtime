@@ -10,6 +10,7 @@
 # files, which the thunk reaches only through the noexcept ApplyFn pointer declared in
 # tstring_thunks.h (set from hook_adapter.cpp).
 add_library(nevr_quest_redirect STATIC
+  connect_log.cpp
   service_redirector.cpp
   hook_adapter.cpp
   tstring_thunks.cpp)

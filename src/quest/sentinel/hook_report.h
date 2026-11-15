@@ -55,6 +55,14 @@ inline constexpr unsigned kMaxReportCounters = 128;
 bool RegisterReportCounter(const char* name, const std::atomic<std::uint64_t>* value,
                            ReportKind kind = ReportKind::kCalls);
 
+// A function the reporter thread calls once per pass (after the counters), outside its lock, for a source that holds records
+// instead of a count (the CreateConnection ring, src/quest/redirect/connect_log.h). It runs on the reporter thread, never on a
+// game call path, so it may log. At most kMaxReportDrains; every registration precedes StartReporter. Returns false, and logs
+// `register_refused`, when the table is full, the reporter already runs or `drain` is null.
+using ReportDrain = void (*)() noexcept;
+inline constexpr unsigned kMaxReportDrains = 4;
+bool RegisterReportDrain(ReportDrain drain);
+
 // Starts the reporter thread. Idempotent. Returns false, and logs one error line, when the
 // thread cannot be created.
 bool StartReporter(unsigned firstMs, unsigned graceMs, unsigned steadyMs);

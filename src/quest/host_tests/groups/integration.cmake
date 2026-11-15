@@ -73,7 +73,7 @@ nevr_ht_test(integration_hooks_test GROUP integration ${_on} DL PTHREAD TIMEOUT 
        o_integ_clock_levels_hook o_integ_prompt_board o_integ_login_counters o_integ_login_prerequisites o_integ_login_standin
        o_integ_id_libr15_identity o_integ_id_libr15_patch_identity o_integ_id_sha256
   SRC src/quest/tests/integration_hooks_test.cpp src/quest/integration/post_load.cpp src/quest/integration/module_observers.cpp src/quest/integration/ctor_sequence.cpp
-      src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp
+      src/quest/redirect/service_redirector.cpp src/quest/redirect/connect_log.cpp src/quest/redirect/hook_adapter.cpp
       src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp src/runtime/lifecycle/service_redirect.cpp
       src/runtime/lifecycle/stable_string_pool.cpp src/quest/sentinel/build_variant.cpp)
 add_dependencies(host-tests-integration o_integ_quit_hook)

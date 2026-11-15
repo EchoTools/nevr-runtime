@@ -7,6 +7,7 @@
 
 #include "hook_log.h"
 #include "hook_report.h"
+#include "quest/redirect/connect_log.h"
 
 namespace nevr_quest::redirect {
 namespace {
@@ -118,6 +119,8 @@ bool RegisterRedirectCounters() noexcept {
   ok = sentinel::RegisterReportCounter("redirect_pool_refused", &c.poolRefused, sentinel::ReportKind::kFaults) && ok;
   ok = sentinel::RegisterReportCounter("redirect_exceptions", &c.exceptions, sentinel::ReportKind::kFaults) && ok;
   // The CSysHttp::CreateConnection decisions alone (#408): `redirect_applied` also counts the config-key reads.
+  // The host and result of every CreateConnection call, one `http_connect` line each (connect_log.h): the reporter thread drains the ring.
+  ok = sentinel::RegisterReportDrain(&DrainConnectLog) && ok;
   ok = sentinel::RegisterReportCounter("redirect_url_redirected", &c.urlRedirected) && ok;
   ok = sentinel::RegisterReportCounter("redirect_url_pass_through", &c.urlPassThrough) && ok;
   // The outbound block (#2089): one counter per host the connect was refused for, named for the call and the host so the
@@ -184,6 +187,7 @@ InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config,
     s.report.featureEnabled = true;
     SetApply(&ApplyActive);
     SetApplyUrl(&ApplyUrlActive);
+    SetNoteConnect(&NoteConnect);
     SetApplyFallback(&ApplyFallbackActive);
     g_redirector.store(redirector, std::memory_order_release);
   } else {
@@ -233,6 +237,7 @@ void RemoveRedirectHooks() {
   ArmThunk(Slot::kCreateConnection, false);
   SetApply(nullptr);
   SetApplyUrl(nullptr);
+  SetNoteConnect(nullptr);
   SetApplyFallback(nullptr);
   g_redirector.store(nullptr, std::memory_order_release);
   s.redirector = nullptr;
@@ -245,6 +250,7 @@ void ArmHandlersForTest(ServiceRedirector* redirector) {
   g_redirector.store(redirector, std::memory_order_release);
   SetApply(redirector != nullptr ? &ApplyActive : nullptr);
   SetApplyUrl(redirector != nullptr ? &ApplyUrlActive : nullptr);
+  SetNoteConnect(redirector != nullptr ? &NoteConnect : nullptr);
   SetApplyFallback(redirector != nullptr ? &ApplyFallbackActive : nullptr);
   ArmThunk(Slot::kLibR15, redirector != nullptr);
   ArmThunk(Slot::kMatchmaking, redirector != nullptr);

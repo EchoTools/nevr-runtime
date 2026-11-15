@@ -28,7 +28,7 @@ nevr_ht_check(tstring_thunks_frames GROUP redirect TIMEOUT 60
   -P ${NEVR_HT_DIR}/scripts/check_frames.cmake)
 
 set(_redirect_srcs src/quest/redirect/tests/redirect_test.cpp src/quest/redirect/service_redirector.cpp
-    src/quest/redirect/hook_adapter.cpp src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp
+    src/quest/redirect/connect_log.cpp src/quest/redirect/hook_adapter.cpp src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp
     src/runtime/lifecycle/service_redirect.cpp src/runtime/lifecycle/stable_string_pool.cpp)
 set(_redirect_objs o_redirect_tstring_thunks o_redirect_got_hook o_redirect_hook_log o_redirect_hook_report
     o_redirect_id_libr15_identity o_redirect_id_libr15_patch_identity o_redirect_id_sha256)

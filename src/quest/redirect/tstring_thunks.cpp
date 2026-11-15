@@ -19,6 +19,7 @@ using sentinel::pinned::MatchmakingTStringThunk;
 
 std::atomic<ApplyFn> g_apply{nullptr};
 std::atomic<ApplyUrlFn> g_applyUrl{nullptr};
+std::atomic<NoteConnectFn> g_noteConnect{nullptr};
 std::atomic<ApplyFallbackFn> g_applyFallback{nullptr};
 
 template <typename Thunk>
@@ -35,7 +36,11 @@ const char* HandleTString(typename Thunk::Fn original, const sentinel::pinned::C
 int HandleCreateConnection(LibR15CreateConnectionThunk::Fn original, unsigned long* handle,
                            const char* url) noexcept {
   const ApplyUrlFn apply = g_applyUrl.load(std::memory_order_acquire);
-  return original(handle, apply == nullptr ? url : apply(url));
+  const char* const used = apply == nullptr ? url : apply(url);
+  const int result = original(handle, used);
+  const NoteConnectFn note = g_noteConnect.load(std::memory_order_acquire);
+  if (note != nullptr) note(url, used, result);
+  return result;
 }
 
 // One record per thunk entry: the build-time frame sensor roots its walk at each record's entry and
@@ -53,6 +58,7 @@ HookTargets PinnedTargets() {
 
 void SetApply(ApplyFn apply) noexcept { g_apply.store(apply, std::memory_order_release); }
 void SetApplyUrl(ApplyUrlFn apply) noexcept { g_applyUrl.store(apply, std::memory_order_release); }
+void SetNoteConnect(NoteConnectFn note) noexcept { g_noteConnect.store(note, std::memory_order_release); }
 void SetApplyFallback(ApplyFallbackFn apply) noexcept {
   g_applyFallback.store(apply, std::memory_order_release);
 }

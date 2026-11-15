@@ -44,6 +44,8 @@ unsigned g_graceMs = 0;
 unsigned g_steadyMs = 0;
 Counter g_counters[kMaxCounters];
 unsigned g_counterCount = 0;
+ReportDrain g_drains[kMaxReportDrains];
+unsigned g_drainCount = 0;
 
 // Absolute CLOCK_MONOTONIC time `ms` after `from`.
 timespec After(const timespec& from, unsigned ms) {
@@ -125,8 +127,12 @@ void* ReporterMain(void*) {
     const unsigned n = Decide(graceClosed && !closing, closing, events);
     // Log with the mutex released: a line never blocks Register/Stop, and a fork cannot
     // catch the lock held across logging.
+    ReportDrain drains[kMaxReportDrains];
+    const unsigned drainCount = g_drainCount;
+    for (unsigned i = 0; i < drainCount; ++i) drains[i] = g_drains[i];
     pthread_mutex_unlock(&g_mutex);
     Emit(events, n);
+    for (unsigned i = 0; i < drainCount; ++i) drains[i]();
     pthread_mutex_lock(&g_mutex);
   }
   pthread_mutex_unlock(&g_mutex);
@@ -170,6 +176,21 @@ bool RegisterReportCounter(const char* name, const std::atomic<std::uint64_t>* v
               {{"status", "register_refused"}, {"counter", name != nullptr ? name : "(null)"},
                {"reason", refusal}});
   }
+  return ok;
+}
+
+bool RegisterReportDrain(ReportDrain drain) {
+  pthread_mutex_lock(&g_control);
+  pthread_mutex_lock(&g_mutex);
+  const char* refusal = g_running                        ? "reporter_running"
+                        : g_drainCount >= kMaxReportDrains ? "table_full"
+                        : drain == nullptr                 ? "null_argument"
+                                                           : nullptr;
+  const bool ok = refusal == nullptr;
+  if (ok) g_drains[g_drainCount++] = drain;
+  pthread_mutex_unlock(&g_mutex);
+  pthread_mutex_unlock(&g_control);
+  if (!ok) LogFields(LogLevel::kError, "hook_report", {{"status", "register_refused"}, {"drain", "(drain)"}, {"reason", refusal}});
   return ok;
 }
 
@@ -223,6 +244,7 @@ void StopReporter() {
   }
   pthread_mutex_lock(&g_mutex);
   g_counterCount = 0;
+  g_drainCount = 0;
   pthread_mutex_unlock(&g_mutex);
   pthread_mutex_unlock(&g_control);
 }
