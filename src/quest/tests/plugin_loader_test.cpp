@@ -1163,7 +1163,7 @@ TEST(LoaderMapsTheBytesItHashedWhenTheNameChangesAfterTheRead) {
   env.loader->RunPhase(PluginPhase::Normal);
   const LoadRecord* r = env.platform.Record("swap");
   CHECK(r->outcome == Outcome::kLoaded);
-  CHECK_EQ(r->sha256, data::Sha256Hex(good.data(), good.size()));
+  CHECK_EQ(r->sha256, nevr_quest::data::Sha256Hex(good.data(), good.size()));
   const FxSeen* seen = env.platform.Seen("libfx_swap.so");
   CHECK(seen != nullptr);
   if (seen != nullptr) CHECK_EQ(seen->init_count, 1u);  // the hashed object's own init ran

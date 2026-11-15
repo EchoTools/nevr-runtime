@@ -76,6 +76,7 @@ inline constexpr HookBudgetRow kHookBudget[] = {
     {"plugin/input_seam_hook.cpp", 1, 0},
     {"plugin/slot_hook.cpp", 8, 0},
     {"redirect/hook_adapter.cpp", 3, 3},
+    {"sentinel/config_alias_hook.cpp", 1, 0},
     {"sentinel/crash_first_hook.cpp", 8, 0},
     {"sentinel/entry.cpp", 1, 0},
     {"sentinel/hand_pose_log_hook.cpp", 2, 0},
