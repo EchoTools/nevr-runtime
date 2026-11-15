@@ -24,7 +24,8 @@
 #include "core/nevr_root.h"
 #include "core/resource_set_registry.h"
 #include "runtime/cargo/stock_source.h"
-#include "runtime/cargo/win_env.h"
+#include "cdn/env_windows.h"
+#include "cdn/windows_map_fs.h"
 #include "runtime/content/script_provider.h"
 #include "runtime/ext/plugin_trust.h"
 #include "runtime/lifecycle/game_image_guard.h"
@@ -34,7 +35,7 @@
 namespace nevr_map_channel::pc {
 namespace {
 
-constexpr const char* kEnvTag = "[NEVR.MAPS]";  // the tag the Win env writes its records under
+constexpr const char* kEnvTag = "[NEVR.MAPS]";  // the tag the PC env writes its records under
 constexpr std::size_t kLockNameHexDigits = 16;  // the root lock's name: the first digits of sha256(root)
 constexpr std::uint32_t kStopWaitMs = 2000;     // the fetch's stop waits this long, then detaches (the fetch ends at its next transfer)
 
@@ -268,7 +269,7 @@ void BootUnguarded(std::uintptr_t game_base, bool is_server) {
   }
 
   State* const st = new State();
-  st->env = nevr_cdn::MakeWinEnv(kEnvTag);
+  st->env = std::make_unique<nevr_cdn::WindowsEnv>(kEnvTag);
   st->fs = nevr_maps::MakeWinMapFs();
   const std::wstring exe_dir = ExeDir();
   st->stock = nevr_maps::MakeWinStockSource(ParentDir(ParentDir(exe_dir)));

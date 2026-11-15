@@ -1,6 +1,6 @@
 // The Quest's MapFs (cdn/posix_map_fs.h) on real POSIX files under NEVR_TEST_TMP: the stamp, a held file, the sorted
-// listing, a removal that never follows a link, and a rename that never replaces. The contract is the PC's (runtime/cargo/win_env.h,
-// tested by runtime/tests/win_env_test.cpp), so a case here mirrors one there.
+// listing, a removal that never follows a link, and a rename that never replaces. The contract is the PC's (cdn/windows_map_fs.h,
+// tested by runtime/tests/windows_map_fs_test.cpp), so a case here mirrors one there.
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>

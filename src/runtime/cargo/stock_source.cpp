@@ -12,7 +12,7 @@
 
 #include "core/device_memory.h"
 #include "core/stock_source.h"
-#include "runtime/cargo/win_env.h"
+#include "cdn/windows_map_fs.h"
 #include "runtime/server/installed_levels.h"
 
 namespace nevr_maps {

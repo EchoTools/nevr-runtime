@@ -17,7 +17,9 @@ namespace nevr_cdn {
 
 class WindowsEnv : public Env {
  public:
-  WindowsEnv() = default;
+  // `event_tag` starts every Event line: "[NEVR.CDN]" for the CDN, "[NEVR.MAPS]" for the map channel. `allow_plain_http` admits
+  // http:// in Get; production leaves it off (the CDN is https), and the loopback tests turn it on, as the Quest's transport does.
+  explicit WindowsEnv(const char* event_tag = "[NEVR.CDN]", bool allow_plain_http = false);
 
   bool ReadSmallFile(const std::string& path, std::string* out, std::size_t max_bytes) override;
   bool MakeDirs(const std::string& dir) override;
@@ -31,6 +33,10 @@ class WindowsEnv : public Env {
   HttpResult Get(const std::string& url, const HttpBody& on_body, const std::function<bool()>& keep_going) override;
   std::uint64_t NowMs() override;
   void Event(EventLevel level, const char* name, const std::vector<Field>& fields) override;
+
+ private:
+  std::string tag_;
+  bool allow_plain_http_;
 };
 
 }  // namespace nevr_cdn

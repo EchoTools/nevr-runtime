@@ -154,8 +154,8 @@ set(PATCHES_SOURCES
     "patch/plugin_assets.cpp"
     # #2161: plugin resource sets, served through the resolver hook in plugin_assets.cpp from a shadow manifest.
     "patch/resource_sets.cpp"
-    # docs/adr/0048: the PC's half of the two file seams the map channel's core runs on (nevr_cdn::Env, nevr_maps::MapFs).
-    "cargo/win_env.cpp"
+    # docs/adr/0048: the PC's nevr_maps::MapFs, the map channel's file seam (its Env is nevr_cdn::WindowsEnv, env_windows.cpp).
+    "${CMAKE_SOURCE_DIR}/src/cdn/windows_map_fs.cpp"
     # docs/adr/0048 (the recipes): the player's own stock, read for a map's recipe rebuild; the shared half is core/stock_source.cpp.
     "cargo/stock_source.cpp"
     "${CMAKE_SOURCE_DIR}/src/core/stock_source.cpp"
@@ -551,11 +551,13 @@ set_source_files_properties(${NEVR_HOST_UNITS} host/host_dllmain.cpp host/runtim
 set_source_files_properties(compat/peer_message.cpp compat/ws_bridge.cpp compat/session_router.cpp compat/ws_session_transport.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp patch/asset_cache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # #20: the export tracer's thunk layer is windows.h plus a global assembly block; the tracer logs through core.
 set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-# The CDN core and its PC Env: the core includes no windows.h, and env_windows.cpp defines NOMINMAX itself, so neither takes the PCH.
+# The CDN core and its PC Env: the core includes no windows.h, and env_windows.cpp and windows_map_fs.cpp define NOMINMAX themselves, so
+# neither takes the PCH.
 set_source_files_properties(${CMAKE_SOURCE_DIR}/src/cdn/cdn_limits.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_validate.cpp
   ${CMAKE_SOURCE_DIR}/src/cdn/cdn_manifest.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_plan.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_store.cpp
   ${CMAKE_SOURCE_DIR}/src/cdn/cdn_run.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_prefetch.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_resolver.cpp
   ${CMAKE_SOURCE_DIR}/src/cdn/cdn_service.cpp ${CMAKE_SOURCE_DIR}/src/cdn/env_windows.cpp
+  ${CMAKE_SOURCE_DIR}/src/cdn/windows_map_fs.cpp
   PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
 # test can link it) and service_config.cpp (defines NOMINMAX before windows.h, as
@@ -1649,26 +1651,37 @@ if(BUILD_TESTING)
       test_stable_string_pool_fixture
       test_stable_string_pool_destructible_control)
 
-    # docs/adr/0048: the PC's nevr_cdn::Env and nevr_maps::MapFs (cargo/win_env.cpp), driven for real: Win32 files in a temp
-    # folder, the portable SHA-256, libcurl against the scripted loopback server. The test defines Log() to read the event lines, so it
-    # compiles the two core files the env calls instead of linking nevr_core.
-    set(_win_env_test_sources tests/win_env_test.cpp cargo/win_env.cpp "${CMAKE_SOURCE_DIR}/src/core/device_memory.cpp"
-      "${CMAKE_SOURCE_DIR}/src/quest/data/sha256.cpp")
-    add_executable(test_win_env ${_win_env_test_sources})
-    set_source_files_properties(${_win_env_test_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_include_directories(test_win_env PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_win_env PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl ws2_32)
-    gtest_discover_tests(test_win_env DISCOVERY_MODE PRE_TEST)
+    # docs/adr/0048: the PC's nevr_maps::MapFs (cdn/windows_map_fs.cpp) on a temp folder, through WindowsEnv's held open (env_windows.cpp),
+    # and the map channel's event tag. The test defines Log() to read the event lines, so it compiles the two files it needs instead of
+    # linking nevr_core.
+    set(_windows_map_fs_test_sources tests/windows_map_fs_test.cpp "${CMAKE_SOURCE_DIR}/src/cdn/windows_map_fs.cpp"
+      "${CMAKE_SOURCE_DIR}/src/cdn/env_windows.cpp")
+    add_executable(test_windows_map_fs ${_windows_map_fs_test_sources})
+    set_source_files_properties(${_windows_map_fs_test_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_windows_map_fs PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_windows_map_fs PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl ws2_32)
+    if(MINGW)
+      add_dependencies(test_windows_map_fs nevr_runtime_bcrypt_minimal)
+      target_link_libraries(test_windows_map_fs PRIVATE
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>)
+    endif()
+    gtest_discover_tests(test_windows_map_fs DISCOVERY_MODE PRE_TEST)
 
     # docs/adr/0048 (the recipes): the PC's stock source over a synthetic install in a temp folder, through the shared half
-    # (core/stock_source.cpp), the PC file seam's stamps (cargo/win_env.cpp) and the manifest folders installed_levels finds.
-    set(_stock_source_test_sources tests/stock_source_test.cpp cargo/stock_source.cpp cargo/win_env.cpp
+    # (core/stock_source.cpp), the PC file seam's stamps (cdn/windows_map_fs.cpp) and the manifest folders installed_levels finds.
+    set(_stock_source_test_sources tests/stock_source_test.cpp cargo/stock_source.cpp
+      "${CMAKE_SOURCE_DIR}/src/cdn/windows_map_fs.cpp" "${CMAKE_SOURCE_DIR}/src/cdn/env_windows.cpp"
       "${CMAKE_SOURCE_DIR}/src/core/stock_source.cpp" server/installed_levels.cpp)
     add_executable(test_stock_source ${_stock_source_test_sources})
     set_source_files_properties(${_stock_source_test_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_stock_source PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_stock_source PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk zstd::libzstd
       CURL::libcurl ws2_32)
+    if(MINGW)
+      add_dependencies(test_stock_source nevr_runtime_bcrypt_minimal)
+      target_link_libraries(test_stock_source PRIVATE
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>)
+    endif()
     gtest_discover_tests(test_stock_source DISCOVERY_MODE PRE_TEST)
 
     # #703: the content-addressed asset cache (patch/asset_cache.cpp), driven for real against a temp directory.

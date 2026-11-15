@@ -37,8 +37,9 @@ namespace {
 constexpr std::uint64_t kWindowsProcessHandleLimit = 16777216;
 
 constexpr const char* kTempSuffix = ".tmp";
-constexpr const char* kLogTag = "[NEVR.CDN] ";
+constexpr const char* kDefaultLogTag = "[NEVR.CDN]";
 constexpr const char* kAllowedProtocols = "https";
+constexpr const char* kPlainHttpProtocols = "http,https";
 
 // The offset of a ReadFile is a 64-bit number split across two DWORDs.
 constexpr int kBitsPerDword = 32;
@@ -321,6 +322,9 @@ EchoVR::LogLevel LevelFor(EventLevel level) {
 
 }  // namespace
 
+WindowsEnv::WindowsEnv(const char* event_tag, bool allow_plain_http)
+    : tag_(event_tag != nullptr ? event_tag : kDefaultLogTag), allow_plain_http_(allow_plain_http) {}
+
 bool WindowsEnv::ReadSmallFile(const std::string& path, std::string* out, std::size_t max_bytes) {
   std::wstring wide;
   if (!ToWide(path, &wide)) return false;
@@ -461,7 +465,7 @@ HttpResult WindowsEnv::Get(const std::string& url, const HttpBody& on_body, cons
   // The CDN serves each object at its own URL: a redirect is not followed, and it is a failure. The TLS settings are libcurl's
   // defaults, as every other PC libcurl caller in the runtime has them (no CAINFO is set).
   curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-  curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, kAllowedProtocols);
+  curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, allow_plain_http_ ? kPlainHttpProtocols : kAllowedProtocols);
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
   curl_easy_setopt(curl, CURLOPT_FAILONERROR, 0L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
@@ -487,7 +491,8 @@ HttpResult WindowsEnv::Get(const std::string& url, const HttpBody& on_body, cons
 std::uint64_t WindowsEnv::NowMs() { return static_cast<std::uint64_t>(GetTickCount64()); }
 
 void WindowsEnv::Event(EventLevel level, const char* name, const std::vector<Field>& fields) {
-  std::string line = kLogTag;
+  std::string line = tag_;
+  if (!line.empty()) line += ' ';
   line += name;
   for (const Field& field : fields) {
     line += ' ';

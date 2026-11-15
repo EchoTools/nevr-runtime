@@ -4,7 +4,7 @@
  * winning; scripts from <install>\bin\win10\scripts\<hash16>.dll. Nothing outside the install is read.
  *
  * A stock file is opened read-only with full sharing and closed after the read, and its stamp is the PC MapFs's
- * (runtime/cargo/win_env.h): nothing is held and nothing is written.
+ * (cdn/windows_map_fs.h): nothing is held and nothing is written.
  */
 #pragma once
 
