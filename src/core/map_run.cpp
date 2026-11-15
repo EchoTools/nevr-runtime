@@ -365,17 +365,12 @@ class MountRun {
     }
   }
 
-  // The listing whose manifest pins the version the cache holds, the first such group in the order given. When none pins it
-  // (the manifest that did was replaced, and the new version is not stored yet), the cached version still mounts under the first
-  // group that lists the map, but its scripts are not counted as official: no manifest verified now vouches for them.
-  static Listing Choose(const std::vector<Listing>& listings, const std::string& cached_sha256) {
+  // The listing whose manifest pins the version the cache holds, the first such group in the order given; null when none does.
+  static const Listing* Pinning(const std::vector<Listing>& listings, const std::string& cached_sha256) {
     for (const Listing& l : listings) {
-      if (l.entry.index.sha256 == cached_sha256) return l;
+      if (l.entry.index.sha256 == cached_sha256) return &l;
     }
-    Listing fallback = listings.front();
-    fallback.official = false;
-    fallback.compiled_official = false;
-    return fallback;
+    return nullptr;
   }
 
   void MountOne(const std::string& id, const std::vector<Listing>& listings) {
@@ -402,7 +397,11 @@ class MountRun {
       return Skip(id, "mounted_other_version");
     }
     if (revoked_sha_.count(cached.index_sha256)) return Refuse(id, "revoked");
-    const Listing selected = Choose(listings, cached.index_sha256);
+    // A map plays only at a version a verified manifest lists now. A cached version its manifest moved past (the new version is
+    // not stored yet: offline, or the fetch failed) is refused, never mounted in its place; the next fetch stores the listed one.
+    const Listing* pinning = Pinning(listings, cached.index_sha256);
+    if (pinning == nullptr) return Refuse(id, kStaleToken);
+    const Listing selected = *pinning;
     const std::string version_dir = Join(config_.dir, cached.dir);
 
     // The package index is held to its pin by its stamp, never hashed here: while the file's stamp, read through the handle the

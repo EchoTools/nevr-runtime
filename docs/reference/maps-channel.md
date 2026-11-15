@@ -142,6 +142,7 @@ All records carry the tag `[NEVR.MAPS]`. The full table, with each event's field
 | `map hold off reason=no_group` | A dedicated server's session names no group to fetch: the session starts on the stock maps. |
 | `map_start reason=bad_key` / `reason=mixed_keys` | The configuration is refused; nothing is mounted. |
 | `map_skipped reason=local_map` | A CDN map is skipped because a local copy wins. The local name is in `local_name`. |
+| `map_mounted refused=stale` | The cache holds a version no verified manifest lists now; the map does not mount until the next fetch stores the listed one. |
 | `map script refused reason=<token>` | A map script is not served. The token is in `core/map_script_check.h` or `core/script_image_rules.h`. |
 | `map_skew reason=version` / `reason=not_mounted` | The client is leaving a session whose map version it does not match. |
 | `map_pin status=off reason=<token>` | The session pin did not install; the token names the check that failed. |

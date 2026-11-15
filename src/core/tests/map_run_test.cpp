@@ -137,7 +137,7 @@ TEST_F(MapRunTest, ALocalMapIsSkippedWithNoGrant) {
   EXPECT_EQ(env.open_blobs(), 0u);
 }
 
-TEST_F(MapRunTest, ACrashBeforeTheIndexLeavesTheOldVersionMountedAndTheNextGcRemovesTheNewDirectory) {
+TEST_F(MapRunTest, ACrashBeforeTheIndexMountsNoOldVersionAndTheNextGcRemovesTheNewDirectory) {
   channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
   channel.Sign(1);
   Fetch();
@@ -151,9 +151,10 @@ TEST_F(MapRunTest, ACrashBeforeTheIndexLeavesTheOldVersionMountedAndTheNextGcRem
   EXPECT_EQ(crashed.outcome, FetchOutcome::kFailed);
   EXPECT_TRUE(fs.HasDir(v2_dir));
 
+  // The stored manifest lists 1.1.0 and the cache holds 1.0.0 only: the old version is refused, not mounted in its place.
   const MountReport boot = Boot();
-  ASSERT_EQ(boot.staged.size(), 1u);
-  EXPECT_EQ(boot.staged[0].version, "1.0.0");
+  EXPECT_TRUE(boot.staged.empty());
+  EXPECT_EQ(TokenOf(boot, "alpha"), kStaleToken);
 
   env.fail_writes.clear();
   env.server.clear();  // offline: the GC runs, the fetch then fails at the manifest
@@ -196,9 +197,9 @@ TEST_F(MapRunTest, AConfiguredOfficialKeyDoesNotSatisfySignedOnly) {
   EXPECT_TRUE(mounter.script_official.empty());
 }
 
-// A cached version no verified manifest pins any longer (its newer version is not stored yet) still mounts, but an official
-// manifest that pins another version does not vouch for its scripts.
-TEST_F(MapRunTest, AnOfficialManifestDoesNotVouchForAVersionItDoesNotPin) {
+// A cached version no verified manifest pins any longer (its newer version is not stored yet) is refused stale, with or without
+// -require-signed-plugins: the old version never mounts in place of the listed one.
+TEST_F(MapRunTest, ACachedVersionNoManifestPinsIsRefusedStale) {
   TestKey official{1, true};
   config.keys = {official.pin};
   channel.Publish("scripted", "1.0.0", MakeSet(2, 'a'), {{1, "dll"}});
@@ -209,11 +210,12 @@ TEST_F(MapRunTest, AnOfficialManifestDoesNotVouchForAVersionItDoesNotPin) {
   env.fail_writes = {std::string(kDir) + "/index.json"};  // the new manifest is stored, the new version is not
   Fetch();
   config.signed_only = true;
-  EXPECT_EQ(TokenOf(Boot(), "scripted"), "signed_only");
+  EXPECT_EQ(TokenOf(Boot(), "scripted"), kStaleToken);
   config.signed_only = false;
   const MountReport boot = Boot();
-  ASSERT_EQ(boot.staged.size(), 1u);
-  EXPECT_EQ(boot.staged[0].version, "1.0.0");
+  EXPECT_TRUE(boot.staged.empty());
+  EXPECT_EQ(TokenOf(boot, "scripted"), kStaleToken);
+  EXPECT_FALSE(mounter.Called("set map:scripted"));
 }
 
 TEST_F(MapRunTest, TheSummaryListsEveryRefusalAndRefusedGroup) {

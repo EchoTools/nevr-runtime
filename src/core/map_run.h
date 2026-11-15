@@ -108,6 +108,10 @@ std::vector<std::string> CachedGroupIds(nevr_cdn::Env& env, const std::string& d
 // the texture cargo's store files take their own share (cdn/cdn_limits.h, kDescriptorShareForStore).
 inline constexpr std::uint64_t kDescriptorShareForMaps = 4;
 
+// The refusal token of a cached version that no verified manifest lists now (`refused` of map_mounted, a Warning): the map does not
+// mount until the listed version is stored, so an old version never plays in its place.
+inline constexpr const char* kStaleToken = "stale";
+
 struct MountedMap {
   std::string id, version, index_sha256, platform, source_sha256, title, group;
   std::uint64_t level = 0;
