@@ -13,6 +13,8 @@
  *                           without a frame (see cdn_store.h, "zero-byte records").
  *   size_range              a size that does not fit the engine's 32-bit words.
  *   object_too_large        more decompressed bytes than this device can give one object (Limits::max_object_bytes).
+ *   unscoped_empty          a top-level `empty` record of a manifest that does not have exactly one label: a record of 0 bytes must name
+ *                           the label it belongs to, which a label's own `empty` list does.
  */
 #pragma once
 
@@ -37,6 +39,7 @@ enum class Rule : std::uint8_t {
   kZeroBytes,
   kSizeRange,
   kObjectTooLarge,
+  kUnscopedEmpty,
 };
 
 const char* RuleName(Rule rule) noexcept;

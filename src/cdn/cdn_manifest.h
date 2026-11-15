@@ -7,13 +7,17 @@
  *    "labels": {"game": {"entries": [
  *       {"platform": "android-arm64", "type": "0xe2efe7289d5985b8", "name": "0x3fa6d25bc24a7b01", "format": "zstd-frame",
  *        "sha256": "<64 hex of the stored frame>", "size": <frame bytes>, "bytes": <decompressed bytes>, "align": <alignment>,
- *        "stock_size": <optional: the stock buffer the art was made against>}, ...]}},
- *    "empty": [{"type": "0x...", "name": "0x...", "align": <alignment>}, ...]}
+ *        "stock_size": <optional: the stock buffer the art was made against>}, ...],
+ *       "empty": [{"platform": "windows-x86_64", "type": "0x...", "name": "0x...", "align": <alignment>}, ...]}},
+ *    "empty": []}
  *
  * `type` is the on-disk type, `name` the resource's symbol, both as "0x" hex strings (a JSON number cannot hold 64 bits). `size` is the
  * stored zstd frame, `bytes` what the engine decompresses it to, `align` the record's alignment. The runtime never decompresses: the
  * SHA-256 proves the frame is the published one and the engine decompresses it. `empty` lists the records of 0 bytes, which have no
- * frame; they belong to the platform the plan is made for (one manifest is one platform's set).
+ * frame. A label's own `empty` list holds the records of that label, each with the platform it belongs to (required): they mount
+ * only when the label is on, the platform is the one the plan is made for, and the label mounted an object (cdn_store.h). The
+ * top-level `empty` is the older shape: it belongs to the one label of a manifest that has exactly one, on any platform of it; in a
+ * manifest with two or more labels its records are refused as `unscoped_empty` (cdn_validate.h).
  *
  * The parser reads with nlohmann::json's non-throwing calls only (the sentinel is built without exceptions). A document that is not
  * exactly this shape is refused whole. An entry the validator refuses (cdn_validate.h) is left out and listed, by rule, in
@@ -70,6 +74,8 @@ struct Entry {
 };
 
 struct EmptyRecord {
+  std::string label;     // the label the record belongs to: the key of the label's `empty` list, or the one label of a top-level list
+  std::string platform;  // the platform it belongs to; "" for a top-level record (which belongs to the plan's platform)
   std::uint64_t type = 0;
   std::uint64_t name = 0;
   std::uint32_t align = 0;

@@ -42,6 +42,7 @@ const char* RuleName(Rule rule) noexcept {
     case Rule::kZeroBytes: return "zero_bytes";
     case Rule::kSizeRange: return "size_range";
     case Rule::kObjectTooLarge: return "object_too_large";
+    case Rule::kUnscopedEmpty: return "unscoped_empty";
   }
   return "unknown";
 }

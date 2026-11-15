@@ -342,6 +342,7 @@ Mounted Mount(Env& env, const Store& store, const Manifest& manifest, const Plat
   std::map<std::uint32_t, std::uint32_t> packageOfFile;  // store file -> its index in input.handles
   std::set<std::uint32_t> failedFiles;
   std::map<std::string, std::uint32_t> chunkOfBlob;
+  std::map<std::string, std::uint32_t> firstChunkOfLabel;  // the chunk of a label's first mounted object: its records of 0 bytes name it
   for (const auto& group : groups) {
     // The group mounts when every record's blob is held, its sizes are the ones the store holds and its file opens.
     bool missing = false, mismatch = false, unopened = false;
@@ -407,32 +408,39 @@ Mounted Mount(Env& env, const Store& store, const Manifest& manifest, const Plat
       rec.user = it.first->second;
       input.records.push_back(rec);
       ++result.records;
+      firstChunkOfLabel.emplace(group.first.first, rec.chunk);
     }
     ++result.names;
   }
-  // The records of 0 bytes name the shadow's first chunk (see the header): a chunk that exists, which the engine's reader reads as it
-  // reads any record's chunk before it copies out the 0 bytes.
-  if (!manifest.empties.empty()) {
-    if (input.chunks.empty()) {
-      result.refused += manifest.empties.size();
-      env.Event(EventLevel::kWarn, "cdn_mount",
-                {{"result", "refused"}, {"reason", "no_chunk"}, {"empty_records", manifest.empties.size()},
-                 {"consequence", "no record of 0 bytes is served: there is no object in this set to name a chunk through"}});
-    } else {
-      for (const EmptyRecord& e : manifest.empties) {
-        nevr_shadow::Record rec;
-        rec.type = e.type;
-        rec.name = e.name;
-        rec.chunk = 0;
-        rec.offset_in_chunk = 0;
-        rec.size = 0;
-        rec.alignment = e.align;
-        rec.user = 0;
-        input.records.push_back(rec);
-        ++result.records;
-        ++result.empty_records;
-      }
+  // The records of 0 bytes (see the header). A label's own records mount only when the label is on, they are this platform's (or name
+  // none, a top-level record), and the label mounted an object: they name that label's first chunk, a chunk that exists, which the
+  // engine's reader reads as it reads any record's chunk before it copies out the 0 bytes. The label's index is their `user`.
+  std::map<std::string, std::size_t> noChunk;  // label -> its records of 0 bytes that have no chunk to name
+  for (const EmptyRecord& e : manifest.empties) {
+    if (StateOf(e.label, policy) == LabelState::kOff) continue;
+    if (!e.platform.empty() && e.platform != platform.name) continue;
+    const auto chunk = firstChunkOfLabel.find(e.label);
+    if (chunk == firstChunkOfLabel.end()) {
+      ++noChunk[e.label];
+      ++result.refused;
+      continue;
     }
+    nevr_shadow::Record rec;
+    rec.type = e.type;
+    rec.name = e.name;
+    rec.chunk = chunk->second;
+    rec.offset_in_chunk = 0;
+    rec.size = 0;
+    rec.alignment = e.align;
+    rec.user = labelIndex.at(e.label);
+    input.records.push_back(rec);
+    ++result.records;
+    ++result.empty_records;
+  }
+  for (const auto& kv : noChunk) {
+    env.Event(EventLevel::kWarn, "cdn_mount",
+              {{"result", "refused"}, {"reason", "no_chunk"}, {"label", kv.first}, {"empty_records", kv.second},
+               {"consequence", "no record of 0 bytes of this label is served: no object of the label is mounted to name a chunk through"}});
   }
   if (input.records.empty()) {
     for (const std::int64_t h : input.handles) env.CloseBlob(h);

@@ -25,6 +25,12 @@ using json = nlohmann::ordered_json;
 constexpr const char* kArchiveType = "0x2a41cf1c1d9e5d32";  // CArchiveResource: not a texture
 constexpr const char* kDescType = "0xe2efe7289d5985b8";
 constexpr const char* kPixType = "0x489bb35d53ca50e9";
+// The names and alignment of the records the parser tests build (a record's name as the manifest writes it, in hex).
+constexpr std::uint64_t kEmptyName = 0x10;
+constexpr std::uint64_t kOtherEmptyName = 0x11;
+constexpr std::uint64_t kEmptyAlign = 4;
+constexpr const char* kOneEntryName = "0x1";
+constexpr std::size_t kDuplicatePair = 2;  // the two records a duplicated key refuses
 
 nc::Limits Roomy() {
   nc::Limits l;
@@ -158,6 +164,75 @@ void TheEmptyListIsReadAndItsRecordsAreChecked() {
   QCHECK(m.empties.size() == 1 && m.empties[0].name == 0x10 && m.empties[0].align == 4 && m.empties[0].type == 0x2a41cf1c1d9e5d32ULL);
   QCHECK(m.refused.size() == 3);  // the bad alignment, and both holders of the duplicated key
   QCHECK(m.entries.empty());
+}
+
+// An in-label record of the `empty` list (the label is the key the list sits under), with its platform.
+json ScopedEmpty(const char* platform, std::uint64_t name) {
+  return json{{"platform", platform}, {"type", kArchiveType}, {"name", nc::FormatHex64(name)}, {"align", kEmptyAlign}};
+}
+
+std::string LabelDoc(const json& body) {
+  json labels = json::object();
+  labels["game"] = body;
+  return json{{"schema", "nevr-cargo-manifest"}, {"schema_version", 1}, {"labels", labels}}.dump();
+}
+
+void AnEmptyRecordInALabelNeedsAPlatform() {
+  json body{{"entries", json::array()}, {"empty", json::array({json{{"type", kArchiveType}, {"name", nc::FormatHex64(kEmptyName)}, {"align", kEmptyAlign}}})}};
+  nc::Manifest m;
+  QCHECK(Parse(LabelDoc(body), &m).status == nc::ParseStatus::kMissingField);
+}
+
+void AnEmptyRecordInALabelBelongsToItsLabelAndPlatform() {
+  json rec = ScopedEmpty("windows-x86_64", kEmptyName);
+  rec["note"] = "x";  // an unknown key: counted, never named, as in every other record
+  json body{{"entries", json::array({Entry(kArchiveType, kOneEntryName, 'a')})}, {"empty", json::array({rec})}};
+  nc::Manifest m;
+  QCHECK(Parse(LabelDoc(body), &m).status == nc::ParseStatus::kOk);
+  QCHECK(m.empties.size() == 1 && m.empties[0].label == "game" && m.empties[0].platform == "windows-x86_64");
+  QCHECK(m.empties[0].name == kEmptyName && m.unknown_fields == 1 && m.refused.empty());
+}
+
+void ATopLevelEmptyBelongsToTheOnlyLabel() {
+  json empty = json::array({json{{"type", kArchiveType}, {"name", nc::FormatHex64(kEmptyName)}, {"align", kEmptyAlign}}});
+  nc::Manifest m;
+  QCHECK(Parse(Doc(json::array({Entry(kArchiveType, kOneEntryName, 'a')}), empty), &m).status == nc::ParseStatus::kOk);
+  QCHECK(m.empties.size() == 1 && m.empties[0].label == "game" && m.empties[0].platform.empty() && m.refused.empty());
+}
+
+void ATopLevelEmptyWithTwoLabelsIsRefusedAsUnscoped() {
+  json labels = json::object();
+  labels["a"] = json{{"entries", json::array({Entry(kArchiveType, kOneEntryName, 'a')})}};
+  labels["b"] = json{{"entries", json::array()}};
+  json empty = json::array({json{{"type", kArchiveType}, {"name", nc::FormatHex64(kEmptyName)}, {"align", kEmptyAlign}}});
+  const std::string text = json{{"schema", "nevr-cargo-manifest"}, {"schema_version", 1}, {"labels", labels}, {"empty", empty}}.dump();
+  nc::Manifest m;
+  QCHECK(Parse(text, &m).status == nc::ParseStatus::kOk);
+  QCHECK(m.empties.empty() && m.entries.size() == 1);
+  QCHECK(m.refused.size() == 1 && m.refused[0].rule == nc::Rule::kUnscopedEmpty && m.refused[0].label == "empty");
+  QCHECK(m.refused[0].name == kEmptyName);
+  QCHECK(std::string(nc::RuleName(nc::Rule::kUnscopedEmpty)) == "unscoped_empty");
+}
+
+void AnEmptyRecordAndAnEntryOfOnePlatformAreDuplicatesOnlyOnThatPlatform() {
+  json body{{"entries", json::array({Entry(kArchiveType, kOneEntryName, 'a')})},  // android-arm64
+            {"empty", json::array({ScopedEmpty("android-arm64", 1), ScopedEmpty("windows-x86_64", 1)})}};
+  nc::Manifest m;
+  QCHECK(Parse(LabelDoc(body), &m).status == nc::ParseStatus::kOk);
+  QCHECK(m.entries.empty());
+  QCHECK(m.empties.size() == 1 && m.empties[0].platform == "windows-x86_64");
+  QCHECK(m.refused.size() == kDuplicatePair && m.refused[0].rule == nc::Rule::kDuplicateKey && m.refused[1].rule == nc::Rule::kDuplicateKey);
+}
+
+void ThePlanCountsEachLabelsEmptyRecordsForItsPlatform() {
+  json body{{"entries", json::array({Entry(kArchiveType, kOneEntryName, 'a')})},
+            {"empty", json::array({ScopedEmpty("android-arm64", kEmptyName), ScopedEmpty("windows-x86_64", kOtherEmptyName)})}};
+  nc::Manifest m;
+  QCHECK(Parse(LabelDoc(body), &m).status == nc::ParseStatus::kOk);
+  const nc::Plan android = nc::MakePlan(m, nc::kAndroidArm64, nc::Policy(), Roomy(), 0, [](const nc::Entry&) { return false; });
+  QCHECK(android.labels.size() == 1 && android.labels[0].empty_records == 1);
+  const nc::Plan windows = nc::MakePlan(m, nc::kWindowsX64, nc::Policy(), Roomy(), 0, [](const nc::Entry&) { return false; });
+  QCHECK(windows.labels.size() == 1 && windows.labels[0].empty_records == 1);
 }
 
 void ADocumentWithNoEmptyListParses() {
@@ -443,6 +518,11 @@ int main() {
   BothEntriesOfADuplicateKeyAreRefused();
   AKeySharedByTwoLabelsIsADuplicateToo();
   TheEmptyListIsReadAndItsRecordsAreChecked();
+  AnEmptyRecordInALabelNeedsAPlatform();
+  AnEmptyRecordInALabelBelongsToItsLabelAndPlatform();
+  ATopLevelEmptyBelongsToTheOnlyLabel();
+  ATopLevelEmptyWithTwoLabelsIsRefusedAsUnscoped();
+  AnEmptyRecordAndAnEntryOfOnePlatformAreDuplicatesOnlyOnThatPlatform();
   ADocumentWithNoEmptyListParses();
   AShapeThatIsNotTheSchemaIsRefusedWhole();
   AnUnknownKeyIsCountedNeverNamed();
@@ -456,6 +536,7 @@ int main() {
   ALabelThatNeedsMoreStoreFilesThanTheDescriptorsAllowIsSkipped();
   RequiredLabelsComeFirstAndRequiredOnlyDropsTheRest();
   AnotherPlatformsEntriesAreNotPlanned();
+  ThePlanCountsEachLabelsEmptyRecordsForItsPlatform();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "cdn_manifest_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

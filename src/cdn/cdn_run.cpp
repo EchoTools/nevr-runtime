@@ -528,7 +528,8 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
   ReportRefusals(env, manifest, "fetch");
   for (const PlanLabel& pl : plan.labels) {
     std::vector<Field> fields = {{"label", pl.label},   {"state", LabelStateName(pl.state)}, {"entries", pl.entries},
-                                 {"cached", pl.cached}, {"to_fetch", pl.to_fetch},           {"fetch_bytes", pl.fetch_bytes}};
+                                 {"empty_records", pl.empty_records}, {"cached", pl.cached}, {"to_fetch", pl.to_fetch},
+                                 {"fetch_bytes", pl.fetch_bytes}};
     if (pl.skipped != SkipReason::kNone) {
       fields.push_back({"skipped", SkipReasonName(pl.skipped)});
       fields.push_back({"consequence", "this label serves nothing from the CDN"});

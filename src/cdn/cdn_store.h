@@ -23,8 +23,10 @@
  * special case: FillResourceFileRequest (echovr.exe 0x140fa1fe0) copies the record's chunk, offset and size into the request like
  * any other, and the streaming reader (0x1415249b0 op 1, then 0x1415255a0 for a size of at most 0x80000) reads the chunk the record
  * names and copies `size` bytes out of it. So a zero-byte record needs a chunk that exists. The mount points every empty record
- * at the first chunk of its own shadow (offset 0, size 0) and says so in its log; with no object in the shadow there is no chunk to
- * name and the empty records are refused as `no_chunk`. That the headset's reader takes this is not established (CDN REPORT).
+ * at the first chunk of its own label's objects (offset 0, size 0), when the label is on, the record is this platform's (or names
+ * none) and the label mounted an object; its `user` is the label's index. A label with records of 0 bytes and no mounted object has no
+ * chunk to name: those records are refused, one `cdn_mount` line per label with reason `no_chunk`. That the headset's reader takes
+ * this is not established (CDN REPORT).
  */
 #pragma once
 

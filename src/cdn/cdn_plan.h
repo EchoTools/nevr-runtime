@@ -34,7 +34,10 @@ struct LabelDefault {
   LabelState state;
 };
 // `game` is the whole-game label of an all-assets manifest: it is the content the game needs to run, so it is required.
-inline constexpr LabelDefault kLabelDefaults[] = {{"lobby_posters", LabelState::kOn}, {"game", LabelState::kRequired}};
+// `combat_content` is the EchoCombat data (PC; on by default, the records of 0 bytes it lists are mounted only where it has objects).
+inline constexpr LabelDefault kLabelDefaults[] = {{"lobby_posters", LabelState::kOn},
+                                                  {"game", LabelState::kRequired},
+                                                  {"combat_content", LabelState::kOn}};
 inline constexpr LabelState kUnlistedLabelState = LabelState::kOff;
 
 struct Policy {
@@ -70,6 +73,7 @@ struct PlanLabel {
   LabelState state = LabelState::kOff;
   SkipReason skipped = SkipReason::kNone;
   std::size_t entries = 0;   // kept entries of this platform
+  std::size_t empty_records = 0;  // records of 0 bytes of this label that name this platform (or none): mounted with its objects
   std::size_t cached = 0;    // unique blobs already held
   std::size_t to_fetch = 0;  // unique blobs to request
   std::uint64_t fetch_bytes = 0;

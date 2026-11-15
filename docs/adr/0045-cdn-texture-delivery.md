@@ -47,7 +47,7 @@ process.
    any on-disk type, published as one zstd frame (`manifest.json.zst`) whose header states the content size. The client decodes it with
    the libzstd the runtime already links (not the game's `CSysCompression`, which needs the engine's allocator and function table
    before the engine runs) and holds the declared size to the device's memory before it decodes anything. A record of 0 bytes is
-   listed in the manifest's `empty` list. The client decides how to read a manifest from its bytes, never from its name: a body that
+   listed in its label's `empty` list (`labels.<label>.empty`, each record with the `platform` it belongs to). `Mount` (`src/cdn/cdn_store.cpp`) mounts it on that label's first chunk, only when the label is on, the platform is the plan's and the label mounted an object. The top-level `empty` list is read for the one label of a manifest that has exactly one (`ParseManifest` in `src/cdn/cdn_manifest.cpp`); with two or more labels a top-level record is refused as `unscoped_empty`. The schema version stays 1: a client built before the label-level list reads it as an unknown key and mounts what it mounted before. The client decides how to read a manifest from its bytes, never from its name: a body that
    begins with the zstd frame magic (`28 B5 2F FD`) is decoded as above, and any other body is read as the JSON text under the same
    text limit (`src/cdn/cdn_manifest.h` ParseManifestBody). A path in `assets.manifest` is checked only as a path (relative, plain
    characters, no `..`); its name says nothing about the format. A blob is one stock-format chunk: one zstd frame whose decompressed

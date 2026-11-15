@@ -81,7 +81,7 @@ resolved: nothing of ours is written into a game folder.
 reads an installed-pack folder as data (nothing in it is run) and makes one cargo label of the records the pack's own
 packages store: every resource whose chunk is in a listed package numbered from `stock_packages` on (a pack's packages
 include every record it adds or replaces, and may include others). The manifest and package files are checked against the sha-256 `content.json` lists. A record of 0
-bytes goes to the manifest's `empty` list (which belongs to the manifest, not to a label), and a record that two of the pack's sets both store is one record when its bytes
+bytes is listed in an `empty` list. `cargo-pack` writes the top-level `empty` list, which the parser (`ParseManifest` in `src/cdn/cdn_manifest.cpp`) reads as belonging to the one label of a manifest that has exactly one label; a manifest with two or more labels refuses a top-level record as `unscoped_empty`. A label's own `empty` list (`labels.<label>.empty`, each record with its `platform`) is the scoped form the parser also reads: `Mount` (`src/cdn/cdn_store.cpp`) mounts those records only with their label's objects. A record that two of the pack's sets both store is one record when its bytes
 and alignment are the same, and a refusal when they differ. The output is the `cargo-publish` input
 (`docs/adr/0045-cdn-texture-delivery.md`). A script DLL is no record: the game loads it from a file (`../engine/asset-system.md`,
 "Script DLLs"), so a label carries the pack's resources and the scripts stay with an installed pack.
