@@ -71,6 +71,7 @@
 #include "runtime/combat/equip_cell.h"  // nEVR port (#600): the cell the script guards read
 #include "runtime/combat/rules_state.h"  // nEVR port (#600): the RULES mailbox fields, in one place
 #include "runtime/combat/match_type.h"  // nEVR port (#2289)
+#include "runtime/combat/veilnet_gate.h"  // nEVR port (#2242): the send gate, the destination recency, the hello tries
 #include "runtime/compat/server_features.h"  // nEVR port (#2333): what the current server states
 #include "runtime/lifecycle/arena_round_time.h"  // nEVR port (#2289): the stored session game type
 #include "runtime/hook/process_memory.h"  // nEVR port: byte patches recorded
@@ -302,11 +303,33 @@ void PickServer() {
 }
 
 // nEVR port (#2358): ecr::BasicState::SawSend, keyed by socket, address and port.
+// nEVR port (#2242, EchoCombat 2.0.6): when the game last sent to each destination (nevr_combat::gate::Recent). ServerDest gives the
+// picked server only while the game still sends there, so a server the game has left gets nothing from VeilNet.
+struct SentTo { SOCKET sock; uint32_t addr; uint16_t port; ULONGLONG at; };   // at 0: a free entry
+SentTo g_sent_to[16];                            // under g_lock
+void NoteSent(SOCKET s, uint32_t addr, uint16_t port) {
+    const ULONGLONG now = GetTickCount64();
+    int slot = -1, oldest = 0;
+    for (int i = 0; i < 16; ++i) {
+        const SentTo &e = g_sent_to[i];
+        if (e.at && e.sock == s && e.addr == addr && e.port == port) { slot = i; break; }
+        if (e.at < g_sent_to[oldest].at) oldest = i;
+    }
+    g_sent_to[slot < 0 ? oldest : slot] = SentTo{s, addr, port, now};
+}
+bool SentRecently(const ecr::BasicDest<SOCKET> &d) {
+    const ULONGLONG now = GetTickCount64();
+    for (const SentTo &e : g_sent_to)
+        if (e.at && e.sock == d.sock && e.addr == d.addr && e.port == d.port)
+            return nevr_combat::gate::Recent(e.at, now, nevr_combat::gate::kDestQuietMs);
+    return false;
+}
 void SawSend(SOCKET s, const sockaddr *to) {
     if (!to || to->sa_family != AF_INET) return;
     const sockaddr_in *a = reinterpret_cast<const sockaddr_in *>(to);
     AcquireSRWLockExclusive(&g_lock);
     g_ec.SawSend(s, a->sin_addr.s_addr, a->sin_port);
+    NoteSent(s, a->sin_addr.s_addr, a->sin_port);
     ReleaseSRWLockExclusive(&g_lock);
 }
 
@@ -361,7 +384,7 @@ void FinalCapped() {
 bool ServerDest(Dest &out) {
     ecr::BasicDest<SOCKET> d{};
     AcquireSRWLockShared(&g_lock);
-    bool ok = g_ec.Server(&d);
+    bool ok = g_ec.Server(&d) && SentRecently(d);
     ReleaseSRWLockShared(&g_lock);
     if (ok) {
         out.sock = d.sock;
@@ -375,7 +398,11 @@ bool ServerDest(Dest &out) {
 
 void SendToServer(uint8_t type, uint32_t id) {
     Dest d;
-    if (ServerDest(d)) Send(d.sock, d.addr, type, id);
+    if (!ServerDest(d)) return;
+    // Only the hello goes to a server that has not answered one (#2242, EchoCombat 2.0.6): everything else waits for the
+    // server to state that it runs EchoCombat (nevr_server_features, #2333).
+    if (!nevr_combat::gate::SendAllowed(type, ::nevr_server_features::Client().Current().echoCombat)) return;
+    Send(d.sock, d.addr, type, id);
 }
 
 // --- server: the clients it relays to -----------------------------------------------
@@ -2266,8 +2293,19 @@ DWORD WINAPI Tick(LPVOID) {
             }
             if (now >= next_hello) {
                 next_hello = now + 2000;
-                SendToServer('H', 0);
+                // A server that never answers has no EchoCombat: after kHelloTries unanswered hellos it gets no more, until the game
+                // connects to another server or this one answers (#2242, EchoCombat 2.0.6).
+                static nevr_combat::gate::HelloTries hello;
                 Dest d;
+                const bool have = ServerDest(d);
+                const uint64_t key = have ? (uint64_t)d.addr.sin_addr.s_addr << 16 | d.addr.sin_port : 0;
+                const bool answered = ::nevr_server_features::Client().Current().echoCombat;
+                const nevr_combat::gate::Hello h = hello.Next(key, answered);
+                if (h != nevr_combat::gate::Hello::kNone) SendToServer('H', 0);
+                if (h == nevr_combat::gate::Hello::kSendAndGiveUp) {
+                    char buf[48];
+                    Log("server %s never answered: no EchoCombat there, no more hellos", Addr(d.addr, buf, sizeof(buf)));
+                }
                 if (ServerDest(d) && !Same(d.addr, logged_server)) {
                     logged_server = d.addr;
                     char buf[48];

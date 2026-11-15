@@ -64,7 +64,7 @@ func TestTheSendHookCountsDestinationsOnAClientThroughTheHeader(t *testing.T) {
 	ordered(t, "PickServer", body(t, src, "void PickServer() {"),
 		"AcquireSRWLockExclusive(&g_lock);", "g_ec.PickServer();", "ReleaseSRWLockExclusive(&g_lock);")
 	ordered(t, "ServerDest", body(t, src, "bool ServerDest(Dest &out) {"),
-		"AcquireSRWLockShared(&g_lock);", "bool ok = g_ec.Server(&d);", "ReleaseSRWLockShared(&g_lock);")
+		"AcquireSRWLockShared(&g_lock);", "bool ok = g_ec.Server(&d) && SentRecently(d);", "ReleaseSRWLockShared(&g_lock);")
 	ordered(t, "FirstTime", body(t, src, "bool FirstTime(uint32_t id) {"),
 		"AcquireSRWLockExclusive(&g_lock);", "const bool first = g_ec.FirstTime(id);", "ReleaseSRWLockExclusive(&g_lock);")
 	if strings.Count(src, "ecr::BasicState<SOCKET> g_ec(ecr::kAllTypes);") != 1 {
