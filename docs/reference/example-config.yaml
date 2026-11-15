@@ -19,7 +19,7 @@
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
 # social.facade, social.send_presence_to_meta, diagnostics.hardware_dump, diagnostics.ui_event_probe,
-# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, update.enabled, update.channel, maps.base_url, maps.channel, maps.boot_budget_ms, maps.official_keys, maps.trusted_keys, assets.cdn_url, assets.manifest, assets.required_only, assets.labels, assets.whole_game, network.invite_codes, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys, combat.levelname, combat.sendguard, combat.meshstep, combat.instmodel, combat.shaderstep, combat.tablestep, the combat.gate_* keys, combat.pfx, combat.pfxtev, combat.impactsnd, combat.impactsnd_write, the three combat.decals keys (decals, decals_flip_u, decals_flip_v), the three combat.bvh keys (bvh, bvh_gate, bvh_touch), combat.wallfire, combat.music, combat.sensorwd, combat.ec, combat.ec_words, combat.ecfx, combat.powerboost_stage, combat.dronekill, combat.dronekill_explosion, combat.dronekill_hold, combat.dronemuzzle, combat.gunconnect, combat.aibots, combat.aibots_scenario, combat.weapon_arm, combat.bullet_velocity_guard, combat.sound_symbol_guard, combat.texel_buffer_guard, the two combat.texture_quest2 keys, combat.frozen_frame_exit, combat.frozen_frame_exit_s, combat.hudmeter, the two combat.shieldgamma keys and the six crash-guard keys (fxtrail, voipdrop, custctx, droneguard, droneguard_stage1, peerclamp). Every other key below is PC only: the
+# diagnostics.pnsrad_provider, diagnostics.clock_levels_override, graphics.texture_quality, graphics.hand_flip, update.enabled, update.channel, update.base, update.pins, maps.base_url, maps.channel, maps.boot_budget_ms, maps.official_keys, maps.trusted_keys, assets.cdn_url, assets.manifest, assets.required_only, assets.labels, assets.whole_game, network.invite_codes, combat.force, combat.heaps, combat.memsys, the three combat.refresh_rate keys, combat.levelname, combat.sendguard, combat.meshstep, combat.instmodel, combat.shaderstep, combat.tablestep, the combat.gate_* keys, combat.pfx, combat.pfxtev, combat.impactsnd, combat.impactsnd_write, the three combat.decals keys (decals, decals_flip_u, decals_flip_v), the three combat.bvh keys (bvh, bvh_gate, bvh_touch), combat.wallfire, combat.music, combat.sensorwd, combat.ec, combat.ec_words, combat.ecfx, combat.powerboost_stage, combat.dronekill, combat.dronekill_explosion, combat.dronekill_hold, combat.dronemuzzle, combat.gunconnect, combat.aibots, combat.aibots_scenario, combat.weapon_arm, combat.bullet_velocity_guard, combat.sound_symbol_guard, combat.texel_buffer_guard, the two combat.texture_quest2 keys, combat.frozen_frame_exit, combat.frozen_frame_exit_s, combat.hudmeter, the two combat.shieldgamma keys and the six crash-guard keys (fxtrail, voipdrop, custctx, droneguard, droneguard_stage1, peerclamp). Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -846,21 +846,35 @@ arena:
 # different release it downloads it, checks every byte against the manifest and the release signer's Authenticode signature,
 # and stages it under update\ in the nEVR root (%LOCALAPPDATA%\nevr\echovr). The host puts it in place at the next launch and
 # loads it; a release that does not start is replaced by the one that did. Nothing is written to the game folder. The check
-# runs on its own thread: the game never waits for it. A build made for development never updates.
+# runs on its own thread: the game never waits for it. A build made for development never updates, unless it is given a base.
 #
 #   enabled   false turns the check off (a release the host already swapped in is still confirmed). The "-no-update" flag
 #             does the same for one run. Absent: true.
 #   channel   The release channel to follow (for example "beta" or "stable"). Absent: the channel the installer recorded,
 #             else the core's default. The "update check" log line names the channel and where it came from
 #             (channel_source: config, state or default).
+#   base      Quest, development builds only. Where a development build reads the manifest and the channel: an http:// or
+#             https:// address with a host, no credentials, query or fragment (http:// is for a base that adb reverse serves on
+#             the local machine; the core fetches plain http only from 127.0.0.1 or localhost). With a valid base a development
+#             build checks and stages updates like a release build does, from that base, and logs one Warning saying the update
+#             source is overridden. A release build ignores the key and logs one Warning that it did. Absent: a development
+#             build does not update, and a release build reads the release host.
+#   pins      Quest, development builds only, and only with `base`. The minisign public keys a development build trusts for that
+#             base's manifest, one "label base64key" per line (a block scalar), so a throwaway test key can sign a test
+#             manifest. They REPLACE the built-in release keys for that run; a release build never passes them. Absent: the
+#             built-in keys.
 #
 # Not secrets.
 # Reader: src/runtime/lifecycle/service_config.cpp (NevrCfgUpdateEnabled, NevrCfgUpdateChannel) on PC,
-#         src/quest/sentinel/quest_config.cpp (ReadUpdate) on Quest, src/core/update/worker.cpp
+#         src/quest/sentinel/quest_config.cpp (ReadUpdate) on Quest, src/core/update/worker.cpp; base and pins are decided by
+#         src/core/update/policy.cpp (ResolveSource) and read on Quest only, no PC reader reads them
 # ---------------------------------------------------------------------------
 # update:
 #   enabled: true
 #   channel: beta
+#   base: http://127.0.0.1:8080/nevr-runtime
+#   pins: |
+#     test-key RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3
 
 # ---------------------------------------------------------------------------
 # maps — the custom-map channel (docs/adr/0048), PC and Quest

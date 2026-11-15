@@ -344,11 +344,13 @@ void ReadHandFlip(const nevr::NevrConfig& cfg, LoadResult& r) {
   r.config.handFlip = {on, given ? Source::kFile : Source::kAbsent};
 }
 
-// update.enabled and update.channel. Each stays unset unless the file gives a scalar of the right kind; the update policy
+// update.enabled, update.channel, update.base and update.pins. Each stays unset unless the file gives a scalar of the right kind; the update policy
 // (core/update/policy.h, ResolveChannel) decides whether a channel word is one it knows.
 void ReadUpdate(const nevr::NevrConfig& cfg, LoadResult& r) {
   constexpr const char* kEnabledKey = "update.enabled";
   constexpr const char* kChannelKey = "update.channel";
+  constexpr const char* kBaseKey = "update.base";
+  constexpr const char* kPinsKey = "update.pins";
   if (cfg.GetBool(kEnabledKey).has_value()) {
     r.config.update.enabled = cfg.GetBool(kEnabledKey);
   } else if (cfg.Kind(kEnabledKey) != nevr::NodeKind::kAbsent) {
@@ -359,6 +361,13 @@ void ReadUpdate(const nevr::NevrConfig& cfg, LoadResult& r) {
     r.config.update.channel = *channel;
   } else if (!channel && cfg.Kind(kChannelKey) != nevr::NodeKind::kAbsent) {
     Add(r, LogLevel::kWarn, std::string("config file key=") + kChannelKey + " rejected reason=not_a_word (default stays)");
+  }
+  // The development update source: read as given, decided by ResolveSource (the config does not know the build).
+  const std::pair<const char*, std::optional<std::string>*> raw[] = {{kBaseKey, &r.config.update.base}, {kPinsKey, &r.config.update.pins}};
+  for (const auto& [key, into] : raw) {
+    if (cfg.Kind(key) == nevr::NodeKind::kAbsent) continue;
+    *into = cfg.GetString(key);
+    if (!into->has_value()) Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=not_a_string (default stays)");
   }
 }
 

@@ -124,7 +124,9 @@ flowchart TD
   in either direction: a withdrawn release is replaced by the older one the
   channel points at, because that is the only way a bad release is taken back from players. The log says `direction`.
   Release builds only: a dev build (`NEVR-PLUGIN-TRUST dev`) never updates, so a developer's runtime is not replaced by a
-  signed one.
+  signed one. The one exception is the Quest dev source: `update.base` (and `update.pins`) in `config.yaml` give a dev build its own
+  manifest host and trusted keys, and a dev build with a valid base updates from that base. A release build ignores both keys and
+  says so; the pinned release keys and host never change (`ResolveSource` in `src/core/update/policy.cpp`, one `update source` line).
 - **Which channel.** `update.channel` in `config.yaml`, else the channel recorded in `update\state.json` by the installer
   that installed the runtime (`pc install --channel`), else the core's default. A player who installed from `beta` stays on
   `beta`.
@@ -155,7 +157,7 @@ units (`src/core/update/names.cpp`, `host/file_digest.cpp`), compiled into both 
 - **When.** `RunDeferredRuntimeBootstrap` calls `nevr_update::StartProcessWorker` last, after the log line `runtime bootstrap
   complete` and after the command line is parsed (so `-no-update` has been read). Nothing starts from `DllMain`, `initialize`
   or the host.
-- **One decision per launch, one line.** `Decide` names the first reason in this order: `dev_build`, `flag`, `config`,
+- **One decision per launch, one line.** `Decide` names the first reason in this order: `dev_build` (unless the dev build has a source of its own), `flag`, `config`,
   `host_cannot_swap`; the line is `update disabled reason=<word>`. A dev build and a host that cannot swap start no thread. A
   flag or a config key that is off starts the confirmation thread only.
 - **Two threads, independent.** The check thread runs `RunCheck` once and ends. The confirmation thread waits, on a mutex and a condition variable (`src/core/update/worker.cpp`), for the mark that the per-frame dispatcher raises (`nevr_update::OnFrame`, one atomic compare per dispatch) 10 s after its first call, then runs
@@ -478,6 +480,7 @@ A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag
 | Where | Event | Fields |
 | --- | --- | --- |
 | runtime | `update disabled` | `reason` (`dev_build`, `no_root` when `%LOCALAPPDATA%` is not set, `flag`, `config`, `host_cannot_swap`; `no_root` is a Warning, the rest Info) |
+| Quest runtime | `update source` | Warning, once per launch and only when `update.base` or `update.pins` is in `config.yaml`: `outcome` (`used`: a dev build reads that base, with `base_host` (host and port only) and `pins` (the key count, or `builtin`); `ignored`: a release build does not use the key, `reason=release_build`; `rejected`: a dev build refused the value, with `key` and `reason`: `empty`, `too_long`, `control_character`, `not_http_or_https`, `credentials_query_or_fragment`, `no_host`, `pins_without_base`, `no_keys`, `malformed_line`, `malformed_key`), `source=config`, `consequence`. The `update check` line carries `source_override=true` when the check ran against the override |
 | runtime | `update discard` | `version`, `recorded`, `reason` (`verify_failed`): the verifier refused a staged release and the core was told (Warning when it could not be recorded) |
 | runtime | `update check` | `channel` (`core_default` when none was named), `channel_source` (`config`, `state`, `default`), `current`, `target`, `direction`, `action` (`none`, `staged`, `blocked`, `failed`), `reason`, `config_channel_rejected` when `update.channel` is not a channel name, `elapsed_ms` |
 | core | `manifest_check`, `release_selected`, `artifact_fetch` | as ADR 0023 section 5; a cut-off download is `artifact_fetch ok=false reason=short_body bytes=<n> size=<n>` |
@@ -503,8 +506,9 @@ the second verdict, with `update_rollback` between the two.
 
 `NEVR_ROOT` replaces the root in a dev build only, and only for the host (`ResolveRuntimePathFrom`); the runtime's own state
 paths (`nevr_root::RootW`, `RootA`) read `%LOCALAPPDATA%` alone. The swap resolves the host's root through the same function,
-so in a dev build it would act on the override root while the runtime's state sits elsewhere. Self-update never runs in a dev
-build, so the two never disagree; a test pins that the worker refuses to start when the build is a dev build.
+so in a dev build it would act on the override root while the runtime's state sits elsewhere. Self-update never runs in a PC dev
+build, so the two never disagree; a test pins that the worker refuses to start when the build is a dev build. (A Quest dev build with
+`update.base` does update; the Quest has no `NEVR_ROOT`, its root is the host's `update_root`.)
 
 ## Failure cases
 

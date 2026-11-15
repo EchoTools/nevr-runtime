@@ -14,6 +14,7 @@
 #include <string>
 
 #include "core/update/fs.h"
+#include "core/update/policy.h"
 
 namespace nevr_update {
 
@@ -65,6 +66,9 @@ struct CheckEnv {
   std::string version;             ///< the running runtime's version, from its NEVR-BUILD literal
   std::string runtime_sha256;      ///< sha256 of the file this process loaded
   std::optional<std::string> config_channel;  ///< update.channel
+  /// A dev build's own update source (ResolveSource, kUsed): passed to the core as `base` and `pins`. Unset on PC and in every release
+  /// build, so the core's open-config JSON then holds neither key and the core uses its release host and pinned keys.
+  std::optional<SourceOverride> source;
   Core core;
   /// The verifier of one staged file, by its UTF-8 path and the entry the stage result gave it. The platform edge decides what
   /// verifies it: PC checks the Authenticode signature and ignores the entry; Quest checks the bytes against it.

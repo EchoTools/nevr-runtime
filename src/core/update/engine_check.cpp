@@ -145,6 +145,7 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
       f.push_back({"action", CheckActionWord(action)});
       if (!reason.empty()) f.push_back({"reason", reason});
       if (channel.config_rejected) f.push_back({"config_channel_rejected", "true"});
+      if (env.source.has_value()) f.push_back({"source_override", "true"});
       f.push_back({"elapsed_ms", std::to_string(now >= started ? now - started : 0)});
       Emit(env.log, action == CheckAction::kFailed ? kWarning : kInfo, "update check", f);
       return out;
@@ -177,6 +178,10 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
 
     json config = {{"platform", env.platform}, {"nevr_root", env.root}};
     if (!channel.name.empty()) config["channel"] = channel.name;
+    if (env.source.has_value()) {
+      config["base"] = env.source->base;
+      if (!env.source->pins.empty()) config["pins"] = env.source->pins;
+    }
 
     CoreRun run(env.core);
     std::string error;

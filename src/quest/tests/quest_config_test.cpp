@@ -962,6 +962,21 @@ void TheUpdateKeysAreReadAsThePcReadsThem() {
     CHECK(EventsContain(r, "config file key=update.enabled rejected reason=not_a_boolean"));
     CHECK(EventsContain(r, "config file key=update.channel rejected reason=not_a_word"));
   }
+  {  // the development source: read as given (checked by nevr_update::ResolveSource, which knows the build), no Warning here
+    const LoadResult r = Load(Full(), "update:\n  base: http://127.0.0.1:8080\n  pins: \"test RWQf\"\n");
+    CHECK(!r.config.fileRejected && !HasLevel(r, LogLevel::kWarn) && !HasLevel(r, LogLevel::kError));
+    CHECK(r.config.update.base.has_value() && *r.config.update.base == "http://127.0.0.1:8080");
+    CHECK(r.config.update.pins.has_value() && *r.config.update.pins == "test RWQf");
+    CHECK(!EventsContain(r, "unknown_keys=update."));
+    const LoadResult empty = Load(Full(), "update:\n  base: \"\"\n");
+    CHECK(empty.config.update.base.has_value() && empty.config.update.base->empty() && !empty.config.update.pins.has_value());
+  }
+  {  // a value that is no scalar is unset, with a Warning that names the key
+    const LoadResult r = Load(Full(), "update:\n  base: [a]\n  pins: {a: b}\n");
+    CHECK(!r.config.fileRejected && !r.config.update.base.has_value() && !r.config.update.pins.has_value());
+    CHECK(EventsContain(r, "config file key=update.base rejected reason=not_a_string"));
+    CHECK(EventsContain(r, "config file key=update.pins rejected reason=not_a_string"));
+  }
   {  // a key the section does not have is counted as unknown (KnownSections), not rejected
     const LoadResult r = Load(Full(), "update:\n  enabled: true\n  chanel: beta\n");
     CHECK(!r.config.fileRejected && r.config.update.enabled.has_value() && *r.config.update.enabled);

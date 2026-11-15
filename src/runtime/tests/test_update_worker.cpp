@@ -392,6 +392,137 @@ TEST(UpdatePolicy, DecideNamesTheFirstReasonInTheLogsOrder) {
   EXPECT_STREQ(DisabledWord(Disabled::kHostCannotSwap), "host_cannot_swap");
 }
 
+// The development update source (policy.h, ResolveSource): the one decision of base and pins.
+namespace {
+constexpr char kTestPinKey[] = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";  // 56 base64 characters
+constexpr char kTestPins[] = "test-key RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+}  // namespace
+
+TEST(UpdateSource, AReleaseBuildIgnoresBothKeysAndSaysSo) {
+  const SourceResolution none = ResolveSource(false, std::nullopt, std::nullopt);
+  EXPECT_EQ(none.verdict, SourceVerdict::kNone);
+  const SourceResolution base = ResolveSource(false, std::string("https://example.test/u"), std::nullopt);
+  EXPECT_EQ(base.verdict, SourceVerdict::kIgnoredRelease);
+  EXPECT_EQ(base.key, "update.base");
+  EXPECT_EQ(base.reason, "release_build");
+  EXPECT_TRUE(base.use.base.empty()) << "a release build carries nothing to the core";
+  const SourceResolution pins = ResolveSource(false, std::nullopt, std::string(kTestPins));
+  EXPECT_EQ(pins.verdict, SourceVerdict::kIgnoredRelease);
+  EXPECT_EQ(pins.key, "update.pins");
+  EXPECT_TRUE(pins.use.pins.empty());
+  EXPECT_STREQ(SourceVerdictWord(SourceVerdict::kIgnoredRelease), "ignored");
+}
+
+TEST(UpdateSource, ADevBuildUsesAValidBaseAndNormalizesIt) {
+  const SourceResolution https = ResolveSource(true, std::string("https://example.test/nevr/"), std::nullopt);
+  EXPECT_EQ(https.verdict, SourceVerdict::kUsed);
+  EXPECT_EQ(https.use.base, "https://example.test/nevr") << "the core joins \"<base>/<name>\": no trailing slash";
+  EXPECT_TRUE(https.use.pins.empty());
+  EXPECT_FALSE(https.pins_given);
+  const SourceResolution http = ResolveSource(true, std::string("http://127.0.0.1:8080"), std::nullopt);
+  EXPECT_EQ(http.verdict, SourceVerdict::kUsed) << "adb reverse serves plain http, in a dev build";
+  EXPECT_EQ(http.use.base, "http://127.0.0.1:8080");
+  EXPECT_STREQ(SourceVerdictWord(SourceVerdict::kUsed), "used");
+}
+
+TEST(UpdateSource, ADevBuildRefusesABaseThatIsNotUsable) {
+  const std::pair<const char*, const char*> bad[] = {
+      {"", "empty"},
+      {"ftp://example.test/u", "not_http_or_https"},
+      {"file:///sdcard/u", "not_http_or_https"},
+      {"example.test/u", "not_http_or_https"},
+      {"https://exa mple.test/u", "control_character"},
+      {"https://example.test/u\n", "control_character"},
+      {"https://example.test/\x01", "control_character"},
+      {"https://user:pw@example.test/u", "credentials_query_or_fragment"},
+      {"https://example.test/u?x=1", "credentials_query_or_fragment"},
+      {"https://example.test/u#f", "credentials_query_or_fragment"},
+      {"https://", "no_host"},
+      {"https:///u", "no_host"},
+  };
+  for (const auto& [text, reason] : bad) {
+    const SourceResolution r = ResolveSource(true, std::string(text), std::nullopt);
+    EXPECT_EQ(r.verdict, SourceVerdict::kRejected) << text;
+    EXPECT_EQ(r.reason, reason) << text;
+    EXPECT_EQ(r.key, "update.base") << text;
+    EXPECT_TRUE(r.use.base.empty()) << text;
+  }
+  const SourceResolution tooLong = ResolveSource(true, "https://example.test/" + std::string(kMaxSourceBaseBytes, 'a'), std::nullopt);
+  EXPECT_EQ(tooLong.reason, "too_long");
+  EXPECT_STREQ(SourceVerdictWord(SourceVerdict::kRejected), "rejected");
+}
+
+TEST(UpdateSource, PinsNeedABaseAndAreCheckedLineByLine) {
+  const SourceResolution used = ResolveSource(true, std::string("https://example.test/u"), std::string("# a comment\n\n") + kTestPins + "\n");
+  EXPECT_EQ(used.verdict, SourceVerdict::kUsed);
+  EXPECT_EQ(used.pins_count, 1u);
+  EXPECT_TRUE(used.pins_given);
+  EXPECT_EQ(used.use.pins, std::string("# a comment\n\n") + kTestPins + "\n") << "the core parses the text; it is passed as given";
+  EXPECT_EQ(ResolveSource(true, std::nullopt, std::string(kTestPins)).reason, "pins_without_base");
+  const std::pair<const char*, const char*> bad[] = {
+      {"", "empty"},
+      {"# only a comment\n", "no_keys"},
+      {"label-only\n", "malformed_line"},
+      {"label notbase64key\n", "malformed_key"},
+      {"label RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO\n", "malformed_key"},
+      {"label RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3\t\n", "control_character"},
+  };
+  for (const auto& [text, reason] : bad) {
+    const SourceResolution r = ResolveSource(true, std::string("https://example.test/u"), std::string(text));
+    EXPECT_EQ(r.verdict, SourceVerdict::kRejected) << text;
+    EXPECT_EQ(r.reason, reason) << text;
+    EXPECT_EQ(r.key, "update.pins") << text;
+    EXPECT_TRUE(r.use.base.empty()) << "one bad part uses neither: " << text;
+  }
+  EXPECT_EQ(std::string(kTestPinKey).size(), kPinKeyBase64Chars);
+}
+
+TEST(UpdateSource, ADevBuildWithASourceMayUpdateAndOneWithoutStaysDisabled) {
+  Switches s;
+  s.host_can_swap = true;
+  s.dev_build = true;
+  EXPECT_EQ(Decide(s), Disabled::kDevBuild) << "a dev build with no base stays disabled, with the existing reason";
+  s.dev_source_override = true;
+  EXPECT_EQ(Decide(s), Disabled::kNone);
+  s.flag_no_update = true;
+  EXPECT_EQ(Decide(s), Disabled::kFlag) << "the override lifts only the dev_build reason; the other switches still apply";
+  s.flag_no_update = false;
+  s.no_root = true;
+  EXPECT_EQ(Decide(s), Disabled::kNoRoot);
+  Switches release;
+  release.host_can_swap = true;
+  EXPECT_EQ(Decide(release), Disabled::kNone) << "a release build is decided as before";
+}
+
+TEST(UpdateSource, BaseAndPinsReachTheCoreOnlyWhenTheCheckEnvHoldsThem) {
+  Lines lines;
+  FakeCore core;
+  Root root;
+  CheckEnv env = MakeEnv(root, core, lines);
+  RunCheck(env);
+  ASSERT_EQ(core.open_calls, 1);
+  const json plain = json::parse(core.open_config);
+  EXPECT_FALSE(plain.contains("base")) << core.open_config;
+  EXPECT_FALSE(plain.contains("pins")) << core.open_config;
+  EXPECT_EQ(lines.Find("update check", {"source_override"}), "") << lines.Dump();
+
+  SourceOverride source;
+  source.base = "http://127.0.0.1:8080";
+  source.pins = kTestPins;
+  env.source = source;
+  RunCheck(env);
+  const json with = json::parse(core.open_config);
+  EXPECT_EQ(with.value("base", ""), "http://127.0.0.1:8080") << core.open_config;
+  EXPECT_EQ(with.value("pins", ""), kTestPins) << core.open_config;
+  EXPECT_NE(lines.Find("update check", {"source_override=true"}), "") << lines.Dump();
+
+  env.source->pins.clear();
+  RunCheck(env);
+  const json baseOnly = json::parse(core.open_config);
+  EXPECT_TRUE(baseOnly.contains("base"));
+  EXPECT_FALSE(baseOnly.contains("pins")) << "no pins given: the core keeps its built-in keys";
+}
+
 TEST(UpdatePolicy, ChannelIsTheConfigsThenTheInstallersThenTheCores) {
   Channel c = ResolveChannel("beta", "stable");
   EXPECT_EQ(c.name, "beta");

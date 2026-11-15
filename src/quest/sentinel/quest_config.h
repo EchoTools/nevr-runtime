@@ -157,9 +157,16 @@ struct HandFlipChoice {
 // The self-update's two keys (core/update/policy.h): `update.enabled` (a boolean) and `update.channel` (a word the update policy
 // checks). A key that is absent, or wrong, is left unset here and the policy's default stands; a wrong one is one Warning that names
 // the key and never the value.
+//
+// `update.base` and `update.pins` are the development source of the update: the raw text the file gave (a scalar), unchecked here. The
+// configuration only reads them; a DEVELOPMENT runtime checks them and may update from that base, and a RELEASE runtime ignores both
+// and says so (core/update/policy.h, ResolveSource; quest/runtime/update_wiring.h). An empty string is kept as given so the policy can
+// name it (reason=empty); a value that is no scalar is unset, with one Warning that names the key.
 struct UpdateChoice {
   std::optional<bool> enabled;
   std::optional<std::string> channel;
+  std::optional<std::string> base;
+  std::optional<std::string> pins;
 };
 
 // The CDN texture delivery's settings (docs/adr/0045-cdn-texture-delivery.md D6), after the file and the defaults have spoken. The

@@ -81,6 +81,7 @@ void CheckMain(const std::shared_ptr<Worker::Shared>& s) {
       env.version = version;
       env.runtime_sha256 = sha256;
       env.config_channel = s->deps.config_channel;
+      env.source = s->deps.source;
       env.core = s->deps.core;
       env.verify = s->deps.verify;
       env.log = s->deps.log;

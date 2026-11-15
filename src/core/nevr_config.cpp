@@ -267,8 +267,9 @@ const std::map<std::string, std::set<std::string>>& KnownSections() {
       {"social", {"facade", "send_presence_to_meta"}},
       {"diagnostics", {"hardware_dump", "pnsrad_provider", "ui_event_probe", "clock_levels_override", "frame_stats"}},
       {"graphics", {"texture_quality", "hand_flip"}},
-      // The self-update's two keys (core/update/policy.h, ResolveChannel): the switch and the channel the player asked for.
-      {"update", {"enabled", "channel"}},
+      // The self-update's keys (core/update/policy.h): the switch and the channel the player asked for (ResolveChannel), and the
+      // development source (ResolveSource): `base` and `pins`, which only a development Quest runtime uses. No PC reader reads them.
+      {"update", {"enabled", "channel", "base", "pins"}},
       // The custom-map channel (docs/adr/0048): the keys the PC reads through service_map.cpp and the Quest through
       // quest_config.cpp. No cache-size key: the cache's cap is a share of the device's facts (docs/adr/0045,
       // decision 8), never a configured constant. No subscription or server allow-list key: no local config chooses

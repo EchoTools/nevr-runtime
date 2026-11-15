@@ -68,8 +68,39 @@ bool OnFrame(void* context) noexcept {
 
 }  // namespace
 
+namespace {
+
+// "host[:port]" of an http(s) base that ResolveSource accepted: the text after the scheme up to the first '/'.
+std::string HostOf(const std::string& base) {
+  constexpr char kSeparator[] = "://";
+  const std::size_t start = base.find(kSeparator) + sizeof(kSeparator) - 1;  // ResolveSource guarantees the scheme
+  const std::size_t end = base.find('/', start);
+  return base.substr(start, end == std::string::npos ? std::string::npos : end - start);
+}
+
+}  // namespace
+
+std::vector<std::string> SourceLines(const nevr_update::SourceResolution& r) {
+  using nevr_update::SourceVerdict;
+  std::string head = std::string("[NEVR.UPDATE] update source outcome=") + nevr_update::SourceVerdictWord(r.verdict) + " source=config";
+  switch (r.verdict) {
+    case SourceVerdict::kNone: return {};
+    case SourceVerdict::kUsed:
+      return {head + " base_host=" + HostOf(r.use.base) + " pins=" + (r.pins_given ? std::to_string(r.pins_count) : "builtin") +
+              " consequence=\"the update source is overridden in this development build; releases are read from that base\""};
+    case SourceVerdict::kIgnoredRelease:
+      return {head + " key=" + r.key + " reason=" + r.reason + " consequence=\"a release build always updates from its own host and pinned keys\""};
+    case SourceVerdict::kRejected:
+      return {head + " key=" + r.key + " reason=" + r.reason + " consequence=\"no update source override; this development build does not update\""};
+  }
+  return {};
+}
+
 nevr_update::Deps BuildDeps(Inputs inputs) {
   nevr_update::Deps deps;
+  const nevr_update::SourceResolution source = nevr_update::ResolveSource(inputs.dev_build, inputs.config_base, inputs.config_pins);
+  if (source.verdict == nevr_update::SourceVerdict::kUsed) deps.source = source.use;
+  deps.switches.dev_source_override = source.verdict == nevr_update::SourceVerdict::kUsed;
   deps.switches.dev_build = inputs.dev_build;
   deps.switches.flag_no_update = inputs.flag_no_update;
   deps.switches.config_enabled = inputs.config_enabled;
@@ -96,6 +127,10 @@ StartResult Start(Inputs inputs, const RegisterFrameWorkFn& register_frame_work)
       return result;  // kCoreNotLinked, no worker
     }
     const nevr_update::LogFn log = inputs.log;
+    if (log) {
+      const nevr_update::SourceResolution source = nevr_update::ResolveSource(inputs.dev_build, inputs.config_base, inputs.config_pins);
+      for (const std::string& line : SourceLines(source)) log(nevr_update::kWarning, line);
+    }
     std::function<std::uint64_t()> now_ms = inputs.now_ms;
     nevr_update::Worker* worker = new nevr_update::Worker(BuildDeps(std::move(inputs)));  // NOLINT: never destroyed, see above
     result.worker = worker;

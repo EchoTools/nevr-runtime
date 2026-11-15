@@ -135,6 +135,8 @@ void StartUpdateWorker(const NevrQuestHostContext* host) noexcept {
   const nevr_quest::ResolvedConfig& config = sentinel::ActiveConfig();
   in.config_enabled = config.update.enabled;
   in.config_channel = config.update.channel;
+  in.config_base = config.update.base;
+  in.config_pins = config.update.pins;
   in.host_can_swap = nevr_quest_runtime_abi::HostCanSwap(host);
   if (host->update_root != nullptr) in.root = host->update_root;
   in.core = nevr_update::MakeFfiCore(nevr_quest::update_wiring::kQuestStageProfile);

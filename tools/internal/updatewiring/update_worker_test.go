@@ -248,6 +248,13 @@ func TestTheTwoConfigKeysAreReadThroughTheAccessorsAndDocumented(t *testing.T) {
 	mustMatch(t, `(?m)^# update:\n#   enabled: true\n#   channel: beta$`, read(t, "docs/reference/example-config.yaml"), "example-config.yaml")
 }
 
+func TestTheQuestRuntimePassesTheDevSourceKeysToTheWiring(t *testing.T) {
+	entry := code(t, "src/quest/runtime/runtime_entry.cpp")
+	mustMatch(t, `in\.config_base = config\.update\.base;`, entry, "runtime_entry.cpp")
+	mustMatch(t, `in\.config_pins = config\.update\.pins;`, entry, "runtime_entry.cpp")
+	mustMatch(t, `in\.dev_build = nevr_build::kIsDev;`, entry, "runtime_entry.cpp")
+}
+
 // ---- the confirmation outlives the off switches ----
 
 func TestOnlyADevBuildAndAHostThatCannotSwapSkipTheConfirmation(t *testing.T) {

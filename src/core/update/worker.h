@@ -30,6 +30,7 @@ namespace nevr_update {
 struct Deps {
   Switches switches;
   std::optional<std::string> config_channel;  ///< update.channel
+  std::optional<SourceOverride> source;       ///< a dev build's own update source; see CheckEnv::source. Unset on PC.
   bool server = false;
   std::string platform;  ///< the core's platform word, "pc" on PC (ADR 0024, section 3); required
   /// The nevr root, UTF-8. Empty when there is none (no %LOCALAPPDATA%): the worker starts no thread.

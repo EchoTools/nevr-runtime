@@ -17,6 +17,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "core/update/engine_check.h"
 #include "core/update/fs.h"
@@ -33,10 +34,14 @@ inline constexpr char kQuestStageProfile[] = R"({"kind":"quest-runtime","members
 
 /// What the runtime knows when it starts the worker.
 struct Inputs {
-  bool dev_build = false;                    ///< nevr_build::kIsDev: a developer's runtime is never replaced
+  bool dev_build = false;                    ///< nevr_build::kIsDev: a developer's runtime is never replaced, unless it has an `update.base`
   bool flag_no_update = false;               ///< the `-no-update` token, from a caller that has an argument list
   std::optional<bool> config_enabled;        ///< `update.enabled` (config.yaml); unset means on
   std::optional<std::string> config_channel; ///< `update.channel`; unset means the core's default
+  /// `update.base` and `update.pins` as the file gave them (unchecked). Only a dev build uses them (nevr_update::ResolveSource): a release
+  /// build ignores both and Start logs that it did; they never reach the core's open-config JSON there.
+  std::optional<std::string> config_base;
+  std::optional<std::string> config_pins;
   bool host_can_swap = false;                ///< the host's capability bit 0 (nevr_runtime_abi::kHostCapabilitySwap)
   std::string root;                          ///< the nevr root, UTF-8 (the folder that holds update/); empty when there is none
   const nevr_update::UpdateFs* fs = nullptr; ///< every file operation on update/ goes through it; required
@@ -49,8 +54,15 @@ struct Inputs {
 };
 
 /// The worker's inputs for `inputs`: the switches, the channel, the platform word "quest", the root, and the functions as given.
-/// `no_root` is set when the root is empty.
+/// `no_root` is set when the root is empty. The update source (`update.base`, `update.pins`) is `Deps::source` and the dev switch
+/// `dev_source_override` only in a dev build whose base and pins are valid (nevr_update::ResolveSource); otherwise neither is set.
 nevr_update::Deps BuildDeps(Inputs inputs);
+
+/// The records of the update source decision (`update source`): none for a build with neither key. A release build with a key writes one
+/// Warning (outcome=ignored); a dev build writes one Warning that the source is overridden (outcome=used), or one Warning for a value
+/// it refused (outcome=rejected, the update stays disabled). The base is named by its host and port only; a base cannot carry
+/// credentials, a query or a fragment (ResolveSource refuses them), so no secret can reach the line.
+std::vector<std::string> SourceLines(const nevr_update::SourceResolution& resolution);
 
 /// The frame call (frame_dispatch.h WorkFn): runs on the game thread once per frame.
 using FrameWorkFn = bool (*)(void* context) noexcept;
