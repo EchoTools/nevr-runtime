@@ -403,6 +403,11 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 		// -fno-exceptions (src/quest/sentinel/CMakeLists.txt).
 		"wizard metric observer (MetricLog)": regexp.MustCompile(`^_ZN10nevr_quest13wizard_metric12_GLOBAL__N_17ObserveE`),
 
+		// The arena-rules alias (config_alias_hook.cpp, AliasFor in config_alias_levels.cpp): the lookup handler calls it before it
+		// calls the game's lookup. It reconciles the alias table on the tick thread and resolves the key; it calls no game code and is
+		// noexcept, and its translation unit is built with exceptions and catches its own (config_alias_levels.cpp).
+		"config alias lookup (AliasFor)": regexp.MustCompile(`^_ZN10nevr_quest17config_alias_hook8AliasForE`),
+
 		// Cat's weapon values merged into mp_weapon_settings (MergeBalance in src/quest/sentinel/menu_cards_hook.cpp): the
 		// read-finished handler calls it before the game's allocator and the game's callback. It parses and builds JSON
 		// (core/combat_balance/balance_merge.h) and calls no game code; it is noexcept.
