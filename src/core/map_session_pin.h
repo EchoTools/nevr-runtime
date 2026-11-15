@@ -162,6 +162,8 @@ class GameAccess {
   virtual void Event(const PinEvent& event) = 0;  // every record the pin writes; the platform formats it
   // True when the platform holds its level load while JoinHeldFor reads true. The default leaves and joins again instead.
   virtual bool CanHoldLoad() { return false; }
+  // False when a map fetched this run plays only after the next start (the Quest: ChannelConfig::mounts_mid_run).
+  virtual bool MountsMidRun() { return true; }
 };
 
 // The level a session is at: the owner JSON's `level` when a lobby exists and it is non-zero, else the main level.

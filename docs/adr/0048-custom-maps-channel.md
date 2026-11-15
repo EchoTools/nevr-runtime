@@ -149,8 +149,14 @@ the arena override's precedence line in `src/runtime/lifecycle/arena_rules_hook.
 core and both game halves (`map_session_pin.h`, `runtime/content/map_session_pin_game.cpp` on the PC,
 `quest/cdn/map_pin_game.cpp` on the Quest). The PC calls its tick every frame (`src/runtime/frame/tick.cpp`), and its login
 carries the pins (`LoginEntries`, `src/runtime/compat/ws_bridge.cpp`). The Quest's login sets `map_report` to `LoginEntries`
-(`src/quest/integration/production_steps.cpp`). `RegistrationEntries` has no caller, and the Quest's `InstallTick` has no caller
-(KNOWN-WRONG #TBD at each site).
+(`src/quest/integration/production_steps.cpp`). `RegistrationEntries` has no caller (KNOWN-WRONG #TBD at that site).
+
+The Quest's request entry is wired (`src/quest/cdn/map_service.cpp` `Start`): a `MapRequests` behind `InstallRequestSeams`, so the
+shared session router's `RequestSessionGroup` asks for the session's group and the session pin (`InstallTick`, with the boot's
+view) asks for the one map the Quest lacks; the worker answers both on demand after its background pass (`ServeRequests`). The
+Quest's map sets mount once per run (`src/quest/sentinel/map_sets.h` `Mount`), so its channel runs with `mounts_mid_run` false:
+a request's mount only lists the group, the map downloads now and mounts at the next start, and the pin's notice and the
+`map_request` record say so ("restart the game to play it").
 
 The server's group fetch and its join hold are wired. The PC boot runs the channel on a dedicated server, and `StartFetch` starts a
 server worker (`StartServerWorker`, `src/runtime/content/map_channel.cpp`) that fetches only the group the server is allocated

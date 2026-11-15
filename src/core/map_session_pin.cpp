@@ -286,7 +286,11 @@ void ClientTick(GameAccess& game, std::uint64_t lobby, std::uint64_t now) {
   tick.key_view = view;
   if (held) return;
 
-  const ClientDecision decision = DecideClient(level, pin);
+  ClientDecision decision = DecideClient(level, pin);
+  // The fetch cures a map held at no version, but only at the next start here: "join again" would join the same refusal.
+  if (decision.holdable && !game.MountsMidRun()) {
+    decision.notice_line = FitLine({{"Map "}, {decision.id, true}, {" is downloading; restart the game to play it."}});
+  }
   PinEvent event;
   event.level = level;
   event.pin = pin;

@@ -103,6 +103,10 @@ struct ChannelConfig {
   // bucket moved past since the last run is never mounted at boot. False mounts every cached map at boot (the Quest, which has
   // no later mount yet).
   bool mount_on_demand = false;
+  // False: a map a session's request fetches mid-run is stored, not mounted, and plays after the next start; the request still
+  // lists its group's maps, so the session pin names what it lacks. The Quest: its map sets mount once per run
+  // (quest/sentinel/map_sets.h Mount), so a set registered later would be refused too late.
+  bool mounts_mid_run = true;
 };
 
 // Where a group's manifest is on the channel, and where the cache keeps the copy it verified.

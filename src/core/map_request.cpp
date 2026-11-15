@@ -25,11 +25,14 @@ std::string SizeText(std::uint64_t bytes) {
 
 }  // namespace
 
-std::string RequestConsequence(const FetchReport& report, bool named_map, bool is_server) {
+std::string RequestConsequence(const FetchReport& report, bool named_map, bool is_server, bool mounts_now) {
   const std::string& reason = report.reason;
   if (report.outcome != FetchOutcome::kFailed) {
     if (is_server) return "the group's maps are stored and mount now";
-    if (report.maps_updated > 0) return "the map is stored and mounts now, no restart: join again to play";
+    if (report.maps_updated > 0) {
+      return mounts_now ? "the map is stored and mounts now, no restart: join again to play"
+                        : "the map is stored: restart the game to play it (a map downloaded mid-run mounts at the next start)";
+    }
     if (!named_map) return "the maps you hold of this group are the current versions";
     return "your copy is the current version: a server running another version cannot be joined until it updates";
   }
@@ -76,17 +79,18 @@ bool MapRequests::Queue(const std::string& group, const std::string& id, std::st
     ids_[group].insert(id);
   }
   const bool is_server = is_server_;
+  const bool mounts_now = mounts_now_;
   nevr_cdn::Env& env = env_;
   const bool queued = queue_.Request(
       group,
-      [&env, is_server, group, id](const FetchReport& report) {
+      [&env, is_server, mounts_now, group, id](const FetchReport& report) {
         const bool failed = report.outcome == FetchOutcome::kFailed;
         env.Event(failed ? nevr_cdn::EventLevel::kWarn : nevr_cdn::EventLevel::kInfo, "map_request",
                   {{"outcome", FetchOutcomeName(report.outcome)},
                    {"group", group},
                    {"id", id.empty() ? std::string("-") : id},
                    {"reason", report.reason.empty() ? std::string("-") : report.reason},
-                   {"consequence", RequestConsequence(report, !id.empty(), is_server)}});
+                   {"consequence", RequestConsequence(report, !id.empty(), is_server, mounts_now)}});
       },
       reason);
   if (!queued) Refused(group, id, *reason);

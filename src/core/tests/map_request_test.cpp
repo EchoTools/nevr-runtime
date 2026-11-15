@@ -34,15 +34,16 @@ class MapRequestTest : public ::testing::Test, public Fixture {
   void TearDown() override { sp::ResetForTest(); }
 
   // A client process: the channel booted from whatever the cache holds, its view handed to the session pin.
-  void BootClient(bool mount_on_demand = false) {
+  void BootClient(bool mount_on_demand = false, bool mounts_mid_run = true) {
     mc::Settings settings;
     settings.base_url = kBase;
     settings.keys = {key.pin};
     ChannelConfig platform;
     platform.dir = kDir;
     platform.mount_on_demand = mount_on_demand;
+    platform.mounts_mid_run = mounts_mid_run;
     client = std::make_unique<mc::Channel>(platform, settings);
-    requests = std::make_unique<MapRequests>(env, /*is_server=*/false);
+    requests = std::make_unique<MapRequests>(env, /*is_server=*/false, mounts_mid_run);
     const mc::BootResult& boot = client->Boot(env, fs, mounter, nullptr, kNow, {});
     ASSERT_EQ(boot.start, mc::Start::kRun);
     run = boot.report;
@@ -143,6 +144,40 @@ TEST_F(MapRequestTest, ArenaCNotCachedIsDownloadedMountedAndLoadsWithNoRestart) 
   const Record* answer = env.FindRecord("map_request", "id", "arena_c");
   ASSERT_NE(answer, nullptr);
   EXPECT_EQ(answer->Get("outcome"), "fetched");
+}
+
+// Owner, on the Quest: "quest players cant download any cdn maps on demand?" They can. A platform whose map sets mount once per
+// run (mounts_mid_run false, the Quest) downloads only the map its session names, mounts nothing mid-run, says the map plays after
+// a restart, and mounts it at the next start.
+TEST_F(MapRequestTest, OnAPlatformThatMountsOnlyAtLaunchArenaCDownloadsNowAndPlaysAfterTheNextStart) {
+  channel.Publish("arena_c", "1.0.0", MakeSet(4, 'c'));
+  channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+  channel.Sign(1);
+  BootClient(/*mount_on_demand=*/false, /*mounts_mid_run=*/false);
+
+  ASSERT_TRUE(requests->RequestGroup(kGroup, &reason)) << reason;
+  Serve();
+  EXPECT_EQ(IndexGets("arena_c"), 0u);
+  const sp::ClientDecision before = Join("arena_c", kOtherServerPin);
+  EXPECT_EQ(before.action, sp::ClientAction::kLeave);
+  EXPECT_TRUE(before.request_fetch);
+  ASSERT_TRUE(requests->RequestMap(before.id, &reason)) << reason;
+  Serve();
+  EXPECT_EQ(fetched.outcome, FetchOutcome::kFetched);
+  EXPECT_EQ(IndexGets("arena_c"), 1u);
+  EXPECT_EQ(IndexGets("beta"), 0u);
+  EXPECT_FALSE(Mounted(mounted, "arena_c"));
+  EXPECT_FALSE(mounter.Called("set map:arena_c"));  // the run's one mount is past: nothing is registered too late
+  const Record* answer = env.FindRecord("map_request", "id", "arena_c");
+  ASSERT_NE(answer, nullptr);
+  EXPECT_EQ(answer->Get("consequence"),
+            "the map is stored: restart the game to play it (a map downloaded mid-run mounts at the next start)");
+  EXPECT_EQ(Join("arena_c", kOtherServerPin).action, sp::ClientAction::kLeave);  // never played this run
+
+  BootClient(/*mount_on_demand=*/false, /*mounts_mid_run=*/false);  // the next start
+  EXPECT_TRUE(Mounted(run, "arena_c"));
+  EXPECT_FALSE(Mounted(run, "beta"));
+  EXPECT_EQ(Join("arena_c", ServerPinOfMounted("arena_c")).action, sp::ClientAction::kNone);
 }
 
 // The server runs V and the cache holds V: no fetch is asked, and the session loads.

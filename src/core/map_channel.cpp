@@ -313,7 +313,11 @@ void Channel::ServeRequests(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_maps:
       scope.in_use = mount_->MountedIds();
       const nevr_maps::FetchReport fetched =
           nevr_maps::FetchGroup(env, fs, config_, group, run_.deferred, deriver, now_utc(), keep_going, progress, scope);
-      const nevr_maps::MountReport mounted = mount_->Mount({group}, now_utc(), config_.mount_on_demand ? &asked.ids : nullptr);
+      static const std::vector<std::string> kListOnly;  // every map of the group is listed and none mounts (mounts_mid_run false)
+      const std::vector<std::string>* only = !config_.mounts_mid_run    ? &kListOnly
+                                             : config_.mount_on_demand ? &asked.ids
+                                                                       : nullptr;
+      const nevr_maps::MountReport mounted = mount_->Mount({group}, now_utc(), only);
       MergeMountReport(run_, mounted);
       if (after) after(fetched, mounted, run_);
       return fetched;

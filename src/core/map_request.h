@@ -26,15 +26,18 @@
 namespace nevr_maps {
 
 // The plain words for a request's answer (the `consequence` of its record): what the player gets, or why not. `named_map`: the
-// request named a map (the session pin's), not only a group.
-std::string RequestConsequence(const FetchReport& report, bool named_map, bool is_server);
+// request named a map (the session pin's), not only a group. `mounts_now` false: what arrives plays after the next start
+// (ChannelConfig::mounts_mid_run).
+std::string RequestConsequence(const FetchReport& report, bool named_map, bool is_server, bool mounts_now = true);
 
 class MapRequests {
  public:
   using Fetch = std::function<FetchReport(const std::string& group, const FetchScope& scope)>;
 
   // `env` takes the records; it must outlive this object. A server fetches every map its group lists, a client on demand.
-  MapRequests(nevr_cdn::Env& env, bool is_server) : env_(env), is_server_(is_server) {}
+  // `mounts_now` is the channel's ChannelConfig::mounts_mid_run: the records say when what arrived is played.
+  MapRequests(nevr_cdn::Env& env, bool is_server, bool mounts_now = true)
+      : env_(env), is_server_(is_server), mounts_now_(mounts_now) {}
   MapRequests(const MapRequests&) = delete;
   MapRequests& operator=(const MapRequests&) = delete;
 
@@ -67,6 +70,7 @@ class MapRequests {
 
   nevr_cdn::Env& env_;
   const bool is_server_;
+  const bool mounts_now_;
   GroupFetchQueue queue_;
   std::atomic<bool> stopped_{false};
   mutable std::mutex mutex_;

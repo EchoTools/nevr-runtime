@@ -180,6 +180,9 @@ class QuestGameAccess final : public core::GameAccess {
   }
 
   void Event(const core::PinEvent& event) override { WriteEvent(event); }
+
+  // The map sets mount once per run (quest/sentinel/map_sets.h): a map downloaded now plays after the next start.
+  bool MountsMidRun() override { return false; }
 };
 
 QuestGameAccess g_game;

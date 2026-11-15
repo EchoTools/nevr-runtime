@@ -102,6 +102,8 @@ class FakeGame : public sp::GameAccess {
   std::uint64_t NowMs() override { return now; }
   void Event(const sp::PinEvent& event) override { events.push_back(event); }
   bool CanHoldLoad() override { return can_hold; }
+  bool mounts_mid_run = true;
+  bool MountsMidRun() override { return mounts_mid_run; }
 
   std::size_t Count(sp::PinEventKind kind) const {
     std::size_t n = 0;
@@ -643,6 +645,25 @@ TEST_F(MapSessionPin, AListedMapNotCachedLeavesWithADownloadNoticeAndRequestsIt)
   EXPECT_EQ(decision.reason, "not_mounted");
   EXPECT_TRUE(decision.request_fetch);
   EXPECT_EQ(decision.notice_line, "Downloading arena_c; join again when it is ready.");
+}
+
+// The Quest (MountsMidRun false): the map it lacks downloads now and plays after the next start, so the notice says restart.
+TEST_F(MapSessionPin, APlatformThatMountsOnlyAtLaunchSaysRestartToPlayTheMapItDownloads) {
+  sp::SetFetchRequest(&RecordFetch);
+  sp::ChannelView view;
+  view.listed = {{Level("arena_c"), "arena_c"}};
+  view.not_mounted = {{"arena_c", "not_cached"}};
+  sp::SetChannelView(view);
+  FakeGame game;
+  game.mounts_mid_run = false;
+  game.state = 6;
+  game.owner["level"] = Level("arena_c");
+  game.owner["nevr_map_pin"] = sp::PinValue(Pin("arena_c", "1.0", kSourceA));
+  for (int i = 0; i < 20; ++i) sp::TickWith(game);
+  EXPECT_EQ(game.schedule_calls, 1);
+  ASSERT_EQ(game.notices.size(), 1u);
+  EXPECT_EQ(game.notices[0].second, "Map arena_c is downloading; restart the game to play it.");
+  EXPECT_EQ(g_fetches, std::vector<std::string>{"arena_c"});
 }
 
 TEST_F(MapSessionPin, AStaleCopyLeavesAndRequestsTheCurrentVersion) {

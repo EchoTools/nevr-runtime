@@ -153,6 +153,7 @@ class Channel {
   // mount of its group from the cache through the boot's mount (the hot mount): a map that arrived mounts now, with no restart; a
   // map this run mounted at another version is skipped (mounted_other_version), never replaced, so a loaded level is never
   // swapped. `after` hears each fetch with its mount and the run's folded report, on the worker, before the requests' answers.
+  // With ChannelConfig::mounts_mid_run false the mount only lists the group: what arrived plays after the next start.
   using AfterMount = std::function<void(const nevr_maps::FetchReport& fetched, const nevr_maps::MountReport& mounted,
                                         const nevr_maps::MountReport& run)>;
   void ServeRequests(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_maps::Deriver* deriver, nevr_maps::MapRequests& requests,
