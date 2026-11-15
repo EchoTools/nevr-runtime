@@ -209,6 +209,10 @@ test-android: check-android-static-init
 test-crash-ingest-contract:
     cd tests/crash-ingest && go test -v ./...
 
+# Wire contracts with the game service and sites that have no runtime code yet (docs/reference/service-contracts.md).
+test-service-contracts:
+    cd tests/contracts && go test -count=1 -v ./...
+
 # Repack: rename the real libovrplatformloader.so -> _orig.so (fixes soname).
 # Operates on a COPY under build/; never mutates the source-of-truth extract.
 # On-device install (repack APK + sideload) is out of scope here — no prod deploy.
