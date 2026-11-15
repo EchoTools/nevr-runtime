@@ -255,6 +255,12 @@ std::unique_ptr<Store::Writer> Store::Begin(std::uint64_t size, const char** rea
   }
   if (current_ == nullptr || current_file_ != file) {
     std::unique_ptr<AppendFile> f = env_.OpenAppend(StoreFilePath(dir_, file));
+    // On the PC a mounted store file is held with FILE_SHARE_READ alone for the life of the process (Mount), so a fetch after
+    // the boot mount cannot append to it: the object goes into the next store file.
+    if (f == nullptr && file + 1 < limits_.max_store_files) {
+      ++file;
+      f = env_.OpenAppend(StoreFilePath(dir_, file));
+    }
     if (f == nullptr) {
       *reason = "open_failed";
       return nullptr;
@@ -274,6 +280,11 @@ std::unique_ptr<Store::Writer> Store::Begin(std::uint64_t size, const char** rea
   }
   writer_live_ = true;
   return std::unique_ptr<Writer>(new StoreWriter(this, file, files_[file].end, size));
+}
+
+void Store::EndWrites() {
+  if (writer_live_) return;
+  current_.reset();
 }
 
 std::size_t Store::Verify(std::size_t* checked) {

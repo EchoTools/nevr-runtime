@@ -217,6 +217,47 @@ void OnlyOneWriterIsLiveAtATime() {
   QCHECK(store->Begin(100, &why) != nullptr);
 }
 
+// EndWrites closes the append handle so a mount can open the file (the PC's share modes, cdn_fake_env.h windows_sharing); while a
+// Writer is live it leaves the handle open, so that object still completes; while a mount holds the file, the next Begin
+// uses the next file.
+void EndWritesLetsTheFileBeOpenedAndSparesALiveWriter() {
+  FakeEnv env;
+  env.windows_sharing = true;
+  std::unique_ptr<nc::Store> store = Open(env, TestLimits());
+  const std::string frame = MakeFrame(300, 120, 'a');
+  const char* why = "";
+  std::unique_ptr<nc::Store::Writer> w = store->Begin(frame.size(), &why);
+  QCHECK(w != nullptr);
+  store->EndWrites();
+  QCHECK(w->Write(frame.data(), frame.size()) && w->Commit(Sha256Of(frame), 300));
+  std::int64_t handle = 0;
+  std::uint64_t size = 0;
+  QCHECK(!env.OpenBlob(nc::StoreFilePath(kDir, 0), &handle, &size));  // the append handle is still open
+  store->EndWrites();
+  QCHECK(env.OpenBlob(nc::StoreFilePath(kDir, 0), &handle, &size) && size == frame.size());
+  // A mount holds file 0: the next object goes into file 1, and the one after it follows it there.
+  const std::string sb = Put(*store, MakeFrame(301, 127, 'b'), 301);
+  QCHECK(!sb.empty() && store->Find(sb)->file == 1 && store->Find(sb)->offset == 0);
+  env.CloseBlob(handle);
+  const std::string sc = Put(*store, MakeFrame(302, 133, 'c'), 302);
+  QCHECK(!sc.empty() && store->Find(sc)->file == 1 && store->Find(sc)->offset == 127);
+}
+
+// With the last file it may use held by a mount, there is no next file to go to: the object is refused as open_failed.
+void AHeldStoreFileAtTheFileLimitIsRefused() {
+  FakeEnv env;
+  env.windows_sharing = true;
+  std::unique_ptr<nc::Store> store = Open(env, TestLimits(nc::kFormatMaxStoreBytes, 1));
+  QCHECK(!Put(*store, MakeFrame(300, 120, 'a'), 300).empty());
+  store->EndWrites();
+  std::int64_t handle = 0;
+  std::uint64_t size = 0;
+  QCHECK(env.OpenBlob(nc::StoreFilePath(kDir, 0), &handle, &size));
+  const char* reason = "";
+  QCHECK(Put(*store, MakeFrame(301, 127, 'b'), 301, &reason).empty() && std::string(reason) == "open_failed");
+  env.CloseBlob(handle);
+}
+
 void AFullDiskFailsTheWriteAndTheBytesAreGivenBack() {
   FakeEnv env;
   std::unique_ptr<nc::Store> store = Open(env, TestLimits());
@@ -510,6 +551,8 @@ int main() {
   AnObjectLargerThanAStoreFileIsRefusedByName();
   AnAbortedObjectLeavesTheFileAsItWas();
   OnlyOneWriterIsLiveAtATime();
+  EndWritesLetsTheFileBeOpenedAndSparesALiveWriter();
+  AHeldStoreFileAtTheFileLimitIsRefused();
   AFullDiskFailsTheWriteAndTheBytesAreGivenBack();
   ATornIndexRecordIsCutOffAtTheNextBoot();
   ARecordWithABadCrcEndsTheIndexThere();

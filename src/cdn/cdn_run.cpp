@@ -660,6 +660,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
               {{"result", "save_failed"}, {"consequence", "the next launch mounts the manifest saved before this one, or none"}});
   }
   if (changed || result.fetched != 0) {
+    store->EndWrites();  // the mount opens the store files this run appended to; on the PC an open append handle refuses that open
     const std::uint64_t mountStarted = env.NowMs();
     std::unique_ptr<Mounted> mounted(new Mounted(Mount(env, *store, manifest, config.platform, config.policy)));
     const std::uint64_t mountMs = env.NowMs() - mountStarted;

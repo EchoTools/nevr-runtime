@@ -106,6 +106,11 @@ class Store {
   // `size` is the stored size the object will have. Null, with *reason set, when there is no room: "no_store_file" (the file count
   // would pass Limits::max_store_files), "too_large" (the object is larger than a store file) or "open_failed".
   std::unique_ptr<Writer> Begin(std::uint64_t size, const char** reason);
+  // Closes the store file being appended to, so a mount can open it. On the PC a mounted store file is held with
+  // FILE_SHARE_READ alone (no writer while the engine reads it), so an append handle still open on it makes that open fail with a
+  // sharing violation, on Windows and under Wine alike. Does nothing while a Writer is live. A later Begin opens the file again, or,
+  // when a mount holds it, the next store file.
+  void EndWrites();
 
   // Reads every object back and hashes it, for a person or a test that wants to know. Never called at boot.
   // Returns the number of objects whose bytes do not hash to their name.

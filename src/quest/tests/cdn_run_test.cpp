@@ -141,6 +141,41 @@ void TheFirstLaunchFetchesStoresSavesMountsAndPublishes() {
   }
 }
 
+// The PC holds a mounted store file deny-write and its append handle deny-write too (src/cdn/env_windows.cpp), so a mount made while
+// the fetch's append handle is still open fails with a sharing violation. The fetch closes its handles before it mounts.
+void AFirstLaunchUnderWindowsShareModesMountsWhatItFetched() {
+  World w;
+  FakeEnv env;
+  env.windows_sharing = true;
+  w.Serve(env);
+  Captured cap;
+  const nc::RunResult r = nc::FetchAndMount(env, w.config, cap.Sink(), kGo);
+  QCHECK(r.fetched == 4 && r.failed == 0 && r.published);
+  QCHECK(cap.sets.size() == 1 && cap.sets[0]->records == 4 && cap.sets[0]->files == 1 && cap.sets[0]->refused == 0);
+  for (const cdn_test::Record& rec : env.records) QCHECK(!(rec.name == "cdn_mount" && rec.Get("reason") == "open_failed"));
+}
+
+// The next launch mounts the store at boot, and that mount holds store file 0 for the life of the process; a fetch of a new
+// object then cannot append to file 0 under the PC's share modes, so it stores the object in file 1 and mounts both.
+void AnUpdateLaunchUnderWindowsShareModesStoresIntoTheNextFileAndMounts() {
+  World w;
+  FakeEnv first;
+  first.windows_sharing = true;
+  w.Serve(first);
+  Captured cap1;
+  QCHECK(nc::FetchAndMount(first, w.config, cap1.Sink(), kGo).published);
+  w.Add(900, 150, 'n', kArchive, "0x999");
+  FakeEnv second(first.fs_);
+  second.windows_sharing = true;
+  w.Serve(second);
+  Captured cap2;
+  QCHECK(nc::MountFromCache(second, w.config, cap2.Sink()));
+  const nc::RunResult r = nc::FetchAndMount(second, w.config, cap2.Sink(), kGo);
+  QCHECK(r.fetched == 1 && r.failed == 0 && std::string(r.stopped).empty() && r.published);
+  QCHECK(cap2.sets.size() == 2 && cap2.sets[1]->records == 5 && cap2.sets[1]->files == 2 && cap2.sets[1]->refused == 0);
+  QCHECK(second.fs_->files[nc::StoreFilePath(kDir, 1)] == w.objs.back().frame);
+}
+
 void TheLogHasTheLimitsTheStoreThePlanTheObjectsAndTheOutcome() {
   World w;
   FakeEnv env;
@@ -818,6 +853,8 @@ int main() {
   AFrameWithABrokenHeaderIsRefusedBeforeTheBody();
   AShortOrForeignBodyIsRefusedAsNoManifest();
   TheFirstLaunchFetchesStoresSavesMountsAndPublishes();
+  AFirstLaunchUnderWindowsShareModesMountsWhatItFetched();
+  AnUpdateLaunchUnderWindowsShareModesStoresIntoTheNextFileAndMounts();
   TheLogHasTheLimitsTheStoreThePlanTheObjectsAndTheOutcome();
   TheSecondLaunchMountsFromTheStoreWithNoRequestAndNoHash();
   AFetchOfWhatTheStoreHoldsMakesOnlyTheManifestRequestAndPublishesNothing();
