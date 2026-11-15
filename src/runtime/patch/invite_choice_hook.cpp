@@ -52,8 +52,8 @@ void Observe(std::uint64_t space, std::uint64_t eventAddress) {
     return true;
   };
   // #1857: a click on the PLUGINS card. This runs for every call of SendComponentEvent (about 25 callers, grab events
-  // included, constantly in a match), so the cost is the point: ReadPluginsPress reads the event symbol, the component of a
-  // card click, and walks the sender only for a press on this card. The line is built into a fixed buffer, only for that
+  // included; event-driven callers, rate not measured), so the cost is the point: ReadPluginsPress reads the event symbol,
+  // the component of a card click, and walks the sender only for a press on this card. The line is built into a fixed buffer, only for that
   // press, which is a click by the player and the first line an operator or a tester looks for.
   nevr_menu_press::Press press;
   nevr_menu_press::Sender sender = nevr_menu_press::Sender::Unreadable;

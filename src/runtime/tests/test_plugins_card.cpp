@@ -3,7 +3,7 @@
 // one Info line it writes. No game and no hook: the event, the game space and the actor table below are buffers in this
 // process, read by the same ReadPluginsPress the hook calls.
 //
-// SendComponentEvent has about 25 callers and runs constantly in a match, so the cost is part of the behaviour: an event
+// SendComponentEvent has about 25 callers (event-driven callers, rate not measured), so the cost is part of the behaviour: an event
 // that is not a card click reads one word, a card click that is not PLUGINS reads two, and only a PLUGINS press walks the
 // sender (four reads outside the event, each a page query in the hook).
 

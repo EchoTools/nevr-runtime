@@ -1,6 +1,6 @@
 """#1857: the press on the PLUGINS card is decided in the wizard observer's path (one detour on SendComponentEvent, never a
-second) and written once at Info, into a fixed buffer. SendComponentEvent has about 25 callers and runs constantly in a
-match, so the hook must not do per-call work beyond the cheap read: no per-call log line, no sender walk of its own, no
+second) and written once at Info, into a fixed buffer. SendComponentEvent has about 25 callers (event-driven callers, rate not
+measured), so the hook must not do per-call work beyond the cheap read: no per-call log line, no sender walk of its own, no
 heap on the path of an event that is not the press. The cost is tested by src/runtime/tests/test_plugins_card.cpp and
 test_menu_press.cpp; these are source sensors for what that cannot see: the call in the hook, its level, its buffer, and
 the tag row. Each check takes the text it reads, so a test can hand it a broken copy and see it fail."""

@@ -1,8 +1,8 @@
 #pragma once
 
 // #1857, docs/standards/logging.md ([NEVR.PLUGINMGR]): what a main-menu card press looks like as a component event, as pure
-// logic. CncaGameSpace::SendComponentEvent has about 25 callers (grab events included) and runs constantly in a match, so
-// what the plugin manager's press hook does for every call has to be nearly free: ReadHead reads the event symbol and, for a
+// logic. CncaGameSpace::SendComponentEvent has about 25 callers (grab events included; event-driven callers, rate not
+// measured), so what the plugin manager's press hook does for every call has to be nearly free: ReadHead reads the event symbol and, for a
 // card click only, the component, and both words are inside the event, which the game itself has just read. The sender walk
 // (ResolveOwner: four reads outside the event, a page query each in the hook) is a separate step the caller takes only after
 // the head says the event is worth it. No game and no clock in here: the hook passes a reader that can refuse.

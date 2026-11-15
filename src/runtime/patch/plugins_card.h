@@ -4,7 +4,8 @@
 // menu is a clone of the TUTORIALS card (the fifth-card override set). A press on a card is one call of
 // CncaGameSpace::SendComponentEvent with the symbol evt_card_clicked, the page actor as owner and the card's own component
 // id; every card sends the same symbol and the same owner, so the component is the one word that tells them apart (measured
-// on a PC client: target and value are the same for every card). The observer in patch/invite_choice_hook.cpp calls
+// on a PC client, https://github.com/EchoTools/nevr-runtime/issues/1857#issuecomment-6807713221: target and value are the same
+// for every card). The observer in patch/invite_choice_hook.cpp calls
 // ReadPluginsPress for every call: it reads the symbol, the component of a card click, and walks the sender only for a press
 // on this card. No game and no clock in here.
 
@@ -19,8 +20,11 @@ namespace nevr_plugins_card {
 
 // The component id the override set gives the PLUGINS card: the first 8 bytes of the card's entry in the mnu_master
 // CR15UIPage2ElementCR override. That entry is the source of truth; tools/tests/test_plugins_card_override.py fails when
-// this number and the entry differ. It must not equal kTutorialsCardComponent: the clone first shared it, and a press on
-// PLUGINS then started the tutorial.
+// this number and the entry differ. The override set is not built by anything in this repository (no recipe, no tool).
+// Issue #1857 comment 6806640751 names the fork branch that holds its first version, and comment 6832581852 is the
+// measurement of this id: a press on the card carried component 0x35ec861316abbbf1 and did not start the tutorial,
+// https://github.com/EchoTools/nevr-runtime/issues/1857#issuecomment-6832581852
+// It must not equal kTutorialsCardComponent: the clone first shared it, and a press on PLUGINS then started the tutorial.
 inline constexpr uint64_t kPluginsCardComponent = 0x35ec861316abbbf1ULL;
 // The TUTORIALS card's component id in the game's own resource, the card the PLUGINS card was cloned from.
 inline constexpr uint64_t kTutorialsCardComponent = 0x35ec861316abbb35ULL;

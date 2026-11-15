@@ -116,7 +116,9 @@ class PluginsCardIdTest(unittest.TestCase):
     def test_the_fixture_matches_the_real_override_set(self):
         directory = os.environ.get(ENV)
         if not directory:
-            self.skipTest(f"{ENV} is not set: the override set is not in the repository, so the fixture was not compared with it")
+            # CI never sets ENV (the override set is not in the repository), so this test always skips in CI: the check of the
+            # fixture against the real override file runs only locally, and is NOT VERIFIED in CI.
+            self.skipTest(f"{ENV} is not set: the override set is not in the repository, so the fixture was not compared with it (not run in CI)")
         fixture = load_fixture()
         path = Path(directory) / fixture["override_file"]
         self.assertTrue(path.is_file(), f"{ENV}={directory} has no {fixture['override_file']}")
