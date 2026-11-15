@@ -17,9 +17,7 @@ src/quest/tests/integration_sequence_test.cpp	1
 src/quest/tests/refresh_rate_test.cpp	1
 tools/quest_release_base.py	4
 tools/quest_release_timer.py	3
-tools/quest_repack_libs.py	3
 tools/tests/test_publish_quest_apk.py	3
 tools/tests/test_quest_release_base.py	2
 tools/tests/test_quest_release_timer.py	9
-tools/tests/test_quest_repack_libs.py	6
 tools/tests/test_release_quest_apk.py	23

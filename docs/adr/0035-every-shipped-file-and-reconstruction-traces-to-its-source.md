@@ -23,8 +23,8 @@ a recipe here first:
   (`tools/cmd/quest-default-on`, `tools/internal/afkdefaulton`), and checks the signed APK carries exactly that list.
 
 - `libvrapi.so`: its libr15 checksum lists are rewritten on every build to the libr15 the APK carries
-  (`tools/quest_runtime_pin.py`: "the pin is computed from the staged file on every build"), and `verify-signed` checks the
-  signed copy against the pin tool's output (`tools/quest_repack_libs.py`).
+  (`tools/internal/questruntimepin`: "the pin is computed from the staged file on every build"), and `verify-signed` checks the
+  signed copy against the pin tool's output (`tools/cmd/quest-repack-libs`).
 - `libassetpatch.so`: the package rename rewrites two strings in it, as it rewrites five in the reference `libr15.so`, one in
   the manifest and, by the reference runtime the base carries (`KNOWN_RUNTIMES`), none or one in `libvrapi.so`
   (a runtime the table does not name must hold none; `tools/quest_apk_rename_package.py`).

@@ -1,6 +1,6 @@
 """A stand-in for the libr15 patcher (src/quest/patch/quest_patch_libr15) for the tests of the Quest repack.
 
-The real tool refuses any file but the store's 58 MB libr15.so, so the tests that run `tools/quest_repack_libs.py
+The real tool refuses any file but the store's 58 MB libr15.so, so the tests that run `tools/cmd/quest-repack-libs
 verify-signed` or `just android-repack-apk` over a fabricated APK give them this executable instead. It takes the real
 tool's command line (`--stock F --out F --report F [--extra-rows F]`), records the arguments it was given beside itself
 (`<script>.argv`: the last run's, one per line; `<script>.runs`: one line per run, in order), and by mode:

@@ -57,4 +57,4 @@ Scope: `src/quest`, its plugins, `src/runtime`, `src/modules`.
 
 Whether the refresh-rate owner ADR 0046 names (the combat refresh-rate rule, which the render configuration handler asks)
 holds on a headset; the run of #2000 shows it. Whether the reference runtime's modules in the release APK's `libvrapi.so`
-(kept in the release by `tools/quest_runtime_pin.py`) change clock levels or the refresh rate: O1 covers this tree's code only.
+(kept in the release by `tools/internal/questruntimepin`) change clock levels or the refresh rate: O1 covers this tree's code only.

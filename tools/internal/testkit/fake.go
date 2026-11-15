@@ -53,13 +53,22 @@ var (
 // was started under the name of one of fakes (a link made by Fake), it runs that fake and exits with its code, without
 // starting the tests. Otherwise it records fakes as the names Fake accepts and runs the tests.
 func Main(m *testing.M, fakes Fakes) {
+	MainWith(m, fakes, func() func() { return func() {} })
+}
+
+// MainWith is Main for a package whose tests share one setup, such as a build made once for all of them: setup runs
+// before the tests (never for a fake), and the function it returns runs after them, before the process exits.
+func MainWith(m *testing.M, fakes Fakes, setup func() (undo func())) {
 	if fn, ok := fakes[filepath.Base(os.Args[0])]; ok {
 		os.Exit(runFake(filepath.Base(os.Args[0]), fn))
 	}
 	registryMu.Lock()
 	registry = fakes
 	registryMu.Unlock()
-	os.Exit(m.Run())
+	undo := setup()
+	code := m.Run()
+	undo()
+	os.Exit(code)
 }
 
 // Fake makes the command name available to the test: the test binary, linked under that name in a directory of its

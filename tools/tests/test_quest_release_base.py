@@ -10,18 +10,32 @@ import io
 import json
 import pathlib
 import shutil
+import struct
 import sys
 import tempfile
 import unittest
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 
+# The reference runtime's checksum list opens with the stock libr15's md5 and has twelve gated sites (the Go
+# package questruntimepin's StockEntryMD5 and Sites).
+STOCK_ENTRY_MD5 = "4911ef7f1248580ee2978590d581dbfd"
+KNOWN_SITES = (12, 13)
+
+
+def aarch64_elf(payload: bytes) -> bytes:
+    """A minimal AArch64 ELF64 whose one executable segment holds `payload`: what quest-runtime-pin detect reads (it refuses
+    a file that is not one, ExecRanges)."""
+    header = b"\x7fELF" + bytes([2, 1, 1, 0]) + b"\0" * 8 + struct.pack(
+        "<HHIQQQIHHHHHH", 3, 0xB7, 1, 0, 64, 0, 0, 64, 56, 1, 64, 0, 0)
+    segment = struct.pack("<IIQQQQQQ", 1, 5, 120, 0, 0, len(payload), len(payload), 0x1000)
+    return header + segment + payload
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import axml_fixtures as fx  # noqa: E402
 import quest_apk_label as ql  # noqa: E402
 import quest_release_base as qb  # noqa: E402
-import quest_runtime_pin as pin  # noqa: E402
 import test_quest_apk_rename_package as rename_fixture  # noqa: E402
 
 REFERENCE = ("AndroidManifest.xml", "assets/afk_default_on.txt", "lib/arm64-v8a/libassetpatch.so",
@@ -183,15 +197,15 @@ class CheckArena(unittest.TestCase):
 
     def test_the_reference_runtime_is_refused_and_the_stores_own_libvrapi_passes(self):
         """docs/adr/0047: the default Quest build carries no libvrapi.so from the reference build. The reference runtime is known by
-        its libr15 checksum table (as many copies of one md5 text as a known runtime has modules, pin.KNOWN_SITES, 12 or 13;
-        quest_runtime_pin.carries_table); the store's own library has none."""
-        for modules in pin.KNOWN_SITES:
+        its libr15 checksum table (as many copies of one md5 text as a known runtime has modules, KNOWN_SITES, 12 or 13;
+        quest-runtime-pin detect (internal/questruntimepin)); the store's own library has none."""
+        for modules in KNOWN_SITES:
             with self.subTest(modules=modules):
-                table = (pin.STOCK_ENTRY_MD5.encode() + b"\0") * modules
-                refusal = self.refused(self.make(extra_bytes={qb.RUNTIME_ENTRY: b"\x7fELF reference runtime\0" + table}))
+                table = (STOCK_ENTRY_MD5.encode() + b"\0") * modules
+                refusal = self.refused(self.make(extra_bytes={qb.RUNTIME_ENTRY: aarch64_elf(table)}))
                 self.assertEqual(refusal.event, "arena_has_combat_entries")
                 self.assertEqual(refusal.fields["entries"], [qb.RUNTIME_ENTRY])
-        store = self.make(extra_bytes={qb.RUNTIME_ENTRY: b"\x7fELF the store's VrApi\0" + pin.STOCK_ENTRY_MD5.encode() + b"\0"})
+        store = self.make(extra_bytes={qb.RUNTIME_ENTRY: aarch64_elf(STOCK_ENTRY_MD5.encode() + b"\0")})
         self.assertEqual(qb.check_arena(store)["event"], "arena_has_no_combat")
 
     def test_a_stamp_other_than_arena_or_none_is_refused(self):

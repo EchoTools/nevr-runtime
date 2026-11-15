@@ -80,7 +80,7 @@ What the tree and the binary give us (pinned `libr15.so`, build ID `b243509c08ce
    off (`android-repack-apk`'s `plugin_off` argument): it loads only when `config.yaml` names it in `plugins:`, because
    its init refuses a run with no `args.route`. No recipe that builds a release or `package-dev` APK carries it
    (`android-repack-apk`'s `plugin` argument). `just quest-autopilot-apk` is the one recipe that does. The recipe refuses a plugin whose build-ID note does not list the store APK's own `libr15.so`
-   build ID (`tools/quest_repack_libs.py check-plugin-build-ids`), so an APK whose plugin the loader would refuse is
+   build ID (`tools/cmd/quest-repack-libs check-plugin-build-ids`), so an APK whose plugin the loader would refuse is
    never signed.
 6. **The filter never logs, allocates, locks or calls into the game.** It reads `CLOCK_MONOTONIC`, sets the state,
    and puts events into a fixed ring with their timestamps taken at the frame they happen, then wakes the reporter

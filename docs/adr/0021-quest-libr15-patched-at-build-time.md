@@ -221,7 +221,7 @@ the one the run-time patch has today (#970).
 ### 9. The repack writes the patched file; the signed APK is checked against the patcher
 
 `android-repack-apk` (justfile) extracts `lib/arm64-v8a/libr15.so` from the store APK, runs the patcher, and stages the result
-with the shim, in place of the store's entry (the store entry is deflated; the patched one is too). `tools/quest_repack_libs.py
+with the shim, in place of the store's entry (the store entry is deflated; the patched one is too). `tools/cmd/quest-repack-libs
 verify-signed` stops requiring libr15 to equal the store's bytes and instead requires it to equal the patcher's output for
 that store APK (it runs the patcher again and compares sha-256), and prints both digests; every other library is still
 compared with the store's. The patcher is built by the same recipe, so `package-dev` and the release recipe take the same path.
@@ -263,7 +263,7 @@ sentinel meeting a public libr15 reports the same, so neither can pass as the ot
 `libr15_patch` line carry `extra_rows` (a count) and `extra_rows_sha256` (the file's digest), never the rows. A variant sentinel is
 built with `-DNEVR_LIBR15_EXTRA_ROWS=<file>` (an empty cache variable by default; configure parses the file with the patcher's
 parser and fails on a malformed one) and its APK repacked with `just android-repack-apk ... extra_rows=<file>`, the same file.
-`android-repack-apk` ties the two before it stages anything (`tools/quest_repack_libs.py check-shim-rows`): with `extra_rows` the shim must
+`android-repack-apk` ties the two before it stages anything (`tools/cmd/quest-repack-libs check-shim-rows`): with `extra_rows` the shim must
 carry that file's sha-256, and without it the shim must not be a variant build. A pair that does not match is refused there, because on
 the device the sentinel would report `build_id_mismatch` and install nothing while the patched library's stubs branch through slots
 only an attached sentinel fills.
