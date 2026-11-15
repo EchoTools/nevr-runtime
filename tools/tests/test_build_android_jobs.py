@@ -1,4 +1,4 @@
-"""`just build-android` bounds its job count: CMAKE_BUILD_PARALLEL_LEVEL if set, else 4, never a bare -j."""
+"""`just build-android` bounds its job count: CMAKE_BUILD_PARALLEL_LEVEL if set, else nproc, never a bare -j."""
 from __future__ import annotations
 
 import os
@@ -37,10 +37,11 @@ class BuildAndroidJobsTest(unittest.TestCase):
         calls = self.run_recipe("3")
         self.assertIn("--build build/android-arm64 -j 3", calls)
 
-    def test_the_default_is_four_not_unbounded(self):
+    def test_the_default_is_the_core_count_not_a_bare_j(self):
         calls = self.run_recipe(None)
-        self.assertIn("--build build/android-arm64 -j 4", calls)
-        self.assertNotIn("--build build/android-arm64 -j", calls, "a bare -j means every core")
+        cores = subprocess.run(["nproc"], capture_output=True, text=True, check=True).stdout.strip()
+        self.assertIn(f"--build build/android-arm64 -j {cores}", calls)
+        self.assertNotIn("--build build/android-arm64 -j", calls, "a bare -j would ignore the count")
 
 
 if __name__ == "__main__":

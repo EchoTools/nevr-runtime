@@ -91,8 +91,8 @@ of the work (the logging standard `AGENTS.md` opens with, `docs/standards/loggin
 ### 6. Prove it: the quick check, by area
 
 The gate before landing is "A branch runs the quick check before it lands, not `just verify`" in `AGENTS.md` "Builds"; `just verify` runs only on main
-after the release cut. `just --list` is the authority for recipe names. Run what covers the code you changed, in the
-build slice on the branch's tip, and report each item with its exit code in the commit message; an item not run is
+after the release cut. `just --list` is the authority for recipe names. Run what covers the code you changed, as the plain recipe
+(no job count, slice or MemoryMax), on the branch's tip, and report each item with its exit code in the commit message; an item not run is
 named as not run.
 
 | You changed | Run (in addition to `just build`) |

@@ -110,7 +110,7 @@ class RealJustfileTest(unittest.TestCase):
 
     def test_build_android_is_found_and_runs_one_cmake_build_with_the_job_count(self):
         body = just_recipe.body(self.text, "build-android")
-        self.assertEqual(body.strip(), 'cmake --build build/android-arm64 -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"')
+        self.assertEqual(body.strip(), 'cmake --build build/android-arm64 -j "${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}"')
 
     def test_every_public_recipe_is_named(self):
         summary = subprocess.run(["just", "--summary", "--unsorted"], capture_output=True, text=True,

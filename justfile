@@ -156,9 +156,9 @@ configure-android: _build-guard _require-ndk
     cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" cmake --preset android-arm64
 
 # Build the Android arm64-v8a crash-reporter .so
-# Job count: CMAKE_BUILD_PARALLEL_LEVEL, else 4 (a bare -j would use every core and override the variable).
+# Job count: CMAKE_BUILD_PARALLEL_LEVEL, else $(nproc) (a bare -j would override the variable).
 build-android: configure-android
-    cmake --build build/android-arm64 -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
+    cmake --build build/android-arm64 -j "${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}"
 
 # Build with full compiler output
 verbose-build-android: configure-android
@@ -605,7 +605,7 @@ _quest-apk store_apk: _build-guard _require-ndk
     set -euo pipefail
     launcher="${CMAKE_CXX_COMPILER_LAUNCHER:-}"
     (cd src/quest && CMAKE_C_COMPILER_LAUNCHER="$launcher" CMAKE_CXX_COMPILER_LAUNCHER="$launcher" cmake --preset android-arm64-dev)
-    cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
+    cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
     just _check-quest-runtime-library build/android-dev

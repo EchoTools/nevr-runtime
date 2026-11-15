@@ -171,7 +171,7 @@ each one gives; do the step this way on yours:
 | --- | --- |
 | "Commit identity" (author, trailer, signing) | Commit as yourself: the author is the person responsible, under the name and email they use on GitHub. When an agent wrote the change, add one `Co-Authored-By: <agent name> <email>` trailer. Conventional prefix, one logical change per commit, and the same post-commit check. |
 | "Ownership and cleanup": the ledger file | Keep the same ledger in a file of your own: a markdown table (artifact, owner, purpose, remove-when), one row per thing you create, the worktree directory or branch in the first cell and your handle, one word, in the second. Read it before deleting anything. Create worktrees under `.claude/worktrees/` in your clone, and run `REAP_LEDGER=<your ledger file> just reap-merged`: `tools/reap_merged.py` scans only `.claude/worktrees/`, exits when `REAP_LEDGER` is unset or the ledger cannot be read, and keeps any worktree the ledger does not credit to an owner. |
-| "Builds" (builds and live game runs): the shared `nevr-builds.slice` and `nevr-live.slice` | Same reason: parallel lanes, each under its own cap, still starve a machine. Builds, verify and tests run in `nevr-builds.slice`; a live game run runs in its own scope in `nevr-live.slice` with `systemd-run --user --scope --slice=nevr-live.slice -p MemoryMax=6G -p MemorySwapMax=0 <cmd>`. If you run one build lane, `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope -p MemoryMax=8G <cmd>` is enough. If you run several, create one user slice that caps them all together, as the maintainers do. Wait while two or more `ninja` processes run (`pgrep -x ninja` lists them). |
+| "Builds" (builds and live game runs): the shared `nevr-live.slice` | Builds, verify and tests run as the plain recipe, with no job count, slice or `MemoryMax`; a live game run runs in its own scope in `nevr-live.slice` with `systemd-run --user --scope --slice=nevr-live.slice -p MemoryMax=6G -p MemorySwapMax=0 <cmd>`. Wait while two or more `ninja` processes run (`pgrep -x ninja` lists them). |
 | Scratch under `~/src/nevr-runtime-work/<agent>/` | The work root is `$NEVR_WORK_ROOT`, else `~/src/nevr-runtime-work` (`~` is your home directory), so the default works on any machine, and several tools write there by default (`tools/scenario/run_scenario.py`, `tools/lib/game_install.sh`, `tools/winvm/systest.py`). Use `<work root>/<your handle>/`, never `/tmp` and never the repo, and keep the work-root rule under "Working practices for every agent". |
 | "The game install" | See "Your game install" below. |
 | "Check production Nakama logs" and "ask sprockee" | The production server's logs are maintainer-only. On a server you run, read its log yourself. For production, ask in the issue, giving the run's time window (UTC), the account and the client log lines around the failure. Where the file says ask sprockee, ask in the issue. |
@@ -479,8 +479,8 @@ The build also needs `config/public-defaults.env` (`just worktree-setup` copies 
 Tester APK of the working tree (the sentinel is a development build; no Windows build):
 
 ```sh
-systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G env VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 just build-android
-systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G env VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 just android-repack-apk "$NEVR_STORE_APK"
+just build-android
+just android-repack-apk "$NEVR_STORE_APK"
 just quest-keystore-fingerprint       # compare with the signer of the app on the headset before installing
 just quest-install build/android-arm64/repack/r15_nevr-sentinel_signed.apk
 ```
@@ -490,7 +490,7 @@ The signed APK is `build/android-arm64/repack/r15_nevr-sentinel_signed.apk`. `ju
 Local package, Windows zip and Quest APK together (the tree must be clean and at `origin/main`, `just release-preflight`):
 
 ```sh
-systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G env VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 just package-dev
+just package-dev
 ```
 
 Output: `build/package-dev/<sha7>/`, and the APK at `build/android-dev/repack/r15_nevr-sentinel_signed.apk`.
@@ -803,15 +803,14 @@ your seat name, for example `claude-main` or `codex`.
 
 ### Builds
 
-> **Maintainers only.** The shared slices are configured on the maintainers' machine. Contributors: see "For contributors", "Maintainers only, and what to do instead".
+> **Maintainers only.** The shared live-run slice is configured on the maintainers' machine. Contributors: see "For contributors", "Maintainers only, and what to do instead".
 
-- **Every build, verify or test goes in the shared user slice:**
-  `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G <cmd>`.
-  Give the slice one memory cap on your machine (a user unit or drop-in for `nevr-builds.slice`); systemd creates the
-  slice without a cap when none exists.
-  A cap per lane is not enough: parallel lanes each under their own cap still starve the machine.
+- **A build, verify or test runs the plain recipe** (`just build`, `just build-android`, `just android-repack-apk`,
+  `just package-dev`), with no job count on the command line, no `systemd-run` slice and no `MemoryMax`. The job count comes
+  from the environment (`CMAKE_BUILD_PARALLEL_LEVEL`, `VCPKG_MAX_CONCURRENCY`) when the machine sets them, and otherwise
+  from `$(nproc)`, which is every justfile fallback's default. Never pass `-j` or `--parallel` yourself.
 - **Every live game run gets its own scope in `nevr-live.slice`:** `launch-client.sh`, `launch-server.sh`, `verify-server.sh`, scenario runs and a hand-launched client or server. `systemd-run --user --scope --slice=nevr-live.slice -p MemoryMax=6G -p MemorySwapMax=0 <cmd>`. The slice is transient: it has no unit file, and systemd creates it with the first scope.
-- **A live run never shares the build slice, and memory pressure pauses builds, not runs.** While a live run is active, a build waits for it to exit. A live run is never stopped to make room for a build.
+- **Memory pressure pauses builds, not live runs.** While a live run is active, a build waits for it to exit. A live run is never stopped to make room for a build.
 - **Wait for a free slot.** Before starting a build, if `pgrep -x ninja | wc -l` is 2 or more, wait.
   Never interrupt another agent's build.
 - **At most three heavy builds at once per seat,** so the usage window and memory both hold.
@@ -981,7 +980,7 @@ your seat name, for example `claude-main` or `codex`.
 - **Work starts from an existing issue, and the landed commit names it.** The issue states the problem and its done-bar. The message carries one line for each issue it resolves, `Closes #N` (or `Fixes #N`, `Resolves #N`), and GitHub closes the issue when the commit reaches `main`. A commit that leaves part of an issue open, such as a live run still owed, uses `Refs #N` (or `Part of #N`, `Completes #N`) and says what is still open; `Refs` becomes `Closes` only after checking that the issue has nothing left open. A fix that has no issue gets an issue first. There is no "no issue" form. The review confirms that each named issue is resolved by the diff; an issue that landed work fixed is never left open (`docs/standards/planning.md`, "Hygiene rules").
 - **Landing.** Land from the branch's own worktree, never from the main checkout. After the quick check and a MERGE verdict, run `just land -test '<command>'` once for each test recipe that covers the change. `tools/cmd/land` (its header lists the steps and the exit codes) takes the lock, fetches, rebases the branch onto `origin/main`, reruns each test on the rebased tip, pushes the tip with `git push origin HEAD:refs/heads/main` (never forced, so it can only fast-forward), records `git ls-remote origin refs/heads/main` before and after (the second must print the tip), and fast-forwards the main checkout with `git merge --ff-only origin/main` when that checkout has `main` checked out and a clean tree. Exit 10 (the tip commit's message lacks its evidence: `tools/cmd/commit-evidence`'s check, skill `landed-commit-evidence`), exit 4 (a rebase conflict) and exit 5 (a failed test) go back to the work, the quick check and a new review; exit 6 means `main` moved: run `just land` again. No merge commit and no squash, ever: each commit of the branch lands with its own message. Then, in the same turn, remove the worktree and delete the branch ("Branch lifecycle"). When `land` left the main checkout alone, leave it (rule 3).
 - **Verification before landing.** A runtime change is tested by its author before it lands (and its covering tests once more after Landing's rebase): the
-  quick check on the tip, run in the build slice (see "Builds"). After the release cut, main runs the PC login test
+  quick check on the tip, run as the plain recipe (see "Builds"). After the release cut, main runs the PC login test
   (the mechanics under "Client login test mechanics") and `just verify`. A branch never runs either, before or after a rebase. A red PC login run or a red `just verify` on main is a
   red main. A red main is bisected, and the culprit is reverted or fixed by a landed commit. Landing does not stop while main is
   red. Main always builds. The PC login run's log shows all four keys

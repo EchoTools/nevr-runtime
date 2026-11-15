@@ -17,7 +17,7 @@ The procedure for "The game install" in `AGENTS.md`. The rules there are the rul
    `.credentials.json*`, as the AGENTS.md "Make it safe" block says.
 5. Run `go -C tools run ./cmd/run-copy -copy <run copy> -src <the install>`. Exit 1 prints each refusal: fix it, run again.
    The `leaves-copy:` lines are the Wine prefix's device and home links; keep them in the run's record.
-6. Set `NEVR_GAME_ROOT=<run copy>`, `EVR_GAME_DIR=<run copy>/echovr`, `NEVR_RUN_SCRATCH_ROOT=<scratch>`; run in the slice
+6. Set `NEVR_GAME_ROOT=<run copy>`, `EVR_GAME_DIR=<run copy>/echovr`, `NEVR_RUN_SCRATCH_ROOT=<scratch>`; run in the live-run scope
    and with the display variables `AGENTS.md` names.
 7. When the run ends, remove the run copy by its exact path (the scratch rule).
 

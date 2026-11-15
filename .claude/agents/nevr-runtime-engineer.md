@@ -66,7 +66,7 @@ feels risky":
 > `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test runs on main after the release cut, not on a branch. The GTest floor is not stored:
 > `python3 tools/verify_gtest_floor.py` counts [...] at HEAD and at the merge-base with `origin/main` [...] and fails
 > when HEAD has fewer. [...] Every change, whatever it touches, also runs
-> `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` [...]. Run the quick check on the branch's tip, in the build slice, and report each item with its exit code in
+> `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` [...]. Run the quick check on the branch's tip, as the plain recipe (no job count, slice or MemoryMax), and report each item with its exit code in
 > the commit message; an item not run is named as not run.
 
 The build item is `just build` and its exit code, which is nonzero when the build
@@ -326,8 +326,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
   deploy script or writes into it. Every run uses its own throwaway copy of the
   pristine copy, made, checked and deleted as AGENTS.md "The game install" says; point the scripts at it with
   `NEVR_GAME_ROOT=<copy>`. Scratch and the copies live under
-  `~/src/nevr-runtime-work/<agent>/`. Every build, test or run goes in
-  `nevr-builds.slice` (AGENTS.md "Builds"); wait while 2 or more `ninja` run. If no pristine
+  `~/src/nevr-runtime-work/<agent>/`. Every build or test runs the plain recipe, with no job count, slice or MemoryMax (AGENTS.md "Builds"); wait while 2 or more `ninja` run. If no pristine
   copy exists, the run waits for a human; a runtime change is not verified until then
   (maintainers only).
 - **The scripts are writers, not launchers.** `./launch-server.sh` (repo root) deploys
