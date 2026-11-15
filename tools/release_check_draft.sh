@@ -15,16 +15,15 @@ fi
 tag="${1:?usage: release_check_draft.sh [--signed] vX.Y.Z}"
 version="${tag#v}"
 repo="${GITHUB_REPOSITORY:-EchoTools/nevr-runtime}"
-zip="nevr-runtime-v${version}-windows.zip"
-quest="nevr-runtime-v${version}-quest-libovrplatformloader.so"
-quest_runtime="nevr-runtime-v${version}-quest-runtime.so"
+source "$(dirname "${BASH_SOURCE[0]}")/release_asset_names.sh"
+zip=$(release_windows_zip_name "$version") || { echo "release_check_draft: the asset name list failed" >&2; exit 1; }
 
 fail() { echo "release_check_draft: FAILED: $1" >&2; exit 1; }
 step() { echo "== $1"; }
 
 step "the draft carries exactly the three names"
 names=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' | sort)
-want=$(printf '%s\n%s\n%s\n' "$quest" "$quest_runtime" "$zip" | sort)
+want=$(release_asset_names "$version" | sort) || fail "the asset name list failed"
 [ "$names" = "$want" ] || fail "assets are [$names], expected [$want]"
 echo "$names"
 

@@ -25,6 +25,13 @@ class DraftCheck(unittest.TestCase):
         self.assertIn("set -euo pipefail", self.text)
         self.assertNotIn("|| true", self.text)
 
+    def test_the_names_have_one_home_the_asset_name_list(self) -> None:
+        self.assertIn('release_asset_names.sh"', self.text)
+        self.assertIn('release_asset_names "$version"', self.text)
+        self.assertIn('zip=$(release_windows_zip_name "$version")', self.text)
+        for literal in ("quest-runtime.so", "quest-libovrplatformloader.so", "-windows.zip"):
+            self.assertNotIn(literal, self.text)
+
     def test_it_runs_each_check_the_doc_names(self) -> None:
         for needle in (
             "gh release view",

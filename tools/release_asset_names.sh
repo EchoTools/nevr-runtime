@@ -29,9 +29,14 @@ release_quest_runtime_asset_name() {
   printf '%s\n' "nevr-runtime-v$version-quest-runtime.so"
 }
 
+release_windows_zip_name() {
+  local version=${1:?usage: release_windows_zip_name <X.Y.Z>}
+  printf '%s\n' "nevr-runtime-v$version-windows.zip"
+}
+
 release_asset_names() {
   local version=${1:?usage: release_asset_names <X.Y.Z>}
-  printf '%s\n' "nevr-runtime-v$version-windows.zip"
+  release_windows_zip_name "$version"
   release_quest_asset_name "$version"
   release_quest_runtime_asset_name "$version"
 }

@@ -31,6 +31,17 @@ class ReleaseAssetsTest(unittest.TestCase):
         self.assertEqual(packager.quest_runtime_asset_name("5.5.0"), out)
         self.assertIn(out, listed())
 
+    def test_the_loader_downloader_names_the_quest_library_as_the_shell_list_does(self):
+        # quest_release_loader.asset_name is a Python mirror of release_quest_asset_name; this pins them to one spelling.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("quest_release_loader", REPO / "tools" / "quest_release_loader.py")
+        loader = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(loader)
+        out = subprocess.run(["bash", "-c", f'source "{NAMES}"; release_quest_asset_name 5.5.0'],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(loader.asset_name("5.5.0"), out)
+        self.assertIn(out, listed())
+
     def test_the_quest_runtime_check_matches_the_version_and_commit_whole_and_needs_no_plugin_trust(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location("package_release", REPO / "tools" / "package_release.py")
