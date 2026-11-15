@@ -397,6 +397,11 @@ and its journal, reached through the platform edges of `src/core/update/edges.h`
   `boot_attempts`, or `not_counted` with why (a runtime in use, a swap's cleanup finished, a runtime the host cannot open
   for write, a count that could not be written). A start that decides a rollback writes `update_rollback` instead
   (`rolled_back`, `deferred`, `failed`, `blocked`), never both.
+- **A load the host refuses is not a try** (Quest, `src/quest/shim/update_start.cpp`). A runtime the shim does not call because a
+  host input is missing (`runtime_load outcome=host_context_refused`) ran nothing and says nothing about the release, so the try
+  the start counted (the swap's first one, or the count) is given back under the lock (`UncountTryIn`: a second `update_trial`,
+  `outcome=not_counted reason=host_context_refused`), nothing is rolled back or marked, and the start tries the APK's baseline,
+  with the same inputs (its own `runtime_load` record says whether the same missing input refused it too).
 - **When the previous release cannot be restored in the same start**, the failed release stays in the root and is marked
   (`failed_reason`; the first failure stays), so the next start tries again; the `update_rollback` record of a runtime in use
   says whether the mark was made (`marked`).
@@ -493,7 +498,7 @@ A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag
 | core | `update_state` | `ok`, `channel`, `version`, `runtime_sha256`, `state_before` (`absent`, `read`, `rebuilt`), `rebuilt_reason`, `owned`, `quarantine`, `lock_wait_ms`; on a failure `reason` and `detail` |
 | host | `update_swap` | `outcome` (`swapped`, `deferred`, `blocked`, `discarded`, `recovered`, `skipped`), `reason` (`skipped` has `root_unconvertible`: the runtime's root has no UTF-8 spelling and the start does no update work), `from`, `to`, `files` (path, sha256), `elapsed_ms` |
 | host | `update_rollback` | `mode` (`in_process`, `next_start`), `reason`, `from` (the failed release), `to` (the restored one), `outcome` (`rolled_back`, `scheduled`, `deferred`, `failed`, `blocked`, `discarded`), `boot_attempts`, `files`, `elapsed_ms` |
-| host | `update_trial` | one per start that loads a pending release without deciding a rollback (a rollback decision writes `update_rollback`): `outcome` (`counted`, `not_counted`), `reason` (`try`, `runtime_in_use`, `swap_finished`, `runtime_not_writable`, `pending_write_failed`), `release`, `boot_attempts` (after the start), `elapsed_ms` |
+| host | `update_trial` | one per start that loads a pending release without deciding a rollback (a rollback decision writes `update_rollback`), and on Quest a second one when a load the host refused gives the start's try back (`UncountTryIn`): `outcome` (`counted`, `not_counted`), `reason` (`try`, `runtime_in_use`, `swap_finished`, `runtime_not_writable`, `pending_write_failed`, and for the give-back `host_context_refused`, or `lock_timeout` and `pending_write_failed` when the try stays counted), `release` (absent on a give-back that could not take the lock: the record was not read), `boot_attempts` (after the start), `cause` and `win32_error` (a give-back that failed), `elapsed_ms` |
 | host | `crash_marker` | `outcome` (`written`, `failed`), `win32_error`, `path`, `thread` |
 | runtime | `update confirmed` | `version`, `after_ms`, `role` (`client`, `server`) |
 | runtime | `update confirm skipped` | `reason` (`no_pending`, `not_the_pending_release`, `pending_unreadable`, `state_unreadable`, `lock_unavailable`, `write_failed`, `running_runtime_unreadable`, `internal_error`), `version` when the record named one |

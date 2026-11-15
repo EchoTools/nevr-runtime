@@ -24,17 +24,18 @@ namespace nevr_quest::update_start {
 /// table).
 inline constexpr int kUpdateFailedExitCode = 78;
 
-/// What the start is given. `host` is the host inputs of the load; the start sets its update root and its
-/// before-initialize hook.
+/// What the start is given. `host` is the host inputs of the load; the start sets its update root, its before-initialize
+/// hook and, when it is null, its shim handle.
 struct Inputs {
   /// The folder that holds update\ (update_root::Resolve()); empty when the process has none, which means no update.
   std::string root;
   /// An address inside the shim: the baseline is read from the folder that holds the shim (runtime_load.h).
   const void* in_shim = nullptr;
   /// The folder the baseline is read from, when it is not the folder that holds the shim (the host tests have no shim
-  /// folder to give). Empty in the shim itself. The caller then sets host.shim_handle, which the production start takes
-  /// from in_shim.
+  /// folder to give). Empty in the shim itself.
   std::string baseline_dir;
+  /// The host inputs. When host.shim_handle is null (the shim's entry sets none), the start takes it from in_shim
+  /// (runtime_load::ShimHandleOf), so every load of the start is handed the shim's own handle.
   runtime_load::HostInputs host;
 };
 

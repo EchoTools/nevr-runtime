@@ -411,6 +411,29 @@ class SwapRun {
     return true;
   }
 
+  /// A load the host refused judges nothing: the try this start counted is given back (UncountTryIn, engine_start.h).
+  bool UncountTry(std::uint64_t counted_attempts, const char* reason) {
+    if (counted_attempts == 0 || root_.empty() || !fs_.IsDirectory(update_) || fs_.IsLink(update_)) return false;
+    if (!AcquireLock()) {
+      RecordTrial("counted", "lock_timeout", Pending{}, counted_attempts, {{"cause", reason}});
+      return false;  // the record names no release: pending.json was not read without the lock
+    }
+    json doc;
+    int error = 0;
+    Pending pending;
+    if (ReadJson(UpdateFile(names::kPendingJson), &doc, &error) != JsonRead::kOk || !ParsePending(doc, &pending) ||
+        pending.boot_attempts != counted_attempts) {
+      return false;  // not the record this start counted: nothing of it is this start's to give back
+    }
+    doc["boot_attempts"] = counted_attempts - 1;
+    if (!WriteJson(UpdateFile(names::kPendingJson), doc)) {
+      RecordTrial("counted", "pending_write_failed", pending, counted_attempts, {{"cause", reason}, {"win32_error", last_error_}});
+      return false;
+    }
+    RecordTrial("not_counted", reason, pending, counted_attempts - 1);
+    return true;
+  }
+
   /// The answer after an exception: stop when a journal says the root may be half moved, else load.
   StartResult AfterException() {
     Record("blocked", "internal_error");
@@ -423,8 +446,9 @@ class SwapRun {
   enum class RollbackEnd { kDone, kBlocked, kStop };
 
   static StartResult Load() { return {StartAction::kLoad, nullptr, false}; }
-  // Load, and the release in the root is on trial (the load of it that fails is the host's to handle).
-  static StartResult Trial() { return {StartAction::kLoad, nullptr, true}; }
+  // Load, and the release in the root is on trial (the load of it that fails is the host's to handle), with the try this
+  // start counted, if any.
+  StartResult Trial() const { return {StartAction::kLoad, nullptr, true, counted_attempts_}; }
   static StartResult Stop(const char* reason) { return {StartAction::kStop, reason, false}; }
 
   // ---- paths --------------------------------------------------------------------------------------------------------
@@ -549,7 +573,7 @@ class SwapRun {
     record["event"] = "update_trial";
     record["outcome"] = outcome;
     record["reason"] = reason;
-    record["release"] = pending.to_version;
+    if (!pending.to_version.empty()) record["release"] = pending.to_version;
     record["boot_attempts"] = boot_attempts;
     record["elapsed_ms"] = ctx_.edges.clock.TickMs() - started_;
     ctx_.edges.log.Emit(record);
@@ -778,6 +802,7 @@ class SwapRun {
                             {"boot_attempts", 1},
                             {"failed_reason", nullptr}};
       if (!WriteJson(UpdateFile(names::kPendingJson), pending)) return false;
+      counted_attempts_ = 1;  // this start is the release's first try
     }
     if (StagedNames(journal.to) && !Remove(UpdateFile(names::kStagedJson))) return false;
     const std::string staging = StagingDir(journal.to);
@@ -1284,7 +1309,8 @@ class SwapRun {
       case PendingAction::kCountTry:
         // One more try. The count is written, or the start says it could not be.
         if (WriteJson(UpdateFile(names::kPendingJson), decision.counted)) {
-          RecordTrial("counted", "try", pending, pending.boot_attempts + 1);
+          counted_attempts_ = pending.boot_attempts + 1;
+          RecordTrial("counted", "try", pending, counted_attempts_);
         } else {
           if (killed_) return PendingStep::kHold;
           RecordRollback("blocked", "pending_write_failed", {{"win32_error", last_error_}});
@@ -1330,6 +1356,8 @@ class SwapRun {
   // A swap's cleanup this start finished: that swap's start was killed before its runtime could load, so this start's load
   // is the release's first try, not a second.
   bool finished_swap_ = false;
+  // The boot_attempts this start wrote into pending.json as its own try; 0 when it counted none (StartResult).
+  std::uint64_t counted_attempts_ = 0;
 };
 
 }  // namespace
@@ -1515,6 +1543,16 @@ StartResult RollBackNowIn(const StartContext& context, const char* reason) noexc
     }
   } catch (const std::exception&) {
     return {StartAction::kStop, "internal_error", false};
+  }
+}
+
+bool UncountTryIn(const StartContext& context, std::uint64_t counted_attempts, const char* reason) noexcept {
+  if (reason == nullptr) return false;
+  try {
+    SwapRun start(context);
+    return start.UncountTry(counted_attempts, reason);
+  } catch (const std::exception&) {
+    return false;
   }
 }
 

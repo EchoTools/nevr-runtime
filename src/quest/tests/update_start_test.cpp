@@ -19,12 +19,16 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "core/runtime_abi_common.h"
+#include "core/update/edges.h"
+#include "core/update/engine_start.h"
+#include "core/update/fs.h"
 #include "core/update/names.h"
 #include "quest/data/sha256.h"
 #include "quest/shim/runtime_load.h"
@@ -82,6 +86,21 @@ constexpr char kReasonUpdateFailed[] = "update_failed";
 constexpr char kBaseDirName[] = "base";
 constexpr char kWrongDigest[] = "0000000000000000000000000000000000000000000000000000000000000000";
 constexpr std::uint32_t kFieldCount = 16;  // the most fields a record of the start carries
+constexpr char kShimDirName[] = "shim";
+constexpr char kShimFile[] = "libovrplatformloader.so";  // the shim's file name in the APK
+constexpr char kOutcomeLoaded[] = "loaded";
+constexpr char kOutcomeHostRefused[] = "host_context_refused";
+constexpr char kBootAttemptsKey[] = "boot_attempts";
+constexpr std::uint64_t kNoTryCounted = 0;
+constexpr std::uint64_t kFirstTry = 1;
+constexpr std::uint64_t kNoBootAttempts = ~std::uint64_t{0};
+constexpr int kRefusedStarts = 2;
+constexpr std::uint64_t kAttemptsOnRecord = 2;  // a pending record on its second try
+constexpr std::uint64_t kAnotherCount = 3;      // a count this start did not write
+constexpr std::uint32_t kShortLockWaitMs = 50;  // a lock wait that ends before the holder lets go
+constexpr std::uint32_t kLockStepMs = 10;
+constexpr char kGiveBackReason[] = "host_context_refused";
+constexpr fs::perms kReadOnlyDir = fs::perms::owner_read | fs::perms::owner_exec;  // the swap's start, then one start on trial
 
 struct Captured {
   std::uint32_t level = 0;
@@ -218,6 +237,28 @@ us::Result StartCase(const us::Inputs& in) {
 }
 
 std::uint64_t CapabilitiesSeenBy(const std::string& path);
+const NevrQuestHostContext* ContextSeenBy(const std::string& path);
+
+// A stand-in for the shim, as production has it: a shared object the process has dlopen'd from its own folder, which
+// holds the APK's baseline too. The object is a copy of a fixture (any shared object serves), so the address returned
+// lies inside it and dladdr names its file. Null when it cannot be made.
+const void* AddressInAShim(const fs::path& base) {
+  const fs::path dir = base / kShimDirName;
+  WriteAll(dir / kShimFile, ReadAll(FixturePath("ok")));
+  WriteAll(dir / kRuntimeFile, ReadAll(FixturePath("ok")));
+  void* handle = ::dlopen((dir / kShimFile).c_str(), RTLD_NOW | RTLD_LOCAL);
+  QCHECK(handle != nullptr);
+  if (handle == nullptr) return nullptr;
+  return ::dlsym(handle, nevr_runtime_abi::kGetRuntimeApiExport);
+}
+
+// The boot_attempts of update\pending.json, or kNoBootAttempts when there is no such record.
+std::uint64_t BootAttempts(const fs::path& root) {
+  const json pending = json::parse(ReadAll(root / kUpdateDir / kPendingJson), nullptr, false);
+  if (!pending.is_object() || !pending.contains(kBootAttemptsKey) || !pending[kBootAttemptsKey].is_number_unsigned())
+    return kNoBootAttempts;
+  return pending[kBootAttemptsKey].get<std::uint64_t>();
+}
 
 // A case with no update folder: the start is the baseline, and nothing is written under the root.
 bool BaselineWithoutUpdateFolder() {
@@ -347,12 +388,17 @@ bool FreshRootFailedReleaseLoadsTheBaseline() {
 // The capabilities word the fixture at `path` was handed by its last initialize, read through its record (runtime_load_fixture.cpp).
 // The object is already loaded under that file, and RTLD_NOLOAD finds it by its file identity. kNoRecord when there is none.
 std::uint64_t CapabilitiesSeenBy(const std::string& path) {
-  void* handle = ::dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD);
-  if (handle == nullptr) return kNoRecord;
-  void* symbol = ::dlsym(handle, "NEVR_FixtureLastContext");
-  if (symbol == nullptr) return kNoRecord;
-  const NevrQuestHostContext* context = reinterpret_cast<NevrQuestLastContextFn>(symbol)();
+  const NevrQuestHostContext* context = ContextSeenBy(path);
   return context == nullptr ? kNoRecord : context->capabilities;
+}
+
+// The context the fixture at `path` was handed by its last initialize; null when there is none.
+const NevrQuestHostContext* ContextSeenBy(const std::string& path) {
+  void* handle = ::dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD);
+  if (handle == nullptr) return nullptr;
+  void* symbol = ::dlsym(handle, "NEVR_FixtureLastContext");
+  if (symbol == nullptr) return nullptr;
+  return reinterpret_cast<NevrQuestLastContextFn>(symbol)();
 }
 
 // The host did not hand the runtime its libr15 base: the pending release is judged by nothing. It is not rolled back and not
@@ -373,6 +419,182 @@ bool HostRefusalDoesNotJudgeTheRelease() {
   QCHECK(Digest(ReadAll(root / kRuntimeFile)) == Digest(ReadAll(FixturePath("ok"))));
   const json pending = json::parse(ReadAll(root / kUpdateDir / kPendingJson), nullptr, false);
   QCHECK(pending.is_object() && !(pending.contains(kFailedReasonKey) && pending[kFailedReasonKey].is_string()));
+  return true;
+}
+
+// The shim's own start: no baseline folder is given and no shim handle is set (entry.cpp sets neither); the start
+// takes both from the address inside the shim. A staged release is swapped in and loads from the update root, and the
+// runtime is handed the shim's handle.
+bool ProductionShapeLoadsTheUpdate() {
+  const fs::path base = CaseRoot("production-shape");
+  g_records.clear();
+  const fs::path root = base / "nevr";
+  SeedOwnedRuntime(root, "null_descriptor");
+  StageRelease(root, kVersionTwo, "ok", false);
+  us::Inputs in = InputsFor(root, std::string());
+  in.host.shim_handle = nullptr;
+  in.in_shim = AddressInAShim(base);
+  const us::Result result = StartCase(in);
+  QCHECK(result.outcome == rl::Outcome::kLoaded);
+  QCHECK(result.origin == us::Origin::kUpdate);
+  QCHECK(result.path == (root / kRuntimeFile).string());
+  const NevrQuestHostContext* context = ContextSeenBy(result.path);
+  QCHECK(context != nullptr && context->shim_handle != nullptr);
+  const Captured* load = Find(kEventRuntimeLoad, kOutcomeLoaded);
+  QCHECK(load != nullptr && load->Field("source") == kSourceUpdate);
+  QCHECK(Find(kEventRuntimeLoad, kOutcomeHostRefused) == nullptr);
+  return true;
+}
+
+// A host input the update load is refused for judges the host, not the release: the start goes on to the baseline (the
+// game does not run without a runtime), and the try this start counted is given back, so a release the host never
+// started is not rolled back for want of starts. The swap's start and a later start on trial both give theirs back; a
+// start with the inputs whole then takes its first try.
+bool HostRefusalFallsBackToTheBaselineAndCountsNoTry() {
+  const fs::path base = CaseRoot("host-refused-fallback");
+  const fs::path root = base / "nevr";
+  SeedOwnedRuntime(root, "null_descriptor");
+  StageRelease(root, kVersionTwo, "ok", false);
+  const std::string baseline = BaselineDir(base, "ok");
+  for (int start = 0; start < kRefusedStarts; ++start) {
+    g_records.clear();
+    us::Inputs in = InputsFor(root, baseline);
+    in.host.libr15_base = nullptr;
+    const us::Result result = StartCase(in);
+    QCHECK(!result.stop);
+    QCHECK(result.origin == us::Origin::kBaseline);
+    // The update load is refused first, and the baseline's load follows it.
+    bool update_refused = false;
+    bool baseline_tried = false;
+    for (const Captured& record : g_records) {
+      if (record.event != kEventRuntimeLoad) continue;
+      if (record.Field("source") == kSourceUpdate && record.Field("outcome") == kOutcomeHostRefused) update_refused = true;
+      if (record.Field("source") == kSourceBaseline && update_refused) baseline_tried = true;
+    }
+    QCHECK(update_refused);
+    QCHECK(baseline_tried);
+    const Captured* given_back = Find("update_trial", "not_counted");
+    QCHECK(given_back != nullptr && given_back->Field("reason") == kOutcomeHostRefused);
+    QCHECK(Find(kEventRollback) == nullptr);
+    QCHECK(BootAttempts(root) == kNoTryCounted);
+  }
+  g_records.clear();
+  const us::Result result = StartCase(InputsFor(root, baseline));
+  QCHECK(result.outcome == rl::Outcome::kLoaded);
+  QCHECK(result.origin == us::Origin::kUpdate);
+  QCHECK(BootAttempts(root) == kFirstTry);
+  return true;
+}
+
+// The engine edges a give-back uses: only the file system, the log and the clock are asked; the rest answer nothing.
+class NoVerifier final : public nevr_update::ArtifactVerifier {
+ public:
+  nevr_update::ArtifactCheck Verify(const std::string&, const nevr_update::ArtifactExpect&) const override { return {}; }
+  nevr_update::ArtifactFacts Measure(const std::string&) const override { return {}; }
+};
+class NoInUse final : public nevr_update::InUseCheck {
+ public:
+  nevr_update::InUseAnswer Query(const std::string&) const override { return {}; }
+};
+class NoRollback final : public nevr_update::RollbackTarget {
+ public:
+  nevr_update::RollbackCheck Check(const std::string&) const override { return {}; }
+};
+class NoLoader final : public nevr_update::RuntimeLoaderEdge {
+ public:
+  bool CodeBeforeEntry() const noexcept override { return false; }
+};
+class JsonCapture final : public nevr_update::UpdateLog {
+ public:
+  void Emit(const json& record) override { records.push_back(record); }
+  std::vector<json> records;
+};
+class ZeroClock final : public nevr_update::UpdateClock {
+ public:
+  std::uint64_t TickMs() const noexcept override { return 0; }
+  std::string UtcIso() const override { return std::string(); }
+};
+
+// Writes a pending record for `attempts` tries.
+void WritePending(const fs::path& root, std::uint64_t attempts) {
+  const json pending = {{"to", {{"version", kVersionTwo}, {"sha256", kWrongDigest}}},
+                        {"from", nullptr},
+                        {kBootAttemptsKey, attempts},
+                        {kFailedReasonKey, nullptr}};
+  WriteAll(root / kUpdateDir / kPendingJson, pending.dump());
+}
+
+// UncountTryIn gives back only the try this start wrote: a count of 0 and a record that holds another count are left as
+// they are, a lock it cannot take and a record it cannot write are said in an update_trial record that keeps the count,
+// and the start's own count goes down by one with one not_counted record.
+bool UncountTryGivesBackOnlyThisStartsTry() {
+  const fs::path base = CaseRoot("uncount");
+  const fs::path root = base / "nevr";
+  const std::unique_ptr<nevr_update::UpdateFs> ufs = nevr_update::MakePosixUpdateFs(root.string());
+  QCHECK(ufs != nullptr);
+  if (!ufs) return false;
+  NoVerifier verifier;
+  NoInUse in_use;
+  NoRollback rollback;
+  NoLoader loader;
+  JsonCapture log;
+  ZeroClock clock;
+  std::unique_ptr<nevr_update::FsLock> lock;
+  const nevr_update::StartContext context{
+      root.string(),
+      nevr_update::StartEdges{*ufs, verifier, in_use, rollback, loader, log, clock},
+      nevr_update::StartHooks{},
+      nevr_update::LockTiming{kShortLockWaitMs, kLockStepMs},
+      &lock,
+      std::string(kRuntimeFile),
+  };
+  const auto trial = [&log](const char* outcome) {
+    for (const json& record : log.records)
+      if (record.value("event", "") == "update_trial" && record.value("outcome", "") == outcome) return &record;
+    return static_cast<const json*>(nullptr);
+  };
+
+  // A start that counted nothing gives nothing back, even from a record of 0 tries.
+  WritePending(root, kNoTryCounted);
+  QCHECK(!nevr_update::UncountTryIn(context, kNoTryCounted, kGiveBackReason));
+  QCHECK(BootAttempts(root) == kNoTryCounted);
+  // A record that holds another count is not this start's.
+  WritePending(root, kAttemptsOnRecord);
+  QCHECK(!nevr_update::UncountTryIn(context, kAnotherCount, kGiveBackReason));
+  QCHECK(BootAttempts(root) == kAttemptsOnRecord);
+  QCHECK(log.records.empty());
+  // update\lock held by another taker past the wait: nothing is written, and the record says the try stays counted. The
+  // slot lets go of the lock the call above took first.
+  lock.reset();
+  {
+    int os = 0;
+    std::unique_ptr<nevr_update::FsLock> other =
+        ufs->TakeLock((root / kUpdateDir).string(), kShortLockWaitMs, kLockStepMs, &os);
+    QCHECK(other != nullptr);
+    QCHECK(!nevr_update::UncountTryIn(context, kAttemptsOnRecord, kGiveBackReason));
+  }
+  QCHECK(BootAttempts(root) == kAttemptsOnRecord);
+  const json* timed_out = trial("counted");
+  QCHECK(timed_out != nullptr && timed_out->value("reason", "") == "lock_timeout");
+  QCHECK(timed_out != nullptr && !timed_out->contains("release"));
+  log.records.clear();
+  // A record that cannot be written keeps its count, and says so.
+  fs::permissions(root / kUpdateDir, kReadOnlyDir);
+  QCHECK(!nevr_update::UncountTryIn(context, kAttemptsOnRecord, kGiveBackReason));
+  fs::permissions(root / kUpdateDir, fs::perms::owner_all);
+  QCHECK(BootAttempts(root) == kAttemptsOnRecord);
+  const json* unwritten = trial("counted");
+  QCHECK(unwritten != nullptr && unwritten->value("reason", "") == "pending_write_failed");
+  log.records.clear();
+  // No reason: nothing.
+  QCHECK(!nevr_update::UncountTryIn(context, kAttemptsOnRecord, nullptr));
+  QCHECK(BootAttempts(root) == kAttemptsOnRecord);
+  // This start's own count: one less, and one not_counted record that says why.
+  QCHECK(nevr_update::UncountTryIn(context, kAttemptsOnRecord, kGiveBackReason));
+  QCHECK(BootAttempts(root) == kAttemptsOnRecord - 1);
+  const json* given_back = trial("not_counted");
+  QCHECK(given_back != nullptr && given_back->value("reason", "") == kGiveBackReason);
+  QCHECK(given_back != nullptr && given_back->value(kBootAttemptsKey, kNoBootAttempts) == kAttemptsOnRecord - 1);
   return true;
 }
 
@@ -495,6 +717,9 @@ int main(int argc, char** argv) {
   ForeignMembersAreRefused();
   RefusedEntryRollsBackToThePreviousRelease();
   InitFailureStopsAndIsMarked();
+  ProductionShapeLoadsTheUpdate();
+  HostRefusalFallsBackToTheBaselineAndCountsNoTry();
+  UncountTryGivesBackOnlyThisStartsTry();
   const int failures = quest_test::Failures();
   std::printf("update_start_test: %s (%d failed checks)\n", failures == 0 ? "OK" : "FAILED", failures);
   return failures == 0 ? 0 : kFailedExit;

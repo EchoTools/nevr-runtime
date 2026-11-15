@@ -86,8 +86,8 @@ engine::LoadClass ClassOf(rl::Outcome outcome) noexcept {
     case rl::Outcome::kLoadFailed:
       return engine::LoadClass::kNeverRan;
     case rl::Outcome::kHostContextRefused:
-      // The host did not start the runtime (a required input is absent): this is not the release's doing, so it is a stop that
-      // judges nothing (engine_start.h, LoadClass::kNotLoaded). StartChecked returns it before any rollback.
+      // The host did not start the runtime (a required input is absent): this is not the release's doing, so it judges nothing
+      // (engine_start.h, LoadClass::kNotLoaded). StartChecked gives the try back and loads the baseline before any rollback.
       return engine::LoadClass::kNotLoaded;
     case rl::Outcome::kMissingEntry:
     case rl::Outcome::kNullDescriptor:
@@ -371,6 +371,9 @@ engine::StartContext::BaselineRelease BaselineOf(const Inputs& in, const engine:
 
 Result StartChecked(const Inputs& in) {
   rl::HostInputs host = in.host;
+  // The shim's own dlopen handle, from the address inside it, when the caller gives none (the shim's entry does not): the
+  // update load, the R1 reload and the baseline are handed the same one.
+  if (host.shim_handle == nullptr) host.shim_handle = rl::ShimHandleOf(in.in_shim);
   std::unique_ptr<engine::FsLock> lock;
   host.before_initialize = &ReleaseLock;
   host.before_initialize_arg = &lock;
@@ -415,10 +418,11 @@ Result StartChecked(const Inputs& in) {
   if (outcome == rl::Outcome::kLoaded) return Updated(path);
   if (outcome == rl::Outcome::kHostContextRefused) {
     // The host did not hand the runtime what it needs (the shim handle, libr15's base or build ID): nothing ran, so nothing is judged.
-    // The release is neither rolled back nor quarantined, and the baseline is not tried: it was given the same inputs.
-    Result result;
-    result.outcome = outcome;
-    return result;
+    // The release is neither rolled back nor quarantined, and the try this start counted is given back, as the refusal judges the
+    // host and not the release. The baseline is tried next, with the same inputs: the start never ends without a load being
+    // tried, and the baseline's own runtime_load record says whether it was refused for the same missing input.
+    if (pending) static_cast<void>(engine::UncountTryIn(context, decided.counted_attempts, rl::OutcomeName(outcome)));
+    return Baseline(in, host, &lock);
   }
 
   if (pending &&

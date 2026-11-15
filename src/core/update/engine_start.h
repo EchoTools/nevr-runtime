@@ -40,6 +40,9 @@ struct StartResult {
   const char* reason = nullptr;
   /// For kLoad: the release in the root is pending (just swapped in, or on its trial).
   bool pending = false;
+  /// For kLoad: the boot_attempts this start wrote into update\pending.json as its own try (1 when it swapped the release in,
+  /// the count plus one when it counted a try); 0 when this start counted none. UncountTryIn gives it back.
+  std::uint64_t counted_attempts = 0;
 };
 
 /// The outcome of a load, in the engine's three classes (ADR 0024, section 6). kNotLoaded is a stop that is not the
@@ -122,6 +125,13 @@ StartResult RunStart(const StartContext& context) noexcept;
 /// R1, never ran (ADR 0024, section 6): the previous release is put back now, in this start. Takes the lock if it is not
 /// held. Never throws.
 StartResult RollBackNowIn(const StartContext& context, const char* reason) noexcept;
+
+/// A load the host refused before it mapped anything (a host input is missing: the Quest's kHostContextRefused) judges the
+/// host, not the release, so the try this start counted is given back: under the lock, update\pending.json's boot_attempts
+/// goes from `counted_attempts` (StartResult::counted_attempts) to one less, and one update_trial record says so with
+/// `reason`. Nothing is written when `counted_attempts` is 0 or the record no longer holds that count. True when the try
+/// was given back. Never throws.
+bool UncountTryIn(const StartContext& context, std::uint64_t counted_attempts, const char* reason) noexcept;
 
 /// R1, mapped (ADR 0024, section 6): writes `failed_reason` into update\pending.json under the lock. True when it is
 /// there afterwards. Never throws.
