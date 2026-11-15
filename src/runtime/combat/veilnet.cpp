@@ -71,6 +71,7 @@
 #include "runtime/combat/equip_cell.h"  // nEVR port (#600): the cell the script guards read
 #include "runtime/combat/rules_state.h"  // nEVR port (#600): the RULES mailbox fields, in one place
 #include "runtime/combat/match_type.h"  // nEVR port (#2289)
+#include "runtime/combat/payload_speed_rules.h"  // nEVR port (#2242): PAYLOAD SPEED, the payload PAUSE rule, the third row's text
 #include "runtime/combat/veilnet_gate.h"  // nEVR port (#2242): the send gate, the destination recency, the hello tries
 #include "runtime/compat/server_features.h"  // nEVR port (#2333): what the current server states
 #include "runtime/lifecycle/arena_round_time.h"  // nEVR port (#2289): the stored session game type
@@ -546,15 +547,6 @@ volatile LONG g_payload_moved = 0;              // server: it moved since this r
 volatile LONG g_checkpoint_hits = 0;            // server: checkpoints reached (script events) so far
 LONG g_pause_queue_base = 0;                    // server: the hits when a PAUSE was queued
 
-// "1.0" / "2.5" / "0.75" from quarters (0 = 4).
-void QuarterText(char *num, size_t n, uint8_t q) {
-    if (!q) q = 4;
-    if (q % 4 == 0 && q / 4 >= 3) sprintf_s(num, n, "%d", q / 4);
-    else if (q % 4 == 0) sprintf_s(num, n, "%d.0", q / 4);
-    else if (q % 2 == 0) sprintf_s(num, n, "%d.5", q / 4);
-    else sprintf_s(num, n, "%d.%02d", q / 4, q % 4 * 25);
-}
-
 void PageText(int row, const char *text) {
     char t[PAGE_TEXT];
     int n = sprintf_s(t, "%s", text);
@@ -572,18 +564,10 @@ void PageTexts() {
     PageText(0, t);
     sprintf_s(t, "SERIES-10 ONLY: %s", c ? "ON" : "OFF");
     PageText(1, t);
-    char num[16];
-    if (g_rules && g_rules[PAYLOAD_MAP]) {
-        QuarterText(num, sizeof(num), g_rules[PSPEED_SHOWN]);
-        sprintf_s(t, "PAYLOAD SPEED: %sx", num);
-        PageText(2, t);
-        g_page_text[3][0] = 0;
-    } else {
-        QuarterText(num, sizeof(num), q);
-        sprintf_s(t, "POINT RATE: %sx", num);
-        PageText(2, t);
-        g_page_text[3][0] = 0;
-    }
+    // the third row: PAYLOAD SPEED on a payload map, POINT RATE elsewhere (runtime/combat/payload_speed_rules.h)
+    nevr_combat::payload_speed::RowText(t, sizeof(t), g_rules && g_rules[PAYLOAD_MAP], g_rules ? g_rules[PSPEED_SHOWN] : 0, q);
+    PageText(2, t);
+    g_page_text[3][0] = 0;
     if (g_rules) *(char *volatile *)(g_rules + RATE_TEXT) = g_page_text[0];
 }
 void RateText(uint8_t) { PageTexts(); }
@@ -772,8 +756,8 @@ void MapSwitchEvent(uint64_t event) {
 // 8-15, PAYLOAD SPEED (quarters) in bits 16-23.
 uint32_t RulesWord() {
     return (uint32_t)g_classic | ((uint32_t)g_chassis & 1) << 2 | ((uint32_t)g_paused & 3) << 3 |
-           ((uint32_t)g_payload_map & 1) << 5 | ((uint32_t)g_skipping & 1) << 6 | ((uint32_t)g_pause_queued & 1) << 7 |
-           ((uint32_t)g_rate & 0xff) << 8 | ((uint32_t)g_pspeed & 0xff) << 16;
+           nevr_combat::payload_speed::PackWord(g_payload_map != 0, (uint8_t)g_pspeed) | ((uint32_t)g_skipping & 1) << 6 |
+           ((uint32_t)g_pause_queued & 1) << 7 | ((uint32_t)g_rate & 0xff) << 8;
 }
 enum : uint32_t { LOADOUT_ALL = 0, LOADOUT_CLASSIC = 1, LOADOUT_NEW = 2 };
 const char *LoadoutName(uint32_t m) { return m == LOADOUT_CLASSIC ? "CLASSIC" : m == LOADOUT_NEW ? "NEW" : "ALL"; }
@@ -855,7 +839,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
             if (g_rules) g_rules[g_payload_map ? PSPEED_SHOWN : RATE_SHOWN] = asked_rate;
             sockaddr_in nobody = {};
             int r = Relay(nobody, 'G', RulesWord());
-            Log("%s %d/4 (asked by %s): told %d client(s)", g_payload_map ? "PAYLOAD SPEED" : "POINT RATE",
+            Log("%s %d/4 (asked by %s): told %d client(s)", g_payload_map ? nevr_combat::payload_speed::kPayloadRowLabel : nevr_combat::payload_speed::kRateRowLabel,
                 (int)asked_rate, Addr(from, buf, sizeof(buf)), r);
         }
         if (rule_ask && (p.id & (WANT_CHASSIS | WANT_RATE | WANT_PAUSE)) == WANT_PAUSE) {   // PAUSE / UNPAUSE
@@ -863,7 +847,7 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
             LONG now = g_paused, want = (p.id & 1) ? PAUSE_ON : now == PAUSE_ON ? PAUSE_RESUMING : now;
             // payload maps: a pause only happens while the payload is held (before the attackers
             // start, or in a checkpoint's buffer); otherwise it waits for the next checkpoint
-            if (want == PAUSE_ON && now == PAUSE_OFF && g_payload_map && g_payload_moved && !(g_payload_flags & 1)) {
+            if (want == PAUSE_ON && now == PAUSE_OFF && nevr_combat::payload_speed::PauseWaitsForCheckpoint(g_payload_map != 0, g_payload_moved != 0, g_payload_flags)) {
                 g_pause_queue_base = g_checkpoint_hits;
                 if (!InterlockedExchange(&g_pause_queued, 1)) {
                     sockaddr_in nobody = {};
@@ -948,8 +932,8 @@ void Handle(SOCKET s, const Packet &p, const sockaddr_in &from) {
                 g_rules[RATE_SHOWN] = q;
                 Log("POINT RATE from the server: %d/4", (int)q);
             }
-            uint8_t pm = (uint8_t)(p.id >> 5 & 1), sk = (uint8_t)(p.id >> 6 & 1);
-            uint8_t ps = (uint8_t)(p.id >> 16), cp = (uint8_t)(p.id >> 24 & 3);
+            uint8_t pm = nevr_combat::payload_speed::WordMap(p.id) ? 1 : 0, sk = (uint8_t)(p.id >> 6 & 1);
+            uint8_t ps = nevr_combat::payload_speed::WordQuarters(p.id), cp = (uint8_t)(p.id >> 24 & 3);
             if (g_rules[PAYLOAD_MAP] != pm || g_rules[PSPEED_SHOWN] != ps || g_rules[CHECKPOINT_SHOWN] != cp) {
                 g_rules[PAYLOAD_MAP] = pm;
                 g_rules[PSPEED_SHOWN] = ps;
@@ -2662,38 +2646,27 @@ void InstallCaptureTime() {
 //     checkpoint holds (PAUSED rising edge), round start (AUTODRIVE) / end (LOCKED);
 //   * that it ran at all says "payload map" (the server tells the clients).
 constexpr uint32_t PAYLOAD_SPEED_RVA = 0xD858ED;
+constexpr int64_t JMP_REL32_LEN = 5;                // e9 rel32: the displacement is from the end of the jump
 const uint8_t kPayloadSpeedSite[9] = {0xf3, 0x0f, 0x11, 0x1c, 0xd0, 0x45, 0x8b, 0x4e, 0x30};
 extern "C" float __fastcall PayloadSpeed(uint8_t *payload, uint8_t *mover, float speed) {
+    (void)mover;
     g_payload_seen = GetTickCount64();
     if (!g_rules) return speed;
-    uint32_t flags = *(volatile uint32_t *)(payload + 0x30);
+    namespace ps = nevr_combat::payload_speed;
+    uint32_t flags = *(volatile uint32_t *)(payload + ps::kFlagsOffset);
     bool paused_rule = g_rules[PAUSED_SHOWN] != PAUSE_OFF;
     if (g_server) {
         uint32_t was = g_payload_flags;
         g_payload_flags = flags;
-        if ((flags & 1) && !(was & 1)) CheckpointHit("held", flags);             // the script's checkpoint hold
-        if (flags & 8) {                                                         // locked: the round is over
-            g_payload_moved = 0;
-        }
-        // AUTODRIVE (2): the game drives the payload itself: placing it for a round, at every
-        // checkpoint, and after quickfinish_checkpoint_on_start (test 6: slowly to the next
-        // checkpoint, claims ignored). Only the first one after the round ended (LOCKED) or the
-        // map loaded is a round's start.
-        if (flags & 2) {
-            g_payload_moved = 0;                                                 // at the start / a checkpoint
-            if (paused_rule) return 0.0f;                                        // PAUSE holds it even then
-            return speed;
-        }
-        if (paused_rule) return 0.0f;                                            // PAUSE: the payload stands still
-        uint8_t q = (uint8_t)g_pspeed;
-        float out = q && q != 4 ? speed * q / 4.0f : speed;
-        if (out > 0.05f && !g_payload_moved) g_payload_moved = 1;               // forward only
-        return out;
+        if ((flags & ps::kFlagPaused) && !(was & ps::kFlagPaused)) CheckpointHit("held", flags);   // the script's checkpoint hold
+        // AUTODRIVE: the game drives the payload itself: placing it for a round, at every checkpoint, and after
+        // quickfinish_checkpoint_on_start (test 6: slowly to the next checkpoint, claims ignored). LOCKED: the round is over.
+        ps::Step step = ps::ServerStep(flags, paused_rule, (uint8_t)g_pspeed, speed);
+        if (step.moved == ps::Moved::kClear) g_payload_moved = 0;
+        else if (step.moved == ps::Moved::kSet) g_payload_moved = 1;
+        return step.speed;
     }
-    if (paused_rule) return 0.0f;                                                // PAUSE: it stands still here too
-    if (flags & 2) return speed;
-    uint8_t q = g_rules[PSPEED_SHOWN];
-    return q && q != 4 ? speed * q / 4.0f : speed;
+    return ps::ClientSpeed(flags, paused_rule, g_rules[PSPEED_SHOWN], speed);
 }
 
 // The stub is near echovr.exe so a 5-byte jmp reaches it.
@@ -2703,11 +2676,21 @@ uint8_t *AllocNear(uint8_t *base, size_t size) {
     return nullptr;
 }
 
-[[maybe_unused]] void InstallPayloadSpeed() {  // nEVR port: never called (payload speed is parked)
+void InstallPayloadSpeed() {
     uint8_t *site = g_base + PAYLOAD_SPEED_RVA;
-    if (memcmp(site, kPayloadSpeedSite, sizeof(kPayloadSpeedSite))) { Log("payload speed: unexpected echovr.exe build, not hooked"); return; }
+    if (memcmp(site, kPayloadSpeedSite, sizeof(kPayloadSpeedSite))) {
+        char expected[HEX_PER_BYTE * sizeof(kPayloadSpeedSite) + 1] = {}, actual[sizeof(expected)] = {};
+        for (size_t i = 0; i < sizeof(kPayloadSpeedSite); ++i) {
+            snprintf(expected + HEX_PER_BYTE * i, sizeof(expected) - HEX_PER_BYTE * i, "%02x", kPayloadSpeedSite[i]);
+            snprintf(actual + HEX_PER_BYTE * i, sizeof(actual) - HEX_PER_BYTE * i, "%02x", site[i]);
+        }
+        LogWarning("payload speed: hook not installed va=+0x%llx reason=bytes_mismatch expected=%s actual=%s (PAYLOAD SPEED and the "
+                   "payload PAUSE do nothing; unexpected echovr.exe build)",
+                   (unsigned long long)PAYLOAD_SPEED_RVA, expected, actual);
+        return;
+    }
     uint8_t *stub = AllocNear(g_base, 256);
-    if (!stub) { Log("payload speed: no memory near echovr.exe, not hooked"); return; }
+    if (!stub) { LogWarning("payload speed: hook not installed va=+0x%llx reason=no_memory_near_image", (unsigned long long)PAYLOAD_SPEED_RVA); return; }
     uint8_t code[] = {
         0x50, 0x51, 0x52, 0x41, 0x50, 0x41, 0x51, 0x41, 0x52, 0x41, 0x53,   // push rax rcx rdx r8 r9 r10 r11
         0x48, 0x83, 0xec, 0x78,                                             // sub rsp, 78h (aligned for the call)
@@ -2738,17 +2721,27 @@ uint8_t *AllocNear(uint8_t *base, size_t size) {
     while (!(code[at_fn] == 0x48 && code[at_fn + 1] == 0xb8)) ++at_fn;
     memcpy(code + at_fn + 2, &fn, 8);
     memcpy(code + sizeof(code) - 8, &back, 8);
-    memcpy(stub, code, sizeof(code));
-    int64_t rel = (int64_t)stub - (int64_t)(site + 5);
-    if (rel != (int32_t)rel) { Log("payload speed: stub out of reach, not hooked"); return; }
-    uint8_t jump[9] = {0xe9, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90};
+    int64_t rel = (int64_t)stub - (int64_t)(site + JMP_REL32_LEN);
+    if (rel != (int32_t)rel) {
+        LogWarning("payload speed: hook not installed va=+0x%llx reason=stub_out_of_reach", (unsigned long long)PAYLOAD_SPEED_RVA);
+        return;
+    }
+    uint8_t jump[sizeof(kPayloadSpeedSite)] = {0xe9, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90};
     int32_t r32 = (int32_t)rel;
     memcpy(jump + 1, &r32, 4);
-    DWORD old;
-    if (!VirtualProtect(site, sizeof(jump), PAGE_EXECUTE_READWRITE, &old)) return;
-    memcpy(site, jump, sizeof(jump));
-    VirtualProtect(site, sizeof(jump), old, &old);
-    FlushInstructionCache(GetCurrentProcess(), site, sizeof(jump));
+    memcpy(stub, code, sizeof(code));
+    // The patch and its stub pass the write gate, or nothing is written (write_gate.h).
+    if (!::nevr_combat::GateWrite(site, sizeof(jump), "VeilNet payload speed jump (UpdatePreTrackMover track mover speed)") ||
+        !::nevr_combat::GateWrite(stub, sizeof(code), "VeilNet payload speed stub")) {
+        LogWarning("payload speed: hook not installed va=+0x%llx reason=overlaps_runtime_range", (unsigned long long)PAYLOAD_SPEED_RVA);
+        return;
+    }
+    // Written through ProcessMemcpy, which records the range in the runtime's registry (write_ranges.h).
+    DWORD error = 0;
+    if (!ProcessMemcpy(site, jump, sizeof(jump), &error, "VeilNet payload speed jump")) {
+        LogWarning("payload speed: hook not installed va=+0x%llx reason=write_failed error=%lu", (unsigned long long)PAYLOAD_SPEED_RVA, error);
+        return;
+    }
     g_payload_patched = site;
     Log("payload speed: hooked (PAYLOAD SPEED, payload PAUSE)");
 }
@@ -2794,8 +2787,8 @@ bool Install(bool server) {
     g_base = (uint8_t *)GetModuleHandleW(nullptr);
     if (uint32_t mb = RulesMailboxRva(g_base)) g_rules = g_base + mb;
     RateText(g_rules ? g_rules[RATE_SHOWN] : 0);         // the POINT RATE row's text (1.0x until told)
-    // nEVR port: InstallPayloadSpeed() is never called: Cat parked the payload rule (unfinished). The capture time patch
-    // (match control) is written below, once the combat net's hooks are committed.
+    // nEVR port: the capture time patch and the payload speed hook (match control) are written below, once the combat net's
+    // hooks are committed.
     g_page = g_base + ecr::kPageRva;                 // nEVR port (#2358)
     g_shared = (Shared *)(g_base + TOKEN_RVA);
     g_point = (Shared *)(g_base + POINT_TOKEN_RVA);
@@ -2810,7 +2803,10 @@ bool Install(bool server) {
     LONG rc = DetourTransactionCommit();
     if (rc != NO_ERROR) { LogWarning("hooking sendto / recvfrom failed (%ld): UMBRAL VEIL stays local", rc); return false; }
     g_hooked = true;
-    if (g_match_control) InstallCaptureTime();         // nEVR port: RULES capture time and PAUSE are match control
+    if (g_match_control) {                              // nEVR port: RULES capture time, PAYLOAD SPEED and PAUSE are match control
+        InstallCaptureTime();
+        InstallPayloadSpeed();                          // 82ad7ba: Install calls it (plugin/veilnet.cpp:2863)
+    }
     Log(g_server ? "server: relaying UMBRAL VEIL over the game's own connection"
                  : "client: UMBRAL VEIL goes over the game's own connection");
     if (!g_server && g_match_control) Log(HookApplyItem() ? "SERIES-10 ONLY: LoadAndApplyItem / ApplyItem hooked"

@@ -54,11 +54,11 @@ TEST(CombatSettings, AnUnrecognisedValueKeepsTheDefaultAndSaysSo) {
 }
 
 TEST(CombatSettings, TheUnfinishedAndUnsafeAreNeverOn) {
-  ASSERT_EQ(nevr_combat::kNeverOn.size(), 4u);
+  ASSERT_EQ(nevr_combat::kNeverOn.size(), 3u);
   EXPECT_STREQ(nevr_combat::kNeverOn[0].name, "party guns");
-  EXPECT_STREQ(nevr_combat::kNeverOn[1].name, "payload speed");
-  EXPECT_STREQ(nevr_combat::kNeverOn[2].name, "client damage bonus");
-  EXPECT_STREQ(nevr_combat::kNeverOn[3].name, "CombatBots");
+  EXPECT_STREQ(nevr_combat::kNeverOn[1].name, "client damage bonus");
+  EXPECT_STREQ(nevr_combat::kNeverOn[2].name, "CombatBots");
+  for (const nevr_combat::Disabled& d : nevr_combat::kNeverOn) EXPECT_STRNE(d.name, "payload speed");
 }
 
 std::string Resource(const std::string& body) {

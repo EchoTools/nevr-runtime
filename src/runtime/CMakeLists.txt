@@ -2359,6 +2359,12 @@ if(BUILD_TESTING)
     target_link_libraries(test_veilnet_gate PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_veilnet_gate DISCOVERY_MODE PRE_TEST)
 
+    # #2242 (EchoCombat 82ad7ba): PAYLOAD SPEED, the payload PAUSE rule and the third row's text (runtime/combat/payload_speed_rules.h).
+    add_executable(test_payload_speed_rules tests/test_payload_speed_rules.cpp)
+    target_include_directories(test_payload_speed_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_payload_speed_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_payload_speed_rules DISCOVERY_MODE PRE_TEST)
+
     # #600: the PowerBoost values his release ships, for a key config.yaml leaves out (runtime/combat/shipped_settings.h).
     add_executable(test_combat_shipped_settings tests/test_combat_shipped_settings.cpp)
     set_source_files_properties(tests/test_combat_shipped_settings.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
