@@ -114,6 +114,8 @@ class RepackFixture(unittest.TestCase):
         self.shim = self.tmp / "build" / "sentinel" / "libovrplatformloader.so"
         self.shim.parent.mkdir(parents=True)
         build_lib(self.shim, SHIM_C, "libovrplatformloader.so", shim_version if shim_version is not None else version)
+        # The recipe stages the baseline runtime from beside the shim (justfile `runtime` parameter; stage-runtime refuses a missing or empty file).
+        (self.shim.parent / "libnevr-runtime.so").write_bytes(b"\x7fELF fixture baseline runtime\0")
         if header:
             info = self.tmp / "build" / "generated"
             info.mkdir()

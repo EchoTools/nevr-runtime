@@ -65,11 +65,12 @@ class ReleaseQuestApk(unittest.TestCase):
         self.assertIn('version=""', body.splitlines()[0])
         self.assertIn('--version "$version"', body)
 
-    def test_the_repack_names_its_variant_as_its_last_parameter(self):
-        self.assertTrue(recipe("android-repack-apk").splitlines()[0].split(":")[0].rstrip().endswith('variant=""'))
+    def test_the_repack_names_its_variant_before_the_baseline_runtime_parameter(self):
+        """`runtime` is the last parameter (the baseline runtime, empty for the file beside the shim); `variant` is the one before it."""
+        self.assertTrue(recipe("android-repack-apk").splitlines()[0].split(":")[0].rstrip().endswith('variant="" runtime=""'))
 
     def test_every_recipe_that_repacks_an_apk_passes_a_variant_word(self):
-        """#2170: the repack has 13 parameters before `variant` and every call in the justfile gives all 14, so none leaves the word
+        """#2170: the repack has 13 parameters before `variant` and every call in the justfile gives all 14 (the 15th, `runtime`, defaults to the file beside the shim), so none leaves the word
         to a default it did not choose."""
         calls = []
         for number, line in enumerate(JUSTFILE.splitlines(), 1):
