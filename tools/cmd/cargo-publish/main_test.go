@@ -48,6 +48,8 @@ type fakeS3 struct {
 	race bool
 	// lastPutHeaders keeps the last PUT's headers for the signing test.
 	lastPutHeaders http.Header
+	// putOrder lists the keys of the PUTs in the order they were taken.
+	putOrder []string
 	// badSigs counts PUTs whose Authorization does not match the request as received (answered 403, never stored).
 	badSigs int
 }
@@ -95,6 +97,7 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(b)
 	case http.MethodPut:
 		f.puts++
+		f.putOrder = append(f.putOrder, key)
 		f.lastPutHeaders = r.Header.Clone()
 		if !signatureMatches(r) {
 			f.badSigs++
@@ -603,7 +606,7 @@ func TestLivePrefixPutsBlobsAtTheRootAndManifestsUnderV1(t *testing.T) {
 }
 
 func TestManifestsAreSentOnlyAfterEveryBlob(t *testing.T) {
-	dir, frame := writeSet(t, [][]byte{[]byte("alpha"), []byte("bravo!!")})
+	dir, frame := writeSet(t, [][]byte{[]byte("alpha"), []byte("bravo!!"), []byte("charlie")})
 	f, srv := newFake(t)
 	cfg := testConfig(srv.URL)
 	cfg.Prefix = livePrefix
@@ -614,7 +617,36 @@ func TestManifestsAreSentOnlyAfterEveryBlob(t *testing.T) {
 	if _, err := runPublish(context.Background(), cfg, p, quietLog()); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.objects) != 4 || string(f.objects["v1/manifest.json.zst"]) != string(frame) {
-		t.Fatalf("objects = %d", len(f.objects))
+	order := f.putOrder
+	if len(order) != 5 || string(f.objects["v1/manifest.json.zst"]) != string(frame) {
+		t.Fatalf("puts = %v", order)
+	}
+	if order[3] != manifestsKeyDir+sha256Hex(frame)+manifestFrameExt || order[4] != "v1/manifest.json.zst" {
+		t.Errorf("the last two puts are %v, want the by-hash manifest then the current one", order[3:])
+	}
+	for _, k := range order[:3] {
+		if !strings.HasPrefix(k, blobsDir) {
+			t.Errorf("put %s before the manifests is not a blob", k)
+		}
+	}
+}
+
+func TestAFailedBlobStopsTheManifests(t *testing.T) {
+	dir, _ := writeSet(t, [][]byte{[]byte("alpha")})
+	f, srv := newFake(t)
+	f.corrupt = true
+	cfg := testConfig(srv.URL)
+	cfg.Prefix = livePrefix
+	p, err := buildPlan(dir, cfg.Prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPublish(context.Background(), cfg, p, quietLog()); err == nil {
+		t.Fatal("a corrupt blob readback was accepted")
+	}
+	for _, k := range f.putOrder {
+		if !strings.HasPrefix(k, blobsDir) {
+			t.Errorf("manifest key %s was put after a blob failed", k)
+		}
 	}
 }
