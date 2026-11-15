@@ -108,6 +108,8 @@ TEST(NevrRootPaths, EveryFolderIsUnderTheRootUnderLocalAppData) {
   EXPECT_EQ(nevr_root::LogsDir(root), root + L"\\logs");
   EXPECT_EQ(nevr_root::CrashesDir(root), root + L"\\crashes");
   EXPECT_EQ(nevr_root::CacheDir(root), root + L"\\cache");
+  EXPECT_EQ(nevr_root::MapsCacheDir(root), root + L"\\cache\\maps");
+  EXPECT_EQ(nevr_root::MapsCacheDir(std::string("C:\\L\\nevr\\echovr")), "C:\\L\\nevr\\echovr\\cache\\maps");
   EXPECT_EQ(nevr_root::CosmeticsDir(root), root + L"\\cosmetics\\v1\\packages");
   EXPECT_EQ(nevr_root::PluginsDir(root), root + L"\\plugins");
   EXPECT_EQ(nevr_root::ContentDir(root), root + L"\\content");

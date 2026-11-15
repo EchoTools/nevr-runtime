@@ -388,7 +388,7 @@ type archiveBody struct {
 }
 
 // parseArchive reads an archive's body: u32 D, D x u64 dependencies, u32 N, N x (u64 type, u64 name); the type table
-// after them is not read. It is the runtime's ParseArchive (src/runtime/patch/resource_set_registry.cpp).
+// after them is not read. It is the runtime's ParseArchive (src/core/resource_set_registry.cpp).
 func parseArchive(b []byte) (archiveBody, bool) {
 	var a archiveBody
 	if len(b) < 4 {
@@ -416,7 +416,7 @@ func parseArchive(b []byte) (archiveBody, bool) {
 	return a, true
 }
 
-// On-disk types the runtime's registry checks (src/runtime/patch/resource_set_registry.h), and the mip type, which no
+// On-disk types the runtime's registry checks (src/core/resource_set_registry.h), and the mip type, which no
 // override reaches.
 const (
 	scriptType     = 0x991421b41de58370 // CScriptResourceWin10: the game loads a script as a DLL by name
@@ -427,7 +427,7 @@ const (
 )
 
 // servableProblems applies the checks the runtime's registry makes before it serves a set (Add and Mount in
-// src/runtime/patch/resource_set_registry.cpp) to what a written set serves, with stockHas answering for the game's
+// src/core/resource_set_registry.cpp) to what a written set serves, with stockHas answering for the game's
 // manifests. It returns every problem, sorted; none means the runtime will take the set.
 func servableProblems(sv *served, stockHas func(key) bool) []string {
 	var problems []string

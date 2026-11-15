@@ -86,6 +86,12 @@ const std::unordered_map<std::string, std::string>& FlatKeyMap() {
       // S4b — nevr_guilds: registration metadata (guilds=...), list-shaped in the
       // schema, read CSV via LookupFlatCsv (a scalar stays a single element).
       {"nevr_guilds", "guilds"},
+      // custom maps (docs/adr/0047): the key lists are read CSV, like guilds
+      {"maps_base_url", "maps.base_url"},
+      {"maps_official_keys", "maps.official_keys"},
+      {"maps_trusted_keys", "maps.trusted_keys"},
+      {"maps_channel", "maps.channel"},
+      {"maps_boot_budget_ms", "maps.boot_budget_ms"},
       // arena rule overrides (floats)
       {"arena_round_time", "arena.round_time"},
       {"arena_celebration_time", "arena.celebration_time"},

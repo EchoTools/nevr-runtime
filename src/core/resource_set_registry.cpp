@@ -1,17 +1,32 @@
-#include "runtime/patch/resource_set_registry.h"
+#include "core/resource_set_registry.h"
 
 #include <zstd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <utility>
 
 #include "nevr/resource_set.h"
+#include "nevr/symbol_hash.h"
 
 namespace nevr_resource_sets {
 
+static_assert(kWin10Types.archive == EchoVR::CSymbol64Hash("CArchiveResourceWin10"));
+static_assert(kWin10Types.level_root == EchoVR::CSymbol64Hash("CGameLevelResourceWin10"));
+static_assert(kWin10Types.script == EchoVR::CSymbol64Hash("CScriptResourceWin10"));
+static_assert(kWin10Types.texture == EchoVR::CSymbol64Hash("CGTextureResourceWin10"));
+static_assert(kWin10Types.texture_gpu == EchoVR::CSymbol64Hash("CGTextureResourceWin10GPU"));
+static_assert(kAndroidTypes.archive == EchoVR::CSymbol64Hash("CArchiveResourceAndroid"));
+static_assert(kAndroidTypes.level_root == EchoVR::CSymbol64Hash("CGameLevelResourceAndroid"));
+static_assert(kAndroidTypes.script == EchoVR::CSymbol64Hash("CScriptResourceAndroid"));
+static_assert(kAndroidTypes.texture == EchoVR::CSymbol64Hash("CGTextureResourceAndroid"));
+static_assert(kAndroidTypes.texture_gpu == EchoVR::CSymbol64Hash("CGTextureResourceAndroidGPU"));
+
 namespace {
+
+std::atomic<bool (*)(const std::string&, std::uint64_t)> g_scriptWaiver{nullptr};
 
 using Key = std::pair<std::uint64_t, std::uint64_t>;
 
@@ -85,9 +100,18 @@ const char* RefusalName(Refusal refusal) {
     case Refusal::kFileOffset: return "file_offset_range";
     case Refusal::kSizeLimit: return "size_limit";
     case Refusal::kFrameSize: return "frame_size";
+    case Refusal::kHash: return "hash_mismatch";
+    case Refusal::kOverride: return "override";
   }
   return "unknown";
 }
+
+bool IsMapOwner(const std::string& owner) {
+  constexpr std::size_t kPrefixLength = sizeof(kMapOwnerPrefix) - 1;
+  return owner.size() > kPrefixLength && owner.compare(0, kPrefixLength, kMapOwnerPrefix) == 0;
+}
+
+void SetScriptWaiver(bool (*holds)(const std::string& owner, std::uint64_t name)) { g_scriptWaiver.store(holds); }
 
 std::string KeyText(std::uint64_t type, std::uint64_t name) {
   char text[48];
@@ -117,12 +141,28 @@ bool ParseArchive(const unsigned char* data, std::size_t size, Archive* out) {
 
 Outcome Registry::Add(const std::string& plugin, const std::string& label, const void* bytes, std::uint64_t size,
                       std::int64_t handle, std::uint64_t fileOffset) {
+  return AddChecked(plugin, label, bytes, size, handle, fileOffset, false);
+}
+
+Outcome Registry::AddMapFile(const std::string& owner, const std::string& label, const void* bytes, std::uint64_t size,
+                              std::int64_t handle) {
+  if (!IsMapOwner(owner)) return Refuse(Refusal::kFormat, "bad_owner (a map's set is registered for \"map:<id>\")");
+  return AddChecked(owner, label, bytes, size, handle, 0, true);
+}
+
+Outcome Registry::AddChecked(const std::string& plugin, const std::string& label, const void* bytes, std::uint64_t size,
+                             std::int64_t handle, std::uint64_t fileOffset, bool mapFile) {
   if (mounted_) return Refuse(Refusal::kTooLate, "the run's resource sets are already mounted");
   nevr_resource_set::View view;
   const nevr_resource_set::Result parsed = nevr_resource_set::Parse(bytes, size, &view);
   if (!parsed.ok()) {
     return Refuse(Refusal::kFormat, std::string(nevr_resource_set::ProblemName(parsed.problem)) + " at index " +
                                         std::to_string(parsed.index));
+  }
+  if (mapFile && view.override_count() != 0) {
+    const nevr_resource_set::Override o = view.OverrideAt(0);
+    return Refuse(Refusal::kOverride, KeyText(o.type, o.name) + " (" + std::to_string(view.override_count()) +
+                                          " override records; a map's set only adds resources)");
   }
 
   // Each chunk: at most kMaxResourceBytes decompressed, and its zstd frame header states exactly that many bytes (the
@@ -158,21 +198,25 @@ Outcome Registry::Add(const std::string& plugin, const std::string& label, const
   set->label = label;
   set->handle = handle;
   set->bytes = size;
+  set->committed = mapFile;  // a map's set has no init to wait for; a plugin's Commit and Drop never reach it
   for (std::uint32_t i = 0; i < view.record_count(); ++i) {
     const nevr_resource_set::Record r = view.RecordAt(i);
-    if (r.type == kScriptType) return Refuse(Refusal::kScript, KeyText(r.type, r.name));
-    if (r.type == kTextureType && !SortedHas(sorted, Key{kTextureGpuType, r.name})) {
+    if (r.type == types_.script) {
+      const auto holds = mapFile ? g_scriptWaiver.load() : nullptr;
+      if (holds == nullptr || !holds(plugin, r.name)) return Refuse(Refusal::kScript, KeyText(r.type, r.name));
+    }
+    if (r.type == types_.texture && !SortedHas(sorted, Key{types_.texture_gpu, r.name})) {
       return Refuse(Refusal::kTexturePayload, KeyText(r.type, r.name));
     }
-    if (r.type == kArchiveType) {
+    if (r.type == types_.archive) {
       Archive archive;
       const Outcome read = ReadArchive(view, r, &archive);
       if (!read.ok()) return read;
       set->archives.push_back(std::move(archive));
     }
-    if (r.type == kLevelRootType) {
-      if (!SortedHas(sorted, Key{kArchiveType, r.name})) {
-        return Refuse(Refusal::kLevelIncomplete, KeyText(kArchiveType, r.name));
+    if (r.type == types_.level_root) {
+      if (!SortedHas(sorted, Key{types_.archive, r.name})) {
+        return Refuse(Refusal::kLevelIncomplete, KeyText(types_.archive, r.name));
       }
       set->levels.push_back(r.name);
     }
@@ -262,6 +306,23 @@ std::vector<std::int64_t> Registry::Drop(const std::string& plugin) {
   return handles;
 }
 
+std::vector<std::int64_t> Registry::DropMap(const std::string& owner) {
+  std::vector<std::int64_t> handles;
+  if (mounted_ || !IsMapOwner(owner)) return handles;
+  auto keep = sets_.begin();
+  for (auto it = sets_.begin(); it != sets_.end(); ++it) {
+    if ((*it)->plugin == owner) {
+      handles.push_back((*it)->handle);
+      heldChunks_ -= (*it)->chunks.size();
+    } else {
+      if (keep != it) *keep = std::move(*it);
+      ++keep;
+    }
+  }
+  sets_.erase(keep, sets_.end());
+  return handles;
+}
+
 MountReport Registry::Mount(const StockView& stock) {
   MountReport report;
   report.stock_records = stock.records;
@@ -307,16 +368,16 @@ MountReport Registry::Mount(const StockView& stock) {
         seen.push_back(name);
         const Archive* archive = archiveOf(name);
         if (archive == nullptr) {
-          if (!stock.has(stock.ctx, kArchiveType, name)) {
-            outcome = Refuse(Refusal::kUnresolved, "level " + KeyText(kArchiveType, level) + " depends on " +
-                                                       KeyText(kArchiveType, name));
+          if (!stock.has(stock.ctx, types_.archive, name)) {
+            outcome = Refuse(Refusal::kUnresolved, "level " + KeyText(types_.archive, level) + " depends on " +
+                                                       KeyText(types_.archive, name));
           }
           continue;
         }
         for (const Key& entry : archive->entries) {
           if (!resolves(entry)) {
-            outcome = Refuse(Refusal::kUnresolved, "level " + KeyText(kArchiveType, level) + ": archive " +
-                                                       KeyText(kArchiveType, name) + " lists " +
+            outcome = Refuse(Refusal::kUnresolved, "level " + KeyText(types_.archive, level) + ": archive " +
+                                                       KeyText(types_.archive, name) + " lists " +
                                                        KeyText(entry.first, entry.second));
             break;
           }
