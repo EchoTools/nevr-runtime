@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
+	"github.com/EchoTools/nevr-runtime/tools/internal/runroot"
 )
 
 const (
@@ -158,7 +159,12 @@ func run(ctx context.Context, args []string, env []string, stdin io.Reader, stdo
 		fmt.Fprintf(stderr, "%s: usage: %s -recipe <name> -- <command> [args...]\n", tool, tool)
 		return exitUsage
 	}
-	logPath := filepath.Join(runlog.WorkRoot(getenv), logRel)
+	workRoot, err := runroot.WorkRoot(getenv)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: FAIL the run of %s cannot be recorded, so it does not start: %v\n", tool, *recipe, err)
+		return runlog.ExitLogFailure
+	}
+	logPath := filepath.Join(workRoot, logRel)
 	l, err := runlog.OpenAt(logPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: FAIL the run of %s cannot be recorded, so it does not start: %v\n", tool, *recipe, err)

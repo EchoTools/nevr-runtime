@@ -34,6 +34,7 @@ import (
 	"syscall"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
+	"github.com/EchoTools/nevr-runtime/tools/internal/runroot"
 	"github.com/EchoTools/nevr-runtime/tools/internal/testmap"
 )
 
@@ -151,7 +152,9 @@ func (g *generator) do() int {
 	}
 	treesArg := g.trees
 	if treesArg == "" {
-		treesArg = g.defaultTrees(tc, repo)
+		if treesArg, err = g.defaultTrees(tc, repo); err != nil {
+			return g.fail(err)
+		}
 	}
 	var trees []string
 	for _, t := range filepath.SplitList(treesArg) {
@@ -204,10 +207,14 @@ func (g *generator) do() int {
 // defaultTrees is the search path when -trees is not given: the build checkout's trees ($NEVR_BUILD_CHECKOUT, else the
 // work root's build-checkout/nevr-runtime), then the main checkout's (the parent of git's common directory), then the
 // repository's own. A tree missing from all three is the failure that names the recipe making it.
-func (g *generator) defaultTrees(tc toolchain, repo string) string {
+func (g *generator) defaultTrees(tc toolchain, repo string) (string, error) {
 	checkout := g.getenv(envBuildCheckout)
 	if checkout == "" {
-		checkout = filepath.Join(runlog.WorkRoot(g.getenv), buildCheckoutDir, buildCheckoutRepo)
+		workRoot, err := runroot.WorkRoot(g.getenv)
+		if err != nil {
+			return "", err
+		}
+		checkout = filepath.Join(workRoot, buildCheckoutDir, buildCheckoutRepo)
 	}
 	dirs := []string{filepath.Join(checkout, treesSubdir)}
 	if common, err := tc.output(repo, "git", "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil {
@@ -222,7 +229,7 @@ func (g *generator) defaultTrees(tc toolchain, repo string) string {
 			out = append(out, d)
 		}
 	}
-	return strings.Join(out, string(filepath.ListSeparator))
+	return strings.Join(out, string(filepath.ListSeparator)), nil
 }
 
 // checkFile is -check: it compares the map on disk with want and names the first component that differs.

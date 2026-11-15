@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
+	"github.com/EchoTools/nevr-runtime/tools/internal/runroot"
 	"github.com/EchoTools/nevr-runtime/tools/internal/testmap"
 )
 
@@ -477,7 +478,11 @@ func readResults(file string) (map[string]int, error) {
 
 // newResultsFile makes the fresh, empty results file of a gtest batch, under the work root, and returns its path.
 func (r *runner) newResultsFile() (string, error) {
-	dir := filepath.Join(runlog.WorkRoot(r.getenv), testRunsDir, tool)
+	workRoot, err := runroot.WorkRoot(r.getenv)
+	if err != nil {
+		return "", fmt.Errorf("work root: %w", err)
+	}
+	dir := filepath.Join(workRoot, testRunsDir, tool)
 	if err := os.MkdirAll(dir, dirPerm); err != nil {
 		return "", fmt.Errorf("results directory: %w", err)
 	}

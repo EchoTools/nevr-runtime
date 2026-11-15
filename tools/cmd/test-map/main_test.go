@@ -587,7 +587,10 @@ func TestDefaultTreesAreTheBuildCheckoutTheMainCheckoutAndTheRepo(t *testing.T) 
 		// Only PATH from the hermetic environment: testkit.Env sets NEVR_WORK_ROOT, which the HOME case must not have.
 		env := append([]string{"PATH=" + lookup(testkit.Env(t))("PATH")}, c.env...)
 		g := &generator{getenv: lookup(env)}
-		got := g.defaultTrees(toolchain{ctx: context.Background(), env: env}, notRepo)
+		got, err := g.defaultTrees(toolchain{ctx: context.Background(), env: env}, notRepo)
+		if err != nil {
+			t.Fatalf("defaultTrees with %v: %v", c.env, err)
+		}
 		if want := strings.Join(c.want, string(filepath.ListSeparator)); got != want {
 			t.Errorf("defaultTrees with %v = %q, want %q", c.env, got, want)
 		}
@@ -601,7 +604,10 @@ func TestDefaultTreesAreTheBuildCheckoutTheMainCheckoutAndTheRepo(t *testing.T) 
 	f.git("worktree", "add", "-q", linked)
 	env := append(f.env, "NEVR_BUILD_CHECKOUT=/co")
 	g := &generator{getenv: lookup(env)}
-	got := g.defaultTrees(toolchain{ctx: context.Background(), env: env}, linked)
+	got, err := g.defaultTrees(toolchain{ctx: context.Background(), env: env}, linked)
+	if err != nil {
+		t.Fatal(err)
+	}
 	main, err := filepath.EvalSymlinks(f.repo)
 	if err != nil {
 		t.Fatal(err)

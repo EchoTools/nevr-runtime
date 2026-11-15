@@ -37,6 +37,9 @@ var fixedRules = []fixedRule{
 	{"tests/plugins/**", []string{"just:test-plugins-groundtruth"}, "the Go plugin suite that test-plugins-groundtruth runs"},
 	{"tests/quest/**", []string{"just:test-android"}, "the Go Quest suite that test-android runs"},
 	{"tests/crash-ingest/**", []string{"crash-ingest-vet"}, "the crash-ingest module, vetted by its target"},
+	{"tests/contracts/**", []string{"just:test-service-contracts"}, "the Go service-contract module that test-service-contracts runs"},
+	{"tests/vectors/maps/**", []string{testmap.KindGTest + ":test_map_manifest", testmap.KindGTest + ":test_map_derive"},
+		"the vectors the map manifest and recipe tests read through NEVR_MAP_VECTORS and NEVR_RECIPE_VECTORS (src/core/maps.cmake)"},
 	{"installer/**", []string{"just:test-installer"}, "the installer's own tests"},
 	{"src/scripting/**", []string{"just:test-scripting"}, "the scripting host, built and tested by test-scripting"},
 	{"tools/quest_apk_patch_map.tsv", []string{"pytest:test_quest_apk_patch_map"}, "the patch map its pytest reads"},
@@ -92,6 +95,8 @@ var reasons = []reasonRow{
 		"SDK header for PC plugins: no target in this tree compiles it (plugins build in nevr-runtime-plugins)"},
 	{func(f string) bool { return strings.HasPrefix(f, ".github/") },
 		"GitHub configuration: no test reads this file"},
+	{func(f string) bool { return strings.HasPrefix(f, "third_party/") },
+		"a vendored third-party notice: no test reads it"},
 	{func(f string) bool {
 		return f == "tools/log_call_census.py" || f == "tools/gen_hwdump_vk_fields.py" || f == "tools/symbol_candidates.txt"
 	}, "a one-off tool or data file: no test runs or reads it"},

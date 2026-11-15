@@ -66,9 +66,11 @@ const goListFormat = "{{.ImportPath}}\t{{.Dir}}\t{{join .Deps \" \"}}"
 // srcRuntimeCMake is the CMake file that names the GTest executables, and srcQuest the tree of the Quest host.
 const (
 	srcRuntimeCMake = "src/runtime/CMakeLists.txt"
-	srcQuest        = "src/quest/"
-	questPresets    = "src/quest/CMakePresets.json"
-	questGroupsDir  = "src/quest/host_tests/groups"
+	// srcCoreMapsCMake is the second file that names GTest executables: the map channel's tests, which src/runtime/CMakeLists.txt includes.
+	srcCoreMapsCMake = "src/core/maps.cmake"
+	srcQuest         = "src/quest/"
+	questPresets     = "src/quest/CMakePresets.json"
+	questGroupsDir   = "src/quest/host_tests/groups"
 )
 
 // buildNinjaTarget is the ninja target `just build` builds in the mingw tree: everything, so every file it compiles is the
@@ -283,9 +285,16 @@ func (m *mapper) gtests() error {
 	if err != nil {
 		return err
 	}
-	cmake, err := m.readRepo(srcRuntimeCMake)
-	if err != nil {
-		return err
+	var cmake string
+	for _, file := range []string{srcRuntimeCMake, srcCoreMapsCMake} {
+		if file != srcRuntimeCMake && !m.known[file] { // the map channel's file is optional: a checkout without it has no such tests
+			continue
+		}
+		text, err := m.readRepo(file)
+		if err != nil {
+			return err
+		}
+		cmake += text + "\n"
 	}
 	for _, sub := range addExecutableRe.FindAllStringSubmatch(cmake, -1) {
 		name, body := sub[executableNameGroup], sub[executableBodyGroup]
@@ -304,7 +313,7 @@ func (m *mapper) gtests() error {
 		body = strings.ReplaceAll(body, "${CMAKE_CURRENT_SOURCE_DIR}/", "")
 		body = strings.ReplaceAll(body, "${CMAKE_SOURCE_DIR}/", "")
 		for _, tok := range sourceTokenRe.FindAllString(body, -1) {
-			for _, cand := range []string{path.Join("src/runtime", tok), tok} {
+			for _, cand := range []string{path.Join("src/runtime", tok), path.Join("src/core", tok), tok} {
 				if m.known[cand] {
 					m.cov.add(cand, id)
 				}
@@ -374,7 +383,12 @@ func (m *mapper) quest() error {
 		if err != nil {
 			return err
 		}
-		id := "just:" + questRecipePrefix + strings.TrimSuffix(e.Name(), ".cmake")
+		recipe := questRecipePrefix + strings.TrimSuffix(e.Name(), ".cmake")
+		if !m.recipes[recipe] {
+			m.log.Debug("quest group without a recipe", "group", e.Name())
+			continue
+		}
+		id := "just:" + recipe
 		m.cov.add(questGroupsDir+"/"+e.Name(), id) // the group's own file: changing it runs the group
 		for _, f := range m.tracked {
 			if rel, ok := strings.CutPrefix(f, srcQuest); ok && strings.Contains(text, rel) {

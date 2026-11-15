@@ -327,9 +327,13 @@ func TestTheRepositoryMapCoversEveryTrackedFileAndNamesRealTests(t *testing.T) {
 			}
 		}
 	}
-	cmake, err := os.ReadFile(filepath.Join(root, "src/runtime/CMakeLists.txt"))
-	if err != nil {
-		t.Fatal(err)
+	var cmake []byte
+	for _, file := range []string{"src/runtime/CMakeLists.txt", "src/core/maps.cmake"} {
+		text, err := os.ReadFile(filepath.Join(root, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmake = append(cmake, text...)
 	}
 	recipes := map[string]bool{}
 	for _, r := range strings.Fields(output(t, root, "just", "--justfile", filepath.Join(root, "justfile"), "--summary", "--unsorted")) {
@@ -352,7 +356,7 @@ func TestTheRepositoryMapCoversEveryTrackedFileAndNamesRealTests(t *testing.T) {
 		case m.Targets[id] != nil:
 		case kind == KindGTest:
 			if !regexp.MustCompile(`add_executable\(` + regexp.QuoteMeta(name) + `\b`).Match(cmake) {
-				t.Errorf("%s is not an add_executable of src/runtime/CMakeLists.txt", id)
+				t.Errorf("%s is not an add_executable of src/runtime/CMakeLists.txt or src/core/maps.cmake", id)
 			}
 		case kind == KindJust:
 			if !recipes[name] {
