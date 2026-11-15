@@ -12,8 +12,9 @@ namespace nevr_cdn_start {
 // thread does the fetch. False when no start happened (no nevr root, or a start already ran in this process); it logs why.
 bool Start() noexcept;
 
-// The last mounted set that Start published, or null before the first one. The PC read hook (the detour on
-// CResourceManager::FillResourceFileRequest in patch/plugin_assets.cpp) will read it; until that hook exists nothing serves it.
+// The last mounted set that Start published, or null before the first one. Each published shadow is also handed to the PC read hook
+// (the detour on CResourceManager::FillResourceFileRequest in patch/plugin_assets.cpp, PublishCdnShadow), which fills a request whose
+// key the shadow holds from it through the shared nevr_cdn::Resolver, as the Quest's does.
 const nevr_cdn::Mounted* Published() noexcept;
 
 }  // namespace nevr_cdn_start

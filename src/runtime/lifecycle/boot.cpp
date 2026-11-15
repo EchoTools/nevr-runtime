@@ -5,6 +5,7 @@
 #include "runtime/lifecycle/boot.h"
 #include "runtime/lifecycle/bridge_policy.h"
 #include "runtime/lifecycle/cdn_start.h"
+#include "runtime/patch/plugin_assets.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
@@ -731,7 +732,13 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   // The CDN fetches only on a client; a server serves no asset.
   if (!g_isServer) {
-    nevr_cdn_start::Start();
+    if (nevr_cdn_start::Start()) {
+      // The read hook serves the mounted set (ADR 0045); EnsureResolverHook logs its own install outcome.
+      if (!nevr::assets::EnsureResolverHook()) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.CDN] cdn_start result=no_read_hook consequence=\"the CDN's mounted set is not served this run\"");
+      }
+    }
   }
 
   // #960: the game data check, every run. Before the client-only patches so a missing folder is logged even when they

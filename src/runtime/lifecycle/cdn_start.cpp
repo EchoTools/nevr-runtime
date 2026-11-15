@@ -8,6 +8,7 @@
 #include "cdn/env_windows.h"
 #include "core/logging.h"
 #include "core/nevr_root.h"
+#include "runtime/patch/plugin_assets.h"
 
 namespace nevr_cdn_start {
 
@@ -19,7 +20,11 @@ constexpr const char* kCdnCacheName = "cdn";
 // Written once per published set, read from any thread. Sets are never freed, so a reader may keep the pointer.
 std::atomic<const nevr_cdn::Mounted*> g_published{nullptr};
 
-void PublishSet(const nevr_cdn::Mounted* set) { g_published.store(set, std::memory_order_release); }
+// A set with no shadow (nothing mounted) leaves the earlier one in place for the read hook.
+void PublishSet(const nevr_cdn::Mounted* set) {
+  g_published.store(set, std::memory_order_release);
+  if (set != nullptr && set->shadow != nullptr) nevr::assets::PublishCdnShadow(set->shadow.get());
+}
 
 }  // namespace
 

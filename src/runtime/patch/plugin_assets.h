@@ -11,7 +11,15 @@
 
 #include "runtime/patch/asset_registry.h"
 
+namespace nevr_shadow {
+class Shadow;
+}
+
 namespace nevr::assets {
+
+// ADR 0045: publishes the CDN's mounted shadow to the resolver hook (the one nevr_cdn::Resolver, src/cdn/cdn_resolver.h). A request
+// whose key the shadow holds is filled from it, ahead of the resource sets and the game's own manifest; the shadow is never freed.
+void PublishCdnShadow(const nevr_shadow::Shadow* shadow) noexcept;
 
 // Register an asset the plugin carries. Installs the engine hooks on first use. Returns why it was refused;
 // every refusal is also a Warning in the log naming the label, type and name.
@@ -59,6 +67,9 @@ void RetireHookForTest(void* target, const char* what);
 using RequestFnForTest = uint64_t(__cdecl*)(void*, uint64_t, uint64_t, uint64_t, uint64_t, void*, uint64_t, void*);
 void SetRequestOriginalForTest(RequestFnForTest original);
 uint64_t CallRequestHookForTest(void* manager, uint64_t type, uint64_t name);
+// Test-only (ADR 0045): the CDN read path with an explicit buffer index; forgets the published shadow and every thread's pin.
+uint64_t CallRequestHookForTest(void* manager, uint64_t type, uint64_t name, uint64_t index);
+void ResetCdnForTest();
 #endif
 
 }  // namespace nevr::assets

@@ -713,7 +713,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertIn("nevr_json_escape::AppendTo(line, ts,", build, "ts is escaped like the message")
         self.assertIn("nevr_log_level::Name(level)", build, "the level comes from the one mapping (#2245)")
         rotate = extract_braced_function(filt, "static void RotateIfNeeded(")
-        self.assertIn("nevr_run_log_writer::Rotate()", rotate, "the old content is renamed and the process keeps its file name")
+        self.assertIn("nevr_run_log_writer::Rotate(", rotate, "the old content is renamed and the process keeps its file name")
         init_cpp = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
         self.assertNotIn("ReplayBootTail", init_cpp)
         tee = strip_comments((ROOT / "src/runtime/log/boot_log_tee.cpp").read_text())

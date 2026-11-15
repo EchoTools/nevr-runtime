@@ -1229,7 +1229,9 @@ if(BUILD_TESTING)
 
     # #1423: AI bots on a dedicated server: the settings rewrite, the request, the schedule and the sites (server_bots.h).
     add_executable(test_join_hold tests/test_join_hold.cpp)
-    set_source_files_properties(tests/test_join_hold.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    # join_hold.h reaches the map hold (core/map_server_hold.h), so the test links its implementation.
+    target_sources(test_join_hold PRIVATE "${CMAKE_SOURCE_DIR}/src/core/map_server_hold.cpp")
+    set_source_files_properties(tests/test_join_hold.cpp "${CMAKE_SOURCE_DIR}/src/core/map_server_hold.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_join_hold PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_join_hold PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_join_hold DISCOVERY_MODE PRE_TEST)
@@ -2532,6 +2534,10 @@ if(BUILD_TESTING)
       patch/asset_registry.cpp
       # The engine hooks that serve the registry: the N84 test installs one through InstallHookForTest (PatchDetour).
       patch/plugin_assets.cpp
+      # ADR 0045: plugin_assets.cpp's read hook asks the shared CDN resolver.
+      "${CMAKE_SOURCE_DIR}/src/cdn/cdn_resolver.cpp"
+      # ws_bridge.cpp reads the host's file digest and version (nevr_identity.host_version).
+      host/file_digest.cpp
       # #2161: the resource sets plugin_loader.cpp opens to a plugin's init and plugin_assets.cpp asks the resolver about.
       patch/resource_sets.cpp
       "${CMAKE_SOURCE_DIR}/src/core/resource_set_registry.cpp"

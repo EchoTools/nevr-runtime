@@ -77,7 +77,7 @@ class TheQuestSendStartsInTheSentinelBeforeAnythingCanCrash(unittest.TestCase):
         ctor = extract_braced_function(text, "static void nevr_sentinel_ctor() {")
         self.assertIn("sentinel::Arm();", ctor)
         self.assertLess(ctor.index("sentinel::Arm();"), ctor.index("LogConstructorBegin("))
-        self.assertLess(ctor.index("sentinel::Arm();"), ctor.index("CaptureUiLooper();"))
+        self.assertLess(ctor.index("sentinel::Arm();"), ctor.index("StartRuntime("))  # the UI looper capture runs inside the runtime's sequence
 
     def test_the_arm_step_starts_the_send_after_the_handlers_are_armed(self):
         text = source("src/quest/integration/production_steps.cpp")

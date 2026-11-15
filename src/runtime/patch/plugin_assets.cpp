@@ -28,8 +28,10 @@
 #include <windows.h>
 #include <MinHook.h>
 
+#include "cdn/cdn_resolver.h"
 #include "core/globals.h"
 #include "core/logging.h"
+#include "core/resource_shadow.h"
 #include "runtime/hook/patching.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/patch/game_buffer.h"
@@ -100,6 +102,14 @@ SubmitFn g_origSubmit = nullptr;
 RequestFn g_origRequest = nullptr;
 void* g_submitTarget = nullptr;
 void* g_requestTarget = nullptr;
+
+// ADR 0045: the CDN's published shadow and the per-thread pins. A function-local static, as the Quest's (src/quest/sentinel/
+// resource_request_hook.cpp, Cdn()): the Resolver's constructor takes its id from a counter at run time.
+nevr_cdn::Resolver& CdnResolver() noexcept {
+    static nevr_cdn::Resolver resolver;
+    return resolver;
+}
+std::atomic<bool> g_cdnServedSaid{false};
 
 std::mutex g_warnedMutex;
 std::set<std::pair<uint64_t, uint64_t>> g_warned;
@@ -234,6 +244,23 @@ uint64_t __cdecl Hook_Request(void* manager, uint64_t typeKey, uint64_t nameKey,
     // shadow manifest: the game's own function fills the request from it, and the game's own reader reads the
     // plugin's file. Every other key goes to the game's manifest unchanged.
     nevr_resource_sets::NoteRequest();
+    // ADR 0045: the CDN first, in the order of the Quest's Handler (resource_request_hook.cpp): Select pins the shadow of a texture's
+    // index 0 for its index 1, so it runs for every request; a key the shadow holds is filled by the game's own function from the
+    // shadow, and CDN replaces stock; any other key falls through to the resource sets and the game's manifest below.
+    if (const nevr_shadow::Shadow* cdn = CdnResolver().Select(nameKey, index)) {
+        nevr_shadow::Found found;
+        if (cdn->Find(typeKey, nameKey, &found)) {
+            const uint64_t ret = g_origRequest(const_cast<void*>(cdn->manager()), typeKey, nameKey, a4, a5, resource, index, request);
+            if (!g_cdnServedSaid.exchange(true, std::memory_order_relaxed)) {
+                Log(EchoVR::LogLevel::Info,
+                    "[NEVR.CDN] cdn_served first type=0x%016llx name=0x%016llx index=%llu bytes=%u ret=%llu "
+                    "consequence=\"the engine reads this resource from the CDN's mounted set\"",
+                    static_cast<unsigned long long>(typeKey), static_cast<unsigned long long>(nameKey),
+                    static_cast<unsigned long long>(index), found.size, static_cast<unsigned long long>(ret));
+            }
+            return ret;
+        }
+    }
     if (const void* shadowManager = nevr_resource_sets::ManagerFor(manager, typeKey, nameKey)) {
         return g_origRequest(const_cast<void*>(shadowManager), typeKey, nameKey, a4, a5, resource, index, request);
     }
@@ -305,6 +332,8 @@ void EnsureHooksInstalled() {
 
 }  // namespace
 
+void PublishCdnShadow(const nevr_shadow::Shadow* shadow) noexcept { CdnResolver().Publish(shadow); }
+
 bool EnsureResolverHook() {
     EnsureHooksInstalled();
     return g_requestTarget != nullptr;
@@ -361,6 +390,13 @@ bool InstallHookForTest(void* target, void* detour, void** original, const char*
 }
 void RetireHookForTest(void* target, const char* what) { RetireEngineHook(target, what); }
 void SetRequestOriginalForTest(RequestFnForTest original) { g_origRequest = original; }
+uint64_t CallRequestHookForTest(void* manager, uint64_t type, uint64_t name, uint64_t index) {
+    return Hook_Request(manager, type, name, 0, 0, nullptr, index, nullptr);
+}
+void ResetCdnForTest() {
+    CdnResolver().Reset();
+    g_cdnServedSaid = false;
+}
 uint64_t CallRequestHookForTest(void* manager, uint64_t type, uint64_t name) {
     return Hook_Request(manager, type, name, 0, 0, nullptr, 0, nullptr);
 }

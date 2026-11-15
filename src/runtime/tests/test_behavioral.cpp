@@ -3700,6 +3700,38 @@ TEST_F(PluginResourceSetTest, ThePluginsFileIsHeldDenyWriteAndAThrowAfterTheOpen
   std::filesystem::remove(copy);
 }
 
+// ADR 0045: the PC read hook asks the shared nevr_cdn::Resolver. A key the published CDN shadow holds is filled from the shadow's
+// manager; a key it does not hold goes to the caller's manager, as without a CDN.
+TEST_F(PluginResourceSetTest, TheResolverHookFillsAPublishedCdnKeyFromItsShadowAndAMissingKeyFromTheCallersManager) {
+  constexpr uint64_t kCdnType = 0x5C0DE00000000001ULL;
+  constexpr uint64_t kCdnName = 0x5C0DE00000000002ULL;
+  constexpr uint64_t kCdnAbsentName = 0x5C0DE00000000003ULL;
+  nevr_shadow::Input input;
+  nevr_shadow::Record record;
+  record.type = kCdnType;
+  record.name = kCdnName;
+  record.size = 16;
+  record.alignment = 1;
+  input.records.push_back(record);
+  input.chunks.push_back(nevr_shadow::Chunk{0, 0, 16, 16});
+  input.handles.push_back(1);
+  std::unique_ptr<nevr_shadow::Shadow> shadow;
+  ASSERT_EQ(nevr_shadow::Shadow::Build(input, &shadow), nevr_shadow::Status::kOk);
+
+  nevr::assets::ResetCdnForTest();
+  nevr::assets::SetRequestOriginalForTest(&RecordingRequest);
+  int callers = 0;
+  nevr::assets::CallRequestHookForTest(&callers, kCdnType, kCdnName, 0);
+  EXPECT_EQ(g_requestManager, &callers) << "nothing published: the caller's manager";
+
+  nevr::assets::PublishCdnShadow(shadow.get());
+  nevr::assets::CallRequestHookForTest(&callers, kCdnType, kCdnName, 0);
+  EXPECT_EQ(g_requestManager, shadow->manager()) << "a key in the published set is filled from the set";
+  nevr::assets::CallRequestHookForTest(&callers, kCdnType, kCdnAbsentName, 0);
+  EXPECT_EQ(g_requestManager, &callers) << "a key the set does not hold falls through to the game";
+  nevr::assets::ResetCdnForTest();
+}
+
 TEST_F(PluginResourceSetTest, TheResolverHookFillsASetsKeyFromTheShadowAndOtherKeysFromTheCallersManager) {
   Plan();
   LoadPlugins();
