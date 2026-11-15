@@ -78,6 +78,16 @@ def takes_create_file(line: str) -> bool:
     return bool(CREATE_FILE_BY_NAME.search(joined) or CREATE_FILE_AS_VALUE.search(without_strings(line)))
 
 
+# #575: the game folder redirect hooks CreateFileW/A to move the game's _local and _temp to the nEVR root. It is the one
+# runtime source allowed to, because it serves no pack file: its rules move those two folder names and nothing else.
+GAME_FOLDER_REDIRECT = "src/modules/platform-compat/src/game_folder_redirect.cpp"
+GAME_FOLDER_REDIRECT_RULES = "src/modules/platform-compat/src/game_folder_redirect_rules.h"
+# The only lines of that file allowed to take CreateFileW/A: its two hook installs and the two Redirect calls naming them.
+GAME_FOLDER_REDIRECT_LINE = re.compile(
+    r'^(?:installed \+= Hook\(file_module, "CreateFile[WA]", &g_createFile[WA], &CreateFile[WA]Hook, &failed\) \? 1 : 0;'
+    r'|const std::optional<std::wstring> to = Redirect([WA])\("CreateFile\1"\, path\);)$')
+
+
 class ThePackIsServedThroughTheGamesOwnOpen(unittest.TestCase):
     def test_the_matcher_tells_a_hook_from_a_call(self):
         hooks = ('auto p = GetProcAddress(k32, "CreateFileW");', "Hooking::Attach(&CreateFileW, Hook);",
@@ -101,10 +111,20 @@ class ThePackIsServedThroughTheGamesOwnOpen(unittest.TestCase):
         hits = []
         for path in runtime_sources():
             for number, line in enumerate(code(path.read_text(encoding="utf-8", errors="replace")).splitlines(), 1):
-                if takes_create_file(line):
+                if takes_create_file(line) and not (path.relative_to(REPO).as_posix() == GAME_FOLDER_REDIRECT
+                                                     and GAME_FOLDER_REDIRECT_LINE.search(line.strip())):
                     hits.append(f"{path.relative_to(REPO)}:{number}: {line.strip()}")
         self.assertEqual(hits, [], f"the runtime now takes CreateFileW/A's address; packs are served through CFile::Open "
                                    f"alone ({DOC}), so a kernel32 hook is a second path")
+
+    def test_the_game_folder_redirect_moves_only_local_and_temp(self):
+        rules = code(read(GAME_FOLDER_REDIRECT_RULES))
+        names = re.findall(r'inline constexpr std::wstring_view k(\w+)Name = L"([^"]*)";', rules)
+        self.assertEqual(sorted(names), [("Local", "_local"), ("Temp", "_temp")],
+                         f"the redirect moves folders other than _local and _temp; packs are served through CFile::Open "
+                         f"alone ({DOC})")
+        self.assertNotIn("content", code(read(GAME_FOLDER_REDIRECT)).lower().replace("content pack", ""),
+                         "the redirect names content; it must not serve or move pack files")
 
     def test_no_runtime_source_names_the_script_loader(self):
         spelling = re.compile(r"\b(?:0x0*1400eb0f0|0x0*eb0f0|VA_LOAD_SCRIPT_DLL)\b", re.I)

@@ -38,6 +38,7 @@
 #include "core/logging.h"
 #include "runtime/compat/peer_message.h"  // Poll
 #include "runtime/compat/self_check.h"  // Flush
+#include "modules/platform-compat/src/game_folder_redirect.h"  // #575: LogFirstUses
 #include "runtime/ext/module_loader.h"    // TickModules
 #include "runtime/content/map_session_pin_game.h"  // nevr_map_session_pin::Tick (ADR 0048 decision 9)
 #include "runtime/ext/plugin_loader.h"    // TickPlugins
@@ -89,6 +90,9 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     nevr_builtin_log_filter::PollHealth();         // N89: health must not depend on the hook it watches
     nevr_window_watch::Poll(nowUs / 1000);         // #341: a client whose X window vanished quits (Wine only; a no-op on a server)
     nevr_frame_stats::Poll(nowUs);                 // #954: drains the frame-time rings; one line per 10 s (a no-op while diagnostics.frame_stats is off)
+    // #575: the first rewrite of the game's _local and _temp, recorded by the file-call hooks, which never log themselves.
+    // Two atomic loads a frame once both are written. No dispatcher, thread or Tick* site (N86).
+    nevr_platform_compat::game_folder_redirect::LogFirstUses();
     // #1139, ADR 0022: the render_config line. A no-op until Install ran on a client; then one evaluation a second.
     // No new dispatcher, thread or Tick* site (N86): it runs inside this function like the calls around it.
     nevr_render_config_hook::Poll(nowUs);

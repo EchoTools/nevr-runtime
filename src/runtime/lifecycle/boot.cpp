@@ -50,6 +50,7 @@
 #include "runtime/ext/plugin_trust.h"
 #include "runtime/ext/self_provenance.h"
 #include "extension/module_interface.h"
+#include "modules/platform-compat/src/platform_compat.h"  // #575: InstallEarlyFileHooks, before PreprocessCommandLine
 
 // Statically-linked module entry points (the modules are linked into
 // BugSplat64.dll). Each module's symbols are prefixed to avoid
@@ -262,6 +263,12 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // #600: script hooks go in as the game loads each script and come out before it frees it. Before the original call, on
   // client and server: the global level's scripts load inside it. Once per process.
   nevr_script_resource_hook::Install(reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)));
+  // #575: the game's _local and _temp live in the nEVR root. The file-call hooks go in before the original call, on
+  // client and server, ahead of the game's first _local or _temp access: the first ones revault shows,
+  // CSettingsStore::Initialize (echovr.exe 0x141521240) and CreateLogFile (0x140100790), run after the call returns
+  // (FUN_14050b6e0 calls it at 0x14050b6f0, then the game's init at 0x14050b717), and what runs inside the call was not
+  // read whole. After the preflight and after initialize.cpp's one-time move, which read the old spots. Once per process.
+  nevr_platform_compat::InstallEarlyFileHooks();
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
   if (g_isServer) {
     RunDeferredRuntimeBootstrap(pGame, "Preprocess first-call server bootstrap");

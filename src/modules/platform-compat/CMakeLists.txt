@@ -5,6 +5,7 @@
 
 add_library(nevr_platform_compat STATIC
     src/platform_compat.cpp
+    src/game_folder_redirect.cpp
 )
 target_compile_definitions(nevr_platform_compat PRIVATE NEVR_USE_MINHOOK NEVR_MODULE_EXPORTS)
 

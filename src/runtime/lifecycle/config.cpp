@@ -1,4 +1,5 @@
 #include "runtime/lifecycle/config.h"
+#include "modules/platform-compat/src/game_folder_redirect.h"  // #575: ResolvedForLog
 #include "runtime/compat/status_redirect_check.h"
 #include "runtime/lifecycle/config_redirect_result.h"
 #include "runtime/lifecycle/login_redirect_override.h"
@@ -78,18 +79,22 @@ VOID LoadEarlyConfig() {
     const UINT32 loadResult = EchoVR::LoadJsonFromFile(&g_earlyConfig, configPath, 1);
     if (loadResult == 0 && g_earlyConfig.root != NULL) {
       g_earlyConfigPtr = &g_earlyConfig;
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Early config loaded from: %s", configPath);
+      // #575: the file actually read, which the game folder redirect may have moved to the nEVR root.
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Early config loaded from: %s",
+          nevr_platform_compat::game_folder_redirect::ResolvedForLog(configPath).c_str());
       return;
     }
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] %s exists but did not parse (error %u) — ignored; NEVR settings come "
         "from config.yaml",
-        configPath, loadResult);
+        nevr_platform_compat::game_folder_redirect::ResolvedForLog(configPath).c_str(), loadResult);  // #575: the file read
   }
 
   if (!anyPresent) {
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.PATCH] no _local/config.json under %s (optional — NEVR settings come from config.yaml)",
+        "[NEVR.PATCH] no _local/config.json under %s or the two folders above it (the _local beside the exe and the "
+        "install's are read from %%LOCALAPPDATA%%\\nevr\\echovr\\game\\_local; optional — NEVR settings come from "
+        "config.yaml)",
         moduleDir);
   }
 }
@@ -369,7 +374,8 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
         snprintf(tryPath, MAX_PATH, "%s%s_local\\config.json", moduleDir, parentPrefixes[i]);
         UINT32 loadResult = EchoVR::LoadJsonFromFile(configDest, tryPath, 1);
         if (loadResult == 0 && configDest->root != NULL) {
-          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Game config loaded from: %s", tryPath);
+          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Game config loaded from: %s",
+              nevr_platform_compat::game_folder_redirect::ResolvedForLog(tryPath).c_str());  // #575: the file read
           result = 0;
           break;
         }
@@ -397,8 +403,9 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
           }
         } else {
           Log(EchoVR::LogLevel::Warning,
-              "[NEVR.PATCH] game config.json not found in %s_local\\, ..\\_local\\, or ..\\..\\_local\\ "
-              "and no built-in game config is available (friends and parties stay off)",
+              "[NEVR.PATCH] game config.json not found in %s_local\\, ..\\_local\\, or ..\\..\\_local\\ (the first "
+              "and the last are read from %%LOCALAPPDATA%%\\nevr\\echovr\\game\\_local) and no built-in game config "
+              "is available (friends and parties stay off)",
               moduleDir);
         }
       }

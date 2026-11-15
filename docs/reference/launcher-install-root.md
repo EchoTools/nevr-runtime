@@ -96,11 +96,12 @@ shape of `pc plan` and `pc install`; a run with no record exits 0 with state `un
 successful run ends `uninstalled`, exit 0. The run log is `logs\nevr-install.jsonl` under the core's `--root` (default
 `%LOCALAPPDATA%\nevr\installer`), with one `file_restore` record per file the run puts back or sets aside.
 
-## What still writes in the game folder
+## The game's own `_local` and `_temp`
 
-These are not yet in the root (#575). Each moves in its own change and this page is updated with it:
-
-- the game's own logs under `_local\r14logs` (the game writes them);
+The game's `_local` and `_temp` folders are in the root, under `game\` (`game\_local`, `game\_temp`): the runtime rewrites
+the paths the game passes to the system's file calls (`src/modules/platform-compat/src/game_folder_redirect.cpp`), so the
+game's own file calls make neither folder in the game folder (a run that shows it is not recorded yet). A launcher does
+not create or edit them.
 
 ## Who owns an install
 

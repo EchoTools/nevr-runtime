@@ -2019,6 +2019,26 @@ if(BUILD_TESTING)
     target_link_libraries(test_nt_path_log PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_nt_path_log DISCOVERY_MODE PRE_TEST)
 
+    # #575: which paths the game folder redirect moves to the nEVR root (platform-compat's game_folder_redirect_rules.h):
+    # header only, pure.
+    add_executable(test_game_folder_redirect_rules tests/game_folder_redirect_rules_test.cpp)
+    set_source_files_properties(tests/game_folder_redirect_rules_test.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_game_folder_redirect_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_game_folder_redirect_rules PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_game_folder_redirect_rules DISCOVERY_MODE PRE_TEST)
+
+    # #575: the game folder redirect's hooks, installed for real (MinHook on kernelbase.dll's file calls) in the test
+    # process, with an install and an nEVR root of the test's own under the run root.
+    add_executable(test_game_folder_redirect tests/test_game_folder_redirect.cpp
+                   ${CMAKE_SOURCE_DIR}/src/modules/platform-compat/src/game_folder_redirect.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_game_folder_redirect.cpp
+                                ${CMAKE_SOURCE_DIR}/src/modules/platform-compat/src/game_folder_redirect.cpp hook/hook_guard.cpp
+                                PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_game_folder_redirect PRIVATE NEVR_USE_MINHOOK)
+    target_include_directories(test_game_folder_redirect PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_game_folder_redirect PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_game_folder_redirect DISCOVERY_MODE PRE_TEST)
+
     # #906, docs/adr/0017: the client half of the invite codes (patch/invite_wizard.h): header only, pure.
     # It links the generated symbol cache: the map cards' level names are the cache's, and the test reads them from it.
     add_executable(test_invite_wizard tests/test_invite_wizard.cpp log/symcache_data.cpp)

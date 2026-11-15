@@ -210,15 +210,24 @@ are inside the prefix (`<prefix>/drive_c/users/<user>/AppData/Local`).
 | `_overrides\` | Files registered as resource overrides at start. | `src/runtime/patch/resource_override.cpp` |
 | `log_filter_config.yml`, `.yaml`, `.jsonc`, `.json` | Optional settings of the built-in log filter (`file_dir`, rotation). The first that exists is used, searched in this order, then in the working directory. | `FindConfigFile` in `src/runtime/log/builtin_filter.cpp` |
 
-### In `_local`
+### In `game\_local` and `game\_temp`
 
-`_local` is searched as `<game folder>\_local`, then `<game folder>\..\_local`, then `<game folder>\..\..\_local` (the
-stock install keeps it beside `bin`). A `config.yaml` there is never read; see `config.yaml` in the nEVR root below.
+The game's own `_local` (its settings store, its `config.json`, its `r14logs`) and `_temp` (its crash folder and
+scratch) live in `%LOCALAPPDATA%\nevr\echovr\game\_local` and `...\game\_temp`, never in the game folder. The runtime
+rewrites every path the game, its `pns*.dll` files or the runtime itself passes to the system's file calls (the `kernelbase.dll` exports kernel32's forward to) under
+`<install>\_local`, `<install>\_temp`, `<game folder>\_local` or `<game folder>\_temp` (`<install>` is the folder that holds
+`bin`), and leaves every other path alone, so `_data`, `content`, `sourcedb` and `scripts` still load from the install. A
+`_local` or `_temp` already in those two places is no longer read or written; the first game-folder `_local\config.json`
+there is copied to `game\_local\config.json` once, when that has none, and the old file is left in place.
+(`<install>\bin\_local`, which `LoadEarlyConfig` also searches, is not moved.) A `config.yaml` there is never read; see
+`config.yaml` in the nEVR root below.
 
 | Path | What it is | Code |
 | --- | --- | --- |
-| `_local\config.json` | Optional. Only the keys the stock engine reads. | `LoadEarlyConfig` in `src/runtime/lifecycle/config.cpp` |
-| `_local\r14logs\*.log` | The game's own log. The runtime only reads the newest, relative to the working directory. | `src/runtime/lifecycle/state_machine.cpp` |
+| `game\_local\config.json` | Optional. Only the keys the stock engine reads. | `LoadEarlyConfig` in `src/runtime/lifecycle/config.cpp` |
+| `game\_local\r14logs\*.log` | The game's network log (SYSNET, NSUSER). The runtime only reads the newest. | `CreateLogFile` (echovr.exe 0x140100790); `src/runtime/lifecycle/state_machine.cpp` |
+| `game\_temp\crashes\` | The game's own crash dumps and logs, made only when the game's crash handler runs. | `HandleCrashDump` (echovr.exe 0x1401cefe0) |
+| (all of the above) | The rewrite: the hooks, and the rules it decides by. | `src/modules/platform-compat/src/game_folder_redirect.cpp`, `src/modules/platform-compat/src/game_folder_redirect_rules.h` |
 
 ### In `%LOCALAPPDATA%\nevr\echovr\`
 

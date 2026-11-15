@@ -7,7 +7,8 @@
  *
  * Hooks:
  *   - AcquireCredentialsHandleW (Schannel): enables TLS 1.2/1.3 with modern cipher suites
- *   - CreateDirectoryW / CreateDirectoryA: fixes _temp directory creation failures under Wine
+ *   - CreateDirectoryW / CreateDirectoryA: fixes _temp directory creation failures under Wine, and sends the game's
+ *     _local and _temp to the nEVR root (game_folder_redirect, #575), installed early by InstallEarlyFileHooks
  *   - CoCreateInstance (ole32): logs the MSXML6 XMLHTTP CLSID and passes it through to the system object
  */
 
@@ -18,6 +19,8 @@
 #include <schannel.h>
 #include <security.h>
 #include <sspi.h>
+#include <new>
+#include <optional>
 #include <string>
 
 #include "extension/module_interface.h"
@@ -27,6 +30,8 @@
 #include "core/schannel_cred_guard.h"
 #include "runtime/hook/patching.h"  // PatchDetour records each hook in HookGuard under its name
 #include "modules/platform-compat/src/nt_path_log.h"  // #1845: the level of the relative \\?\ path line
+#include "modules/platform-compat/src/game_folder_redirect.h"  // #575: _local and _temp live in the nEVR root
+#include "modules/platform-compat/src/platform_compat.h"
 
 // ---------------------------------------------------------------------------
 // Schannel TLS hook
@@ -84,8 +89,31 @@ SECURITY_STATUS SEC_ENTRY AcquireCredentialsHandleWHook(
 typedef BOOL(WINAPI* CreateDirectoryWFunc)(LPCWSTR, LPSECURITY_ATTRIBUTES);
 static CreateDirectoryWFunc OriginalCreateDirectoryW = nullptr;
 
+static BOOL CreateTempDirectoryW(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes);
+
 BOOL WINAPI CreateDirectoryWHook(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes) {
+  const std::optional<std::wstring> redirected =
+      nevr_platform_compat::game_folder_redirect::RedirectW("CreateDirectoryW", lpPathName);
+  if (redirected) {
+    return nevr_platform_compat::game_folder_redirect::CreateRedirectedDirectoryW(OriginalCreateDirectoryW, *redirected,
+                                                                               lpSecurityAttributes);
+  }
   if (lpPathName && wcsstr(lpPathName, L"_temp")) {
+    // The Wine _temp fix builds strings; out of memory, the call goes to the system as the game made it, and the
+    // exception never leaves this hook (the system's and the game's frames are above it).
+    try {
+      return CreateTempDirectoryW(lpPathName, lpSecurityAttributes);
+    } catch (const std::bad_alloc&) {
+      nevr_platform_compat::game_folder_redirect::NoteAllocMiss();
+    }
+  }
+  return OriginalCreateDirectoryW(lpPathName, lpSecurityAttributes);
+}
+
+// The Wine _temp fix: a relative path behind \\?\ is made under the current directory, an existing folder is a
+// success, and missing parents are made.
+static BOOL CreateTempDirectoryW(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes) {
+  {
     std::wstring fixedPath;
     const wchar_t* pathToUse = lpPathName;
 
@@ -147,14 +175,19 @@ BOOL WINAPI CreateDirectoryWHook(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSec
     SetLastError(lastError);
     return result;
   }
-
-  return OriginalCreateDirectoryW(lpPathName, lpSecurityAttributes);
 }
 
 typedef BOOL(WINAPI* CreateDirectoryAFunc)(LPCSTR, LPSECURITY_ATTRIBUTES);
 static CreateDirectoryAFunc OriginalCreateDirectoryA = nullptr;
 
 BOOL WINAPI CreateDirectoryAHook(LPCSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes) {
+  // #575: a folder under the game's _local or _temp goes to the nEVR root, quietly (CreateRedirectedDirectoryW).
+  const std::optional<std::wstring> redirected =
+      nevr_platform_compat::game_folder_redirect::RedirectA("CreateDirectoryA", lpPathName);
+  if (redirected) {
+    return nevr_platform_compat::game_folder_redirect::CreateRedirectedDirectoryW(OriginalCreateDirectoryW, *redirected,
+                                                                               lpSecurityAttributes);
+  }
   // Match CreateDirectoryWHook's scope (only _temp paths) instead of logging
   // every CreateDirectoryA call in the process for what's the same workaround.
   if (!lpPathName || !strstr(lpPathName, "_temp")) {
@@ -209,7 +242,7 @@ HRESULT WINAPI CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD 
 // ---------------------------------------------------------------------------
 
 // The address of each export a hook replaces: AcquireCredentialsHandleW in Secur32.dll, CreateDirectoryW and
-// CreateDirectoryA in kernel32.dll, CoCreateInstance in ole32.dll. PatchDetour leaves the trampoline in the pointer, so
+// CreateDirectoryA in kernelbase.dll (kernel32.dll without it, game_folder_redirect::FileApiModule), CoCreateInstance in ole32.dll. PatchDetour leaves the trampoline in the pointer, so
 // the address is kept here for platform_compat_Shutdown, which forgets each HookGuard record before MH_Uninitialize
 // restores the bytes; a restored hook would otherwise read as an overwrite.
 static void* g_tlsHookTarget = nullptr;
@@ -254,8 +287,12 @@ static bool InstallTLSHook() {
 }
 
 static bool InstallCreateDirectoryHooks() {
-  HMODULE hKernel32 = GetModuleHandleA("kernel32.dll");
+  // #575: the same module as the game folder redirect's hooks (kernelbase.dll, where kernel32's exports forward), so a
+  // caller that imports the API sets is fixed and redirected too.
+  const char* moduleName = "";
+  HMODULE hKernel32 = nevr_platform_compat::game_folder_redirect::FileApiModule(&moduleName);
   if (hKernel32 == NULL) return false;
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CreateDirectory hooks target module=%s", moduleName);
 
   bool ok = true;
   OriginalCreateDirectoryW = (CreateDirectoryWFunc)GetProcAddress(hKernel32, "CreateDirectoryW");
@@ -284,6 +321,20 @@ static bool InstallCreateDirectoryHooks() {
     }
   }
   return ok;
+}
+
+// The CreateDirectory hooks and the game folder redirect, once per process. boot.cpp calls this before the game's
+// original PreprocessCommandLine, ahead of the game's first _local or _temp access (#575); platform_compat_Init reads the
+// result.
+static bool g_createDirOk = false;
+
+bool nevr_platform_compat::InstallEarlyFileHooks() {
+  static bool s_done = false;
+  if (s_done) return g_createDirOk;
+  s_done = true;
+  g_createDirOk = InstallCreateDirectoryHooks();
+  nevr_platform_compat::game_folder_redirect::Install();
+  return g_createDirOk;
 }
 
 static bool InstallMsxml6PassThroughHook() {
@@ -345,7 +396,7 @@ NEVR_MODULE_API int platform_compat_Init(const NevrModuleContext* ctx) {
    * Report each outcome by name, plus an aggregate, in the shape N17 defined for
    * hook installs. */
   const bool tlsOk = InstallTLSHook();
-  const bool dirOk = InstallCreateDirectoryHooks();
+  const bool dirOk = nevr_platform_compat::InstallEarlyFileHooks();  // already done before PreprocessCommandLine
   const bool httpOk = InstallMsxml6PassThroughHook();
   const int okCount = (tlsOk ? 1 : 0) + (dirOk ? 1 : 0) + (httpOk ? 1 : 0);
 
@@ -397,5 +448,6 @@ NEVR_MODULE_API void platform_compat_Shutdown(void) {
   RetireHookRecord(g_createDirWHookTarget);
   RetireHookRecord(g_createDirAHookTarget);
   RetireHookRecord(g_coCreateHookTarget);
+  nevr_platform_compat::game_folder_redirect::RetireHooks();
   Hooking::Shutdown();
 }
