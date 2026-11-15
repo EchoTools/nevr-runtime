@@ -63,6 +63,14 @@ class ReleaseAlreadyBuiltTest(unittest.TestCase):
                 self.assertEqual(result.stdout.strip(), "false")
                 self.assertIn(name, result.stderr)
 
+    def test_a_draft_built_before_the_runtime_asset_is_not_already_built(self):
+        # The guard reads the release's names, so a release that carries only the two earlier files is "not built" and
+        # the run would rebuild over them (RELEASING.md, "A draft built before the runtime asset"). Pinned here.
+        old_two = self.names(drop="nevr-runtime-v5.0.0-quest-runtime.so")
+        result = self.run_script(FAKE_ASSETS=old_two)
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "false"), result.stderr)
+        self.assertIn("nevr-runtime-v5.0.0-quest-runtime.so", result.stderr)
+
     def test_the_tar_zst_archives_are_not_required_and_do_not_count(self):
         result = self.run_script(FAKE_ASSETS=self.names() + "nevr-runtime-v5.0.0.tar.zst\n")
         self.assertEqual(result.stdout.strip(), "true")

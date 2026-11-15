@@ -795,8 +795,9 @@ _release-quest-apk label tag store_apk variant pack pack_meta libs="":
     python3 tools/package_release.py quest-library --lib "$out/loader/libovrplatformloader.so" --version "$ver" --commit "$tag_commit"
     # The variant word names the APK to the sentinel (stamped by the repack, docs/adr/0040 rule 1): empty for the release APK. No APK
     # carries a plugin library (the plugin argument is empty): the combat modules are the sentinel's own (src/quest/combat/).
-    # The baseline runtime the shim maps at start (quest-update piece shim-loads-baseline) is not a release asset: it is the sentinel's own
-    # libnevr-runtime.so from this checkout's build, which the HEAD == tag check above makes the tag's commit. The recipe compiles nothing, so it
+    # The baseline runtime the shim maps at start (quest-update piece shim-loads-baseline) is the sentinel's own libnevr-runtime.so
+    # from this checkout's build, which the HEAD == tag check above makes the tag's commit. Its release copy, the asset
+    # nevr-runtime-vX.Y.Z-quest-runtime.so, is built by build.yml's quest job from the same tag; this recipe builds its own copy. The recipe compiles nothing, so it
     # is built at the tag beforehand, and the repack's stage-runtime refuses an empty file.
     runtime="build/android-arm64/sentinel/libnevr-runtime.so"
     [ -s "$runtime" ] || { echo "$label: baseline runtime not found (build the Quest sentinel at $tag first): $runtime" >&2; exit 1; }

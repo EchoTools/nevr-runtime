@@ -512,9 +512,9 @@ stripped file to it (`.gnu_debuglink`: name and CRC32; PE has no build-id). `bui
 keeps the `.dbg` files as the `symbols` workflow artifact (not a release asset) and attests them. A build with symbols is the
 ordinary `build/<preset>/bin/` output.
 
-KNOWN-WRONG #1865: this paragraph describes what `build.yml` does today, which is to attach the signed files to a draft; a release is never left a draft (RELEASING.md, step 4), so the paragraph and the `drafts` job go when the build stops using drafts. `tools/release_draft.sh` decides what the build does: a tag with exactly one draft, no published release, and neither of the two names on the draft is
-built and attached; no release, or a published one, is a dry run (nothing is uploaded); a draft that already carries either of the
-two names fails the run red, so a second dispatch never overwrites signed files. Publishing the filled draft fires `published`,
+KNOWN-WRONG #1865: this paragraph describes what `build.yml` does today, which is to attach the signed files to a draft; a release is never left a draft (RELEASING.md, step 4), so the paragraph and the `drafts` job go when the build stops using drafts. `tools/release_draft.sh` decides what the build does: a tag with exactly one draft, no published release, and none of the release's names on the draft is
+built and attached; no release, or a published one, is a dry run (nothing is uploaded); a draft that already carries any of the
+release's names fails the run red, so a second dispatch never overwrites signed files. Publishing the filled draft fires `published`,
 which `tools/release_already_built.sh` turns into a green no-op (both read `tools/release_asset_names.sh`). The `drafts` job
 (a dispatch on a tag only, no checkout, one `gh api` call) holds `contents: write` because a read-only token cannot list drafts;
 `guard` keeps `contents: read` and gets the listing as JSON on stdin of `tools/release_draft.sh`. Hand-publishing the draft while

@@ -90,6 +90,12 @@ the signature and the attestation carry integrity.
 
 Not release assets: the `.tar.zst` archives and the `.dbg` symbol files (workflow artifacts, 7 and 90 days), and any Quest APK.
 
+**A draft built before the runtime asset (two files, no `nevr-runtime-vX.Y.Z-quest-runtime.so`).** Such a draft is "not
+built" to the guard (`tools/release_already_built.sh` lists the three names and reports the missing one as `false`), so a
+run started on its `published` event rebuilds and re-uploads over the files already signed. Do not publish a draft built
+before this change. Delete the draft (`gh release delete vX.Y.Z --yes`, while it is still a draft) and dispatch the build
+again on the tag, so the draft carries all three names before the signer runs.
+
 **The signed Windows zip lives on the GitHub release.** Quest APKs are published outside GitHub.
 
 ## Sign
@@ -181,7 +187,7 @@ gh release edit vX.Y.Z --notes-file "$N"
 gh release view vX.Y.Z --json body --jq .body
 ```
 
-`notes` refuses unless `$S` holds exactly the two assets. It takes the version and the commit from the `BugSplat64.dll` and
+`notes` refuses unless `$S` holds exactly the release's assets (the three names in the table above). It takes the version and the commit from the `BugSplat64.dll` and
 `nevr-runtime.dll` inside the zip (they must agree), so the body cannot describe another build.
 
 The player line is the authors' `release-headlines/` files, or the fixed "Fixes and internal changes." The commits never write

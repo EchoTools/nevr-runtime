@@ -17,13 +17,14 @@ version="${tag#v}"
 repo="${GITHUB_REPOSITORY:-EchoTools/nevr-runtime}"
 zip="nevr-runtime-v${version}-windows.zip"
 quest="nevr-runtime-v${version}-quest-libovrplatformloader.so"
+quest_runtime="nevr-runtime-v${version}-quest-runtime.so"
 
 fail() { echo "release_check_draft: FAILED: $1" >&2; exit 1; }
 step() { echo "== $1"; }
 
-step "the draft carries exactly the two names"
+step "the draft carries exactly the three names"
 names=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' | sort)
-want=$(printf '%s\n%s\n' "$quest" "$zip" | sort)
+want=$(printf '%s\n%s\n%s\n' "$quest" "$quest_runtime" "$zip" | sort)
 [ "$names" = "$want" ] || fail "assets are [$names], expected [$want]"
 echo "$names"
 

@@ -43,6 +43,11 @@ class ReleaseAssetsTest(unittest.TestCase):
         self.assertTrue(packager.quest_runtime_problems(blob, "5.5.0", "b" * 40))
         self.assertTrue(packager.quest_runtime_problems(b"\x7fELF no literal", "5.5.0", commit))
 
+    def test_releasing_md_says_a_draft_built_before_the_runtime_asset_is_not_published(self):
+        flat = " ".join((REPO / "RELEASING.md").read_text(encoding="utf-8").split())
+        self.assertIn("Do not publish a draft built before this change.", flat)
+        self.assertIn("`tools/release_already_built.sh` lists the three names", flat)
+
     def test_the_build_copies_the_runtime_library_under_its_release_name_and_checks_its_identity(self):
         build = (REPO / ".github/workflows/build.yml").read_text(encoding="utf-8")
         self.assertIn('runtime=build/android-arm64/sentinel/libnevr-runtime.so', build)

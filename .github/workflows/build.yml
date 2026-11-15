@@ -20,7 +20,7 @@ name: Build
 # hand-started workflows: echocombat-plugins.yml (the EchoCombat plugins, which need MSVC's SEH and Microsoft Detours) and
 # defender-scan.yml (a Defender measurement). A `workflow_dispatch` started on a vX.Y.Z tag ref runs
 # the same path as a dry run without the Verify step (#1008), and publishes nothing, unless the tag's release is a
-# DRAFT carrying none of the built files: then the two files are attached to that draft, which stays a draft (see `drafts`).
+# DRAFT carrying none of the built files: then the release's files are attached to that draft, which stays a draft (see `drafts`).
 on:
   workflow_dispatch:
   release:
@@ -66,7 +66,7 @@ jobs:
 
   # A release whose draft was already built, signed and filled with the attested assets fires `published`
   # when it is published. That must not rebuild or re-upload anything: the signal is the release's asset
-  # NAMES (tools/release_already_built.sh: both files of this version are there), never the
+  # NAMES (tools/release_already_built.sh: every file tools/release_asset_names.sh lists for this version is there), never the
   # pre-release flag. Every job below hangs off `build`, so when the assets are there the run is green
   # and does nothing. A listing that fails fails the job (a check that cannot run does not decide).
   guard:
@@ -102,7 +102,7 @@ jobs:
           echo "release $TAG already carries its attested assets: nothing is rebuilt and nothing is re-uploaded"
         fi
 
-    # A workflow_dispatch started on the tag ref of a DRAFT release builds the release's two files, attests
+    # A workflow_dispatch started on the tag ref of a DRAFT release builds the release's files, attests
     # them and attaches them to that draft (GitHub: `release` created/edited/deleted are not triggered for
     # draft releases, and a draft fires no `published` until it is published, so a draft is reached by
     # dispatching on the tag). draft=true only when the tag has exactly one draft and no published release and
@@ -975,7 +975,7 @@ jobs:
     # The upload never sets the pre-release flag: the `prerelease` input is left unset, and the action
     # then re-sends the release's own current value (softprops/action-gh-release, src/github.ts: `config.input_prerelease !== undefined ? config.input_prerelease : existingRelease.prerelease`),
     # read at upload time, so a human's choice (and a promotion made while this run is going) is kept.
-    # The release's sealed zip and the Quest library: the declared public set (both attested above).
+    # The release's sealed zip and the Quest libraries: the declared public set (all attested above).
     - name: Upload the release files
       uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
       with:
