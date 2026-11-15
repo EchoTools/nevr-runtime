@@ -203,8 +203,10 @@ check-android-static-init: build-android
 
 # Run the Quest .so ground-truth (ELF-shape) tests
 test-android: check-android-static-init
-    # The sentinel embeds exactly the public defaults file (the build reads no other source).
-    python3 tools/check_embedded_defaults.py --header build/android-arm64/generated/nevr_builtin_defaults.h --binary build/android-arm64/sentinel/libovrplatformloader.so
+    # The runtime library embeds exactly the public defaults file (the build reads no other source). The defaults are read by
+    # activation, which runs in libnevr-runtime.so's initialize; the shim (libovrplatformloader.so) maps that library and holds
+    # none, as on PC, where nevr-runtime.dll carries them and BugSplat64.dll does not.
+    python3 tools/check_embedded_defaults.py --header build/android-arm64/generated/nevr_builtin_defaults.h --binary build/android-arm64/sentinel/libnevr-runtime.so
     # CSymbol64Hash sign-extends a byte >= 0x80 under the NDK's AArch64 clang, where plain char is unsigned (#657).
     # The vectors are static_asserts, so compiling the file is the check: the target nevr_quest_symbol_hash_check
     # (src/quest/CMakeLists.txt) is that compile. The NDK's static bionic binary does not start under qemu-user
