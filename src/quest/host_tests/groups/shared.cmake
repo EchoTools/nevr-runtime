@@ -171,13 +171,10 @@ nevr_ht_test(engine_pending_test GROUP shared HOST GTEST PTHREAD TIMEOUT 120
 set(_shared_env NEVR_TEST_TMP=${CMAKE_BINARY_DIR}/shared)
 nevr_ht_test(posix_map_fs_test GROUP shared NOEXC TIMEOUT 120 ENV ${_shared_env}
   SRC src/cdn/posix_map_fs.cpp src/quest/tests/posix_map_fs_test.cpp)
-  SRC src/cdn/posix_map_fs.cpp src/quest/tests/posix_map_fs_test.cpp)
-  SRC src/cdn/posix_map_fs.cpp src/quest/tests/posix_map_fs_test.cpp)
 # The session map pin's pure part on the Quest (core/map_session_pin.cpp, ADR 0048 decision 9): the vectors and decision rows a Quest
 # client meets, the view's replacement and the empty-state gate, over a counting game.
 nevr_ht_test(map_session_pin_quest_test GROUP shared NOEXC TIMEOUT 120 INCS sdk/include src
   SRC src/quest/tests/map_session_pin_quest_test.cpp src/core/map_session_pin.cpp)
-# The Quest's libr15 half of the pin (quest/cdn/map_pin_game.cpp), compiled for the host: its layout, its pinned words and its
 # The session's group and the groups the cache keeps (core/map_groups.h; ADR 0048 decisions 15 and 16; ADR 0045 decision 8): the group
 # id of a session's game text, the nil group, the bound over each group's record, the latest-first order and the request hook.
 nevr_ht_test(map_groups_quest_test GROUP shared NOEXC TIMEOUT 120 INCS sdk/include src
