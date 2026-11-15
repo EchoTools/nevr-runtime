@@ -82,6 +82,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <intrin.h>                   // _ReturnAddress: the flag hook checks its caller (#2242)
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -641,7 +642,7 @@ nevr_combat::MatchPrivacy SessionPrivacy() {
 // engine moves them to "server loading" (the transition screen), unloads their levels and loads
 // the owner JSON's level when the server is in game again.
 constexpr uint32_t WANT_MAP = 0x20000000;        // | map index 0..3
-constexpr uint32_t WANT_KIND_MASK = 0xF0000000;  // the top nibble of a 'C' ask names the ask (WANT_MAP, WANT_END ...)
+constexpr uint32_t WANT_KIND_MASK = 0xF0000000;  // the top nibble of a 'C' ask names the ask (WANT_MAP)
 constexpr int MAP_COUNT = 4;
 constexpr uint64_t EVT_MAPSWITCH[MAP_COUNT] = {
     0xc60e17c86d1f3df0ull, 0x63093755a2c24ebeull, 0x3d77042c79604528ull, 0xc60e17cb751921edull};   // mapswitch_<map>
@@ -2106,18 +2107,65 @@ void KeepChassis(uint64_t cs, uint64_t player, uint64_t item, uint64_t slot, int
 
 volatile LONG g_chassis_replay = 0;              // ApplyChassisRule's own calls: not kept
 
+// --- SERIES-10 ONLY: the recursion guard and the server's standard chassis (#2242, EchoCombat 2.0.5 and 2.0.8) -------------------------
+// A server's net_standard_chassis rule makes the engine put the standard chassis (S11) on by itself, inside LoadAndApplyItem. Our S10
+// swap on top of that fed the two into each other until the stack ran out (EchoCombat 2.0.5, the game closed without a dump). Two
+// parts: the flag hook (HookedNetFlag) makes the one read the engine makes in LoadAndApplyItem answer 0 (its return address is
+// kLoadApplyFlagRetRva), so the engine does not swap and ours does; and a chassis call made from inside one of our own is never
+// swapped again (t_chassis_depth). The pure decision is nevr_combat::gate::SwapChassisWanted (veilnet_gate.h).
+using netflag_fn = int(__fastcall *)(uint64_t, uint64_t);
+thread_local int t_chassis_depth = 0;            // inside one of our chassis calls (this thread)
+netflag_fn g_real_net_flag = nullptr;            // the flag's trampoline, once hooked
+constexpr std::uintptr_t CS_NET_VARS = 0xB8;     // CR15NetCustomizationCS: the net game's variables, the first argument LoadAndApplyItem (0xD0D170) passes the flag reader, `MOV RCX,[R13+0xB8]`
+constexpr ULONGLONG STD_CHASSIS_LOOK_MS = 500;   // how often ApplyChassisRule reads the server's standard flag (twice a second, as EchoCombat 2.0.8)
+constexpr uint8_t CALL_REL32_OPCODE = 0xE8;      // `CALL rel32`
+constexpr std::ptrdiff_t CALL_REL32_LEN = 5;     // the opcode and its 4-byte displacement
+constexpr std::ptrdiff_t CALL_REL32_DISP = 4;    // the displacement, the last 4 bytes before the return address
+constexpr size_t HEX_PER_BYTE = 2;               // "%02x"
+
+int __fastcall HookedNetFlag(uint64_t netgame, uint64_t sym) {
+    const std::uintptr_t ret = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    if (nevr_combat::gate::FlagForcedZero(sym, ret,
+                                          reinterpret_cast<std::uintptr_t>(g_base + nevr_combat::gate::kLoadApplyFlagRetRva)))
+        return 0;                                // LoadAndApplyItem: no standard swap by the engine; ours makes it S10
+    return g_real_net_flag(netgame, sym);
+}
+
+// The server's standard rule for this player: the flag the net game reads (the symbol at 0x141CB3420), read through the hook's
+// trampoline. Deviation from EchoCombat 2.0.8, which reads the stock address unconditionally: when the flag's bytes or its call
+// site did not check, the flag is neither hooked nor read, this answers false, and the "step aside for the server's standard
+// rule" path never runs; the depth guard (t_chassis_depth) is then what keeps our swap from feeding the engine's.
+bool StandardChassisSet(uint64_t cs) {
+    if (!g_real_net_flag) return false;
+    EC_TRY {
+        uint64_t vars = *reinterpret_cast<const uint64_t *>(cs + CS_NET_VARS);
+        return vars && g_real_net_flag(vars, nevr_combat::gate::kStandardChassisFlag) != 0;
+    } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool SwapChassis(uint64_t cs) {
+    if (t_chassis_depth) return false;           // one of ours: never again
+    return nevr_combat::gate::SwapChassisWanted(ChassisOn(), StandardChassisSet(cs), g_real_net_flag != nullptr, t_chassis_depth);
+}
+
 void __fastcall HookedLoadApply(uint64_t cs, uint64_t player, uint64_t item, uint64_t slot, int flag) {
     if (ChassisItem(item)) {
-        if (!g_chassis_replay) KeepChassis(cs, player, item, slot, flag);
-        if (ChassisOn()) item = SYM_CHASSIS_S10;
+        if (!g_chassis_replay && !t_chassis_depth) KeepChassis(cs, player, item, slot, flag);
+        if (SwapChassis(cs)) item = SYM_CHASSIS_S10;
     }
+    ++t_chassis_depth;
     g_real_load_apply(cs, player, item, slot, flag);
+    --t_chassis_depth;
 }
 
 void __fastcall HookedApplyItem(uint64_t cs, uint64_t player, uint64_t item, uint64_t slot, int flag) {
-    if (ChassisItem(item) && item != SYM_CHASSIS_S10 && ChassisOn() && g_real_load_apply) {
+    if (ChassisItem(item) && item != SYM_CHASSIS_S10 && g_real_load_apply && SwapChassis(cs)) {
         if (!g_chassis_replay) KeepChassis(cs, player, item, slot, flag);
+        ++t_chassis_depth;
         g_real_load_apply(cs, player, SYM_CHASSIS_S10, slot, flag);   // S10 may not be loaded yet
+        --t_chassis_depth;
         return;
     }
     g_real_apply_item(cs, player, item, slot, flag);
@@ -2126,17 +2174,26 @@ void __fastcall HookedApplyItem(uint64_t cs, uint64_t player, uint64_t item, uin
 // On the game's thread: the rule changed, so every chassis seen goes on again.
 void ApplyChassisRule() {
     LONG on = ChassisOn() ? 1 : 0;
+    static LONG std_seen = 0;                        // the server's standard flag, looked at twice a second
+    static ULONGLONG std_next = 0;
+    if (!on && g_real_net_flag && g_chassis_call_count && GetTickCount64() >= std_next) {
+        std_next = GetTickCount64() + STD_CHASSIS_LOOK_MS;
+        std_seen = StandardChassisSet(g_chassis_calls[0].cs) ? 1 : 0;
+    }
+    if (!on && g_real_net_flag) on = std_seen;
     if (on == g_chassis_applied || !g_real_load_apply) return;
     g_chassis_applied = on;
     int n = g_chassis_call_count, done = 0;
     g_chassis_replay = 1;
     for (int k = 0; k < n; ++k) {
         ChassisCall c = g_chassis_calls[k];
+        ++t_chassis_depth;
         EC_TRY {
             g_real_load_apply(c.cs, c.player, on ? SYM_CHASSIS_S10 : c.item, c.slot, c.flag);
             ++done;
         } EC_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         }
+        --t_chassis_depth;
     }
     g_chassis_replay = 0;
     Log("SERIES-10 ONLY %s: %d of %d chassis put on again", on ? "on" : "off", done, n);
@@ -2149,9 +2206,44 @@ bool HookApplyItem() {
     g_real_load_apply = (applyitem_fn)(g_base + LOAD_APPLY_RVA);
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
+    // The flag hook (#2242): its bytes, and the call in LoadAndApplyItem that is the one its return address names, are checked first.
+    const uint8_t *ret = g_base + nevr_combat::gate::kLoadApplyFlagRetRva;
+    const uint8_t *flag_at = g_base + nevr_combat::gate::kNetFlagRva;
+    const bool head_ok = !memcmp(flag_at, nevr_combat::gate::kNetFlagHead, sizeof(nevr_combat::gate::kNetFlagHead));
+    const bool call_ok = ret[-CALL_REL32_LEN] == CALL_REL32_OPCODE &&
+                         ret + *reinterpret_cast<const int32_t *>(ret - CALL_REL32_DISP) == flag_at;
+    const bool flag_ok = head_ok && call_ok;
+    auto hex = [](const uint8_t *p, size_t n, char *out, size_t cap) {
+        for (size_t i = 0; i < n; ++i) snprintf(out + HEX_PER_BYTE * i, cap - HEX_PER_BYTE * i, "%02x", p[i]);
+    };
+    if (!head_ok) {
+        char expected[HEX_PER_BYTE * sizeof(nevr_combat::gate::kNetFlagHead) + 1] = {}, actual[sizeof(expected)] = {};
+        hex(nevr_combat::gate::kNetFlagHead, sizeof(nevr_combat::gate::kNetFlagHead), expected, sizeof(expected));
+        hex(flag_at, sizeof(nevr_combat::gate::kNetFlagHead), actual, sizeof(actual));
+        LogWarning("SERIES-10 ONLY: standard chassis flag hook not installed va=+0x%llx reason=bytes_mismatch expected=%s actual=%s "
+                   "(the server's standard-chassis rule is not read; the recursion guard alone keeps our swap from the engine's)",
+                   static_cast<unsigned long long>(nevr_combat::gate::kNetFlagRva), expected, actual);
+    } else if (!call_ok) {
+        const uint8_t *site = ret - CALL_REL32_LEN;
+        char actual[HEX_PER_BYTE * CALL_REL32_LEN + 1] = {};
+        hex(site, CALL_REL32_LEN, actual, sizeof(actual));
+        const uint8_t *target = ret + *reinterpret_cast<const int32_t *>(ret - CALL_REL32_DISP);
+        LogWarning("SERIES-10 ONLY: standard chassis flag hook not installed va=+0x%llx reason=call_site_mismatch call_site=+0x%llx "
+                   "expected_opcode=%02x expected_target=+0x%llx actual=%s actual_target=+0x%llx "
+                   "(the server's standard-chassis rule is not read; the recursion guard alone keeps our swap from the engine's)",
+                   static_cast<unsigned long long>(nevr_combat::gate::kNetFlagRva),
+                   static_cast<unsigned long long>(nevr_combat::gate::kLoadApplyFlagRetRva - CALL_REL32_LEN), CALL_REL32_OPCODE,
+                   static_cast<unsigned long long>(nevr_combat::gate::kNetFlagRva), actual,
+                   static_cast<unsigned long long>(target - g_base));
+    }
     DetourAttach(&(PVOID &)g_real_apply_item, (PVOID)HookedApplyItem);
     DetourAttach(&(PVOID &)g_real_load_apply, (PVOID)HookedLoadApply);
-    if (DetourTransactionCommit() != NO_ERROR) { g_real_apply_item = g_real_load_apply = nullptr; return false; }
+    // Set before the attach, so the commit rewrites it to the trampoline in place: no window where HookedNetFlag runs with it null.
+    if (flag_ok) {
+        g_real_net_flag = reinterpret_cast<netflag_fn>(g_base + nevr_combat::gate::kNetFlagRva);
+        DetourAttach(&(PVOID &)g_real_net_flag, (PVOID)HookedNetFlag);
+    }
+    if (DetourTransactionCommit() != NO_ERROR) { g_real_apply_item = g_real_load_apply = nullptr; g_real_net_flag = nullptr; return false; }
     return true;
 }
 

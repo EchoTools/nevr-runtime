@@ -108,4 +108,42 @@ TEST(VeilnetGate, ASlotPickIsTakenOnlyWhenItIsANewKnownTacMod) {
   EXPECT_FALSE(gate::PickFromSlot(kPortA, 0));       // not a tac mod
 }
 
+// The SERIES-10 recursion guard and the standard-chassis flag (#2242, EchoCombat 2.0.5 and 2.0.8). Revault (echovr.exe):
+// the flag reader is 0xCE4460, reached from LoadAndApplyItem (0xD0D170) at the call 0xD0D1F4, whose return is 0xD0D1F9; the
+// symbol the call passes is the 8 bytes at 0x141CB3420 (the RIP-relative load's aligned address), read as 0x29e261a1df774dd3.
+constexpr std::uint64_t kCatStandardFlag = 0x29e261a1df774dd3ull;
+constexpr std::uintptr_t kCatFlagRva = 0xCE4460, kCatCallSiteRet = 0xD0D1F9;
+constexpr std::uintptr_t kOtherCaller = kCatCallSiteRet + 1;   // any return address but LoadAndApplyItem's own
+constexpr int kNotOurs = 0, kInsideOurs = 1, kInsideOursTwice = 2;   // t_chassis_depth
+
+TEST(VeilnetChassis, TheFlagAndItsCallSiteAreEchoCombatsAndRevaults) {
+  EXPECT_EQ(gate::kStandardChassisFlag, kCatStandardFlag);
+  EXPECT_EQ(gate::kNetFlagRva, kCatFlagRva);
+  EXPECT_EQ(gate::kLoadApplyFlagRetRva, kCatCallSiteRet);
+  // the bytes revault shows at 0xCE4460 (the function's first 14)
+  constexpr std::array<std::uint8_t, 14> kRevault = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56};
+  EXPECT_TRUE(std::equal(kRevault.begin(), kRevault.end(), gate::kNetFlagHead));
+}
+
+TEST(VeilnetChassis, TheFlagReadsZeroOnlyForLoadAndApplyItemsOwnCall) {
+  EXPECT_TRUE(gate::FlagForcedZero(kCatStandardFlag, kCatCallSiteRet, kCatCallSiteRet));
+  EXPECT_FALSE(gate::FlagForcedZero(kCatStandardFlag, kOtherCaller, kCatCallSiteRet));   // another caller of the flag
+  EXPECT_FALSE(gate::FlagForcedZero(kPortA, kCatCallSiteRet, kCatCallSiteRet));     // another flag
+}
+
+TEST(VeilnetChassis, ASwapHappensForThePodiumRuleOrTheServersStandardChassisNeverInsideOurOwnCall) {
+  // podium rule on: S10, unless the engine's own standard swap is the only thing in the way (no flag hook)
+  EXPECT_TRUE(gate::SwapChassisWanted(true, false, true, kNotOurs));
+  EXPECT_TRUE(gate::SwapChassisWanted(true, true, true, kNotOurs));
+  EXPECT_FALSE(gate::SwapChassisWanted(true, true, false, kNotOurs));
+  EXPECT_TRUE(gate::SwapChassisWanted(true, false, false, kNotOurs));
+  // podium rule off: S10 only for the server's standard rule, and only with the flag hook to make it S10
+  EXPECT_TRUE(gate::SwapChassisWanted(false, true, true, kNotOurs));
+  EXPECT_FALSE(gate::SwapChassisWanted(false, false, true, kNotOurs));
+  EXPECT_FALSE(gate::SwapChassisWanted(false, true, false, kNotOurs));
+  // our own calls (depth above zero) are never swapped again: that is the recursion guard
+  EXPECT_FALSE(gate::SwapChassisWanted(true, false, true, kInsideOurs));
+  EXPECT_FALSE(gate::SwapChassisWanted(false, true, true, kInsideOursTwice));
+}
+
 }  // namespace

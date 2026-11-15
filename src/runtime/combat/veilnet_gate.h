@@ -66,4 +66,28 @@ inline bool PickFromSlot(std::uint64_t sym, std::uint64_t selected) {
   return nevr_ec::KnownTacMod(sym) && sym != selected;
 }
 
+// ---- SERIES-10 ONLY: the recursion guard and the standard-chassis flag (#2242, EchoCombat 2.0.5 and 2.0.8). Revault (echovr.exe):
+// the flag reader is 0xCE4460, a wrapper over the symbol-keyed boolean lookup at 0xCE4390. Its one caller that matters is
+// CR15NetCustomizationCS::LoadAndApplyItem (0xD0D170), which passes (cs+0xB8, the symbol) at 0xD0D1F4 and branches on the answer
+// at 0xD0D1F9 (the return address). The symbol is the 8 bytes at 0x141CB3420, 0x29e261a1df774dd3.
+inline constexpr std::uint64_t kStandardChassisFlag = 0x29e261a1df774dd3ull;
+inline constexpr std::uintptr_t kNetFlagRva = 0xCE4460;
+inline constexpr std::uintptr_t kLoadApplyFlagRetRva = 0xD0D1F9;   // the return address after the call to kNetFlagRva
+inline constexpr std::uint8_t kNetFlagHead[14] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56};
+
+// The flag reads 0 for LoadAndApplyItem's own call, so the engine does not put the standard chassis on by itself (VeilNet puts
+// SERIES-10 ONLY on instead). Any other caller, or any other symbol, gets the real answer.
+inline bool FlagForcedZero(std::uint64_t sym, std::uintptr_t ret, std::uintptr_t callSiteRet) {
+  return sym == kStandardChassisFlag && ret == callSiteRet;
+}
+
+// Put a chassis item on as SERIES-10 ONLY (his ChassisWanted, behind his SwapChassis): the podium rule is on, or the server's
+// standard rule is set and the flag hook makes it SERIES-10. `depth` counts VeilNet's own chassis calls on this thread: a call made
+// from inside one of them is never swapped again (the recursion guard: without it the engine's standard swap and ours fed each
+// other until the stack ran out, EchoCombat 2.0.5).
+inline bool SwapChassisWanted(bool chassisOn, bool standardSet, bool flagHooked, int depth) {
+  if (depth != 0) return false;
+  return chassisOn ? (flagHooked || !standardSet) : (flagHooked && standardSet);
+}
+
 }  // namespace nevr_combat::gate
