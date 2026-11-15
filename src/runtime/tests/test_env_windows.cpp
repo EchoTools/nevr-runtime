@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -29,6 +30,7 @@
 
 #include "cdn/cdn_env.h"
 #include "cdn/env_windows.h"
+#include "core/logging.h"
 #include "runtime/tests/loopback_http_server.h"
 
 namespace {
@@ -193,6 +195,305 @@ TEST_F(EnvWindowsTest, QueryDeviceReportsEveryFact) {
   EXPECT_GT(facts.memory_available, 0u);
   EXPECT_GT(facts.fds_open, 0u);
   EXPECT_GT(facts.fd_soft_limit, facts.fds_open);
+}
+
+// The handle-count workaround (env_windows.cpp, CountProcessHandles): a synthetic SystemExtendedHandleInformation table, laid out
+// as the NT API lays it out (two pointer-sized header words, then 40-byte entries whose second word is the owning process id).
+constexpr std::uint32_t kHandleInfoClass = 64;  // SystemExtendedHandleInformation
+constexpr std::int32_t kInfoLengthMismatch = static_cast<std::int32_t>(0xC0000004U);
+constexpr std::int32_t kAccessDenied = static_cast<std::int32_t>(0xC0000022U);
+constexpr std::size_t kHeaderWords = 2;
+constexpr std::size_t kEntryWords = 5;
+constexpr std::size_t kEntryPidWord = 1;
+constexpr std::uint64_t kOwnPid = 0x51;
+constexpr std::uint64_t kOtherPid = 0x77;
+constexpr std::uint64_t kOwnHandles = 3;
+constexpr std::uint64_t kOtherHandles = 4;
+constexpr int kGrowingCalls = 2;            // the size query and the first read both say "too small"
+constexpr int kEndlessGrowth = 1000;        // more "too small" answers than the reader ever asks for
+constexpr std::uint64_t kOverstated = 1000000;  // a header count far past what the buffer holds
+constexpr std::int32_t kUnsetStatus = -1;   // a status the reader must overwrite
+
+struct FakeTable {
+  std::vector<std::uint64_t> words;  // the table the fake answers with
+  std::uint64_t claimed = 0;         // number_of_handles as the header states it (more than the buffer holds: clamped)
+  int grow_calls = 0;                // calls that answer "too small" before the table is handed out
+  bool size_query_says_zero = false;  // Wine's size query: no buffer, "too small", and 0 bytes needed
+  std::int32_t status_with_table = 0;  // the status a read that fills the buffer returns
+  std::uint32_t info_class = 0;
+  int calls = 0;
+};
+FakeTable g_fake;
+
+std::vector<std::uint64_t> Table(std::uint64_t own, std::uint64_t other) {
+  std::vector<std::uint64_t> words(kHeaderWords, 0);
+  for (std::uint64_t i = 0; i < own + other; ++i) {
+    std::vector<std::uint64_t> entry(kEntryWords, 0);
+    entry[kEntryPidWord] = i < own ? kOwnPid : kOtherPid;
+    words.insert(words.end(), entry.begin(), entry.end());
+  }
+  return words;
+}
+
+std::int32_t FakeQuery(std::uint32_t info_class, void* buffer, std::uint32_t length, std::uint32_t* needed) {
+  ++g_fake.calls;
+  g_fake.info_class = info_class;
+  const std::uint32_t bytes = static_cast<std::uint32_t>(g_fake.words.size() * sizeof(std::uint64_t));
+  *needed = bytes;
+  if (buffer == nullptr && g_fake.size_query_says_zero) {
+    *needed = 0;
+    return kInfoLengthMismatch;
+  }
+  if (g_fake.grow_calls > 0) {
+    --g_fake.grow_calls;
+    return kInfoLengthMismatch;
+  }
+  if (buffer == nullptr || length < bytes) return kInfoLengthMismatch;
+  std::vector<std::uint64_t> out = g_fake.words;
+  out[0] = g_fake.claimed;
+  std::memcpy(buffer, out.data(), bytes);
+  return g_fake.status_with_table;
+}
+
+std::int32_t DeniedQuery(std::uint32_t, void*, std::uint32_t, std::uint32_t*) { return kAccessDenied; }
+
+void ResetFake(std::uint64_t own, std::uint64_t other) {
+  g_fake = FakeTable();
+  g_fake.words = Table(own, other);
+  g_fake.claimed = own + other;
+}
+
+TEST(CountProcessHandles, CountsOnlyTheEntriesOfTheProcess) {
+  ResetFake(kOwnHandles, kOtherHandles);
+  std::uint64_t count = 0;
+  std::int32_t status = kUnsetStatus;
+  ASSERT_TRUE(nevr_cdn::CountProcessHandles(&FakeQuery, kOwnPid, &count, &status));
+  EXPECT_EQ(count, kOwnHandles);
+  EXPECT_EQ(status, 0);
+  EXPECT_EQ(g_fake.info_class, kHandleInfoClass);
+}
+
+TEST(CountProcessHandles, ATableThatGrowsIsReadAgainWithTheNewSize) {
+  ResetFake(kOwnHandles, kOtherHandles);
+  g_fake.grow_calls = kGrowingCalls;
+  std::uint64_t count = 0;
+  std::int32_t status = kUnsetStatus;
+  ASSERT_TRUE(nevr_cdn::CountProcessHandles(&FakeQuery, kOwnPid, &count, &status));
+  EXPECT_EQ(count, kOwnHandles);
+}
+
+TEST(CountProcessHandles, ASizeQueryThatNeedsNothingIsReadWithABufferThatHoldsTheHeader) {
+  ResetFake(kOwnHandles, kOtherHandles);
+  g_fake.size_query_says_zero = true;  // wine-11.21's answer to the size query
+  std::uint64_t count = 0;
+  std::int32_t status = kUnsetStatus;
+  ASSERT_TRUE(nevr_cdn::CountProcessHandles(&FakeQuery, kOwnPid, &count, &status));
+  EXPECT_EQ(count, kOwnHandles);
+}
+
+TEST(CountProcessHandles, ATableThatKeepsGrowingIsGivenUpWithItsStatus) {
+  ResetFake(kOwnHandles, kOtherHandles);
+  g_fake.grow_calls = kEndlessGrowth;
+  std::uint64_t count = 0;
+  std::int32_t status = 0;
+  EXPECT_FALSE(nevr_cdn::CountProcessHandles(&FakeQuery, kOwnPid, &count, &status));
+  EXPECT_EQ(status, kInfoLengthMismatch);
+  EXPECT_LT(g_fake.calls, kEndlessGrowth) << "the reads are bounded";
+}
+
+TEST(CountProcessHandles, AHeaderThatClaimsMoreEntriesThanTheBufferHoldsIsClamped) {
+  ResetFake(kOwnHandles, 0);
+  g_fake.claimed = kOverstated;  // read past the buffer, a wrong count shows here or the test crashes
+  std::uint64_t count = 0;
+  std::int32_t status = kUnsetStatus;
+  ASSERT_TRUE(nevr_cdn::CountProcessHandles(&FakeQuery, kOwnPid, &count, &status));
+  EXPECT_EQ(count, kOwnHandles);
+}
+
+TEST(CountProcessHandles, EntriesPastTheHeadersCountAreNotRead) {
+  ResetFake(kOwnHandles, 0);
+  g_fake.claimed = 1;  // the buffer holds three entries of the process; the header says one is the table's
+  std::uint64_t count = 0;
+  std::int32_t status = kUnsetStatus;
+  ASSERT_TRUE(nevr_cdn::CountProcessHandles(&FakeQuery, kOwnPid, &count, &status));
+  EXPECT_EQ(count, 1u);
+}
+
+TEST(CountProcessHandles, AReadThatFailsIsNoCountEvenWithAFilledBuffer) {
+  ResetFake(kOwnHandles, kOtherHandles);
+  g_fake.status_with_table = kAccessDenied;
+  std::uint64_t count = 0;
+  std::int32_t status = 0;
+  EXPECT_FALSE(nevr_cdn::CountProcessHandles(&FakeQuery, kOwnPid, &count, &status));
+  EXPECT_EQ(status, kAccessDenied);
+}
+
+TEST(ApplyHandleFact, ACountIsTheDescriptorFactAndNoCountLeavesItAbsent) {
+  nevr_cdn::HandleFact counted;
+  counted.have = true;
+  counted.open = kOwnHandles;
+  nevr_cdn::DeviceFacts facts;
+  nevr_cdn::ApplyHandleFact(counted, &facts);
+  EXPECT_TRUE(facts.have_fds);
+  EXPECT_EQ(facts.fds_open, kOwnHandles);
+  EXPECT_GT(facts.fd_soft_limit, facts.fds_open);
+  nevr_cdn::HandleFact none;
+  none.zero_count = true;
+  nevr_cdn::DeviceFacts absent;
+  nevr_cdn::ApplyHandleFact(none, &absent);
+  EXPECT_FALSE(absent.have_fds);
+  EXPECT_EQ(absent.fd_soft_limit, 0u);
+  EXPECT_EQ(absent.fds_open, 0u);
+}
+
+TEST(CountProcessHandles, ARefusedTableOrNoQueryIsNoCount) {
+  std::uint64_t count = 0;
+  std::int32_t status = 0;
+  EXPECT_FALSE(nevr_cdn::CountProcessHandles(&DeniedQuery, kOwnPid, &count, &status));
+  EXPECT_EQ(status, kAccessDenied);
+  EXPECT_FALSE(nevr_cdn::CountProcessHandles(nullptr, kOwnPid, &count, &status));
+  EXPECT_EQ(status, 0);
+  ResetFake(0, kOtherHandles);
+  EXPECT_FALSE(nevr_cdn::CountProcessHandles(&FakeQuery, kOwnPid, &count, &status)) << "no entry of the process is no count";
+}
+
+constexpr std::uint64_t kPlatformCount = 9;
+
+std::string FieldText(const std::vector<nevr_cdn::Field>& fields, const char* key) {
+  for (const nevr_cdn::Field& f : fields) {
+    if (f.key == key) return f.is_number ? std::to_string(f.number) : f.text;
+  }
+  return "<absent>";
+}
+
+constexpr std::uint32_t kProcNotFound = ERROR_PROC_NOT_FOUND;
+constexpr std::uint32_t kPlatformError = ERROR_ACCESS_DENIED;
+int g_resolves = 0;  // how many times OpenHandleFact asked for the table's query
+nevr_cdn::HandleTableQuery FakeTable(std::uint32_t*) {
+  ++g_resolves;
+  return &FakeQuery;
+}
+nevr_cdn::HandleTableQuery DeniedTable(std::uint32_t*) {
+  ++g_resolves;
+  return &DeniedQuery;
+}
+nevr_cdn::HandleTableQuery NoTable(std::uint32_t* error) {
+  ++g_resolves;
+  *error = kProcNotFound;
+  return nullptr;
+}
+
+nevr_cdn::EventLevel RecordOf(const nevr_cdn::HandleFact& fact, std::vector<nevr_cdn::Field>* fields) {
+  nevr_cdn::EventLevel level = nevr_cdn::EventLevel::kDebug;
+  nevr_cdn::HandleDecisionRecord(fact, &level, fields);
+  return level;
+}
+
+TEST(OpenHandleFact, ThePlatformsNonZeroCountIsKeptTheTableIsNotResolvedAndTheRecordSaysSo) {
+  ResetFake(kOwnHandles, kOtherHandles);
+  g_resolves = 0;
+  const nevr_cdn::HandleFact fact = nevr_cdn::OpenHandleFact(true, kPlatformCount, 0, &FakeTable, kOwnPid);
+  EXPECT_TRUE(fact.have);
+  EXPECT_EQ(fact.open, kPlatformCount);
+  EXPECT_FALSE(fact.zero_count);
+  EXPECT_EQ(g_resolves, 0) << "Windows never resolves the table's query";
+  EXPECT_EQ(g_fake.calls, 0);
+  std::vector<nevr_cdn::Field> fields;
+  EXPECT_EQ(RecordOf(fact, &fields), nevr_cdn::EventLevel::kInfo);
+  EXPECT_EQ(FieldText(fields, "source"), "platform");
+  EXPECT_EQ(FieldText(fields, "reason"), "handle_count_nonzero");
+  EXPECT_EQ(FieldText(fields, "fds_open"), std::to_string(kPlatformCount));
+}
+
+TEST(OpenHandleFact, AFailedPlatformCallIsNoFactAndAWarning) {
+  ResetFake(kOwnHandles, kOtherHandles);
+  g_resolves = 0;
+  const nevr_cdn::HandleFact fact = nevr_cdn::OpenHandleFact(false, 0, kPlatformError, &FakeTable, kOwnPid);
+  EXPECT_FALSE(fact.have);
+  EXPECT_FALSE(fact.zero_count);
+  EXPECT_EQ(g_resolves, 0);
+  std::vector<nevr_cdn::Field> fields;
+  EXPECT_EQ(RecordOf(fact, &fields), nevr_cdn::EventLevel::kWarn);
+  EXPECT_EQ(FieldText(fields, "reason"), "platform_count_failed");
+  EXPECT_EQ(FieldText(fields, "error"), std::to_string(kPlatformError));
+  EXPECT_EQ(FieldText(fields, "status"), "<absent>") << "no table was read";
+}
+
+TEST(OpenHandleFact, AZeroCountIsReplacedByTheTableAndTheRecordSaysSo) {
+  ResetFake(kOwnHandles, kOtherHandles);
+  const nevr_cdn::HandleFact fact = nevr_cdn::OpenHandleFact(true, 0, 0, &FakeTable, kOwnPid);
+  EXPECT_TRUE(fact.have);
+  EXPECT_TRUE(fact.zero_count);
+  EXPECT_EQ(fact.open, kOwnHandles);
+  std::vector<nevr_cdn::Field> fields;
+  EXPECT_EQ(RecordOf(fact, &fields), nevr_cdn::EventLevel::kInfo);
+  EXPECT_EQ(FieldText(fields, "source"), "system_handle_table");
+  EXPECT_EQ(FieldText(fields, "reason"), "handle_count_zero");
+  EXPECT_EQ(FieldText(fields, "fds_open"), std::to_string(kOwnHandles));
+  EXPECT_NE(FieldText(fields, "consequence"), "<absent>");
+}
+
+TEST(OpenHandleFact, AZeroCountWithAnUnreadableTableIsNoFactAndAWarningWithTheStatus) {
+  const nevr_cdn::HandleFact fact = nevr_cdn::OpenHandleFact(true, 0, 0, &DeniedTable, kOwnPid);
+  EXPECT_FALSE(fact.have);
+  EXPECT_TRUE(fact.zero_count);
+  std::vector<nevr_cdn::Field> fields;
+  EXPECT_EQ(RecordOf(fact, &fields), nevr_cdn::EventLevel::kWarn);
+  EXPECT_EQ(FieldText(fields, "source"), "none");
+  EXPECT_EQ(FieldText(fields, "reason"), "table_unreadable");
+  EXPECT_EQ(FieldText(fields, "status"), std::to_string(static_cast<std::uint32_t>(kAccessDenied)));
+  EXPECT_NE(FieldText(fields, "consequence"), "<absent>");
+}
+
+TEST(OpenHandleFact, ATableWithNoEntryOfTheProcessHasItsOwnReason) {
+  ResetFake(0, kOtherHandles);
+  const nevr_cdn::HandleFact fact = nevr_cdn::OpenHandleFact(true, 0, 0, &FakeTable, kOwnPid);
+  EXPECT_FALSE(fact.have);
+  std::vector<nevr_cdn::Field> fields;
+  EXPECT_EQ(RecordOf(fact, &fields), nevr_cdn::EventLevel::kWarn);
+  EXPECT_EQ(FieldText(fields, "reason"), "no_entry_of_process");
+  EXPECT_EQ(FieldText(fields, "status"), "<absent>") << "the read succeeded";
+  EXPECT_EQ(FieldText(fields, "error"), "<absent>");
+}
+
+TEST(OpenHandleFact, NoQueryForTheTableHasItsOwnReason) {
+  const nevr_cdn::HandleFact fact = nevr_cdn::OpenHandleFact(true, 0, 0, &NoTable, kOwnPid);
+  EXPECT_FALSE(fact.have);
+  EXPECT_TRUE(fact.zero_count);
+  std::vector<nevr_cdn::Field> fields;
+  EXPECT_EQ(RecordOf(fact, &fields), nevr_cdn::EventLevel::kWarn);
+  EXPECT_EQ(FieldText(fields, "reason"), "no_handle_table");
+  EXPECT_EQ(FieldText(fields, "error"), std::to_string(kProcNotFound));
+}
+
+std::vector<std::string> g_logged;
+VOID CaptureLog(EchoVR::LogLevel, const CHAR* message) { g_logged.emplace_back(message); }
+
+// A WindowsEnv says its first handle decision once: where the platform's own count is 0 (Wine's stub), that it counted the
+// handle table; where it is not (Windows), that it kept the platform's count. The test reads the platform's answer to know which.
+TEST_F(EnvWindowsTest, TheHandleDecisionIsSaidOnceWithItsSource) {
+  DWORD platform = 0;
+  ASSERT_NE(GetProcessHandleCount(GetCurrentProcess(), &platform), FALSE);
+  nevr_cdn::WindowsEnv env;
+  g_logged.clear();
+  SetBootLogSink(&CaptureLog);
+  nevr_cdn::DeviceFacts first;
+  nevr_cdn::DeviceFacts second;
+  const bool queried = env.QueryDevice(dir_, &first) && env.QueryDevice(dir_, &second);
+  SetBootLogSink(nullptr);
+  ASSERT_TRUE(queried);
+  std::vector<std::string> lines;
+  for (const std::string& line : g_logged) {
+    if (line.find("device_handles") != std::string::npos) lines.push_back(line);
+  }
+  ASSERT_EQ(lines.size(), 1u) << "the first decision is said, and only once";
+  const char* const source = platform != 0 ? "source=platform" : "source=system_handle_table";
+  const char* const reason = platform != 0 ? "reason=handle_count_nonzero" : "reason=handle_count_zero";
+  EXPECT_NE(lines[0].find(source), std::string::npos) << lines[0];
+  EXPECT_NE(lines[0].find(reason), std::string::npos) << lines[0];
+  EXPECT_NE(lines[0].find("fds_open=" + std::to_string(first.fds_open)), std::string::npos) << lines[0];
+  EXPECT_TRUE(first.have_fds);
+  EXPECT_GT(first.fds_open, 0u);
 }
 
 TEST_F(EnvWindowsTest, NowMsDoesNotGoBackward) {
