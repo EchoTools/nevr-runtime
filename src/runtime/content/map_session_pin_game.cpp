@@ -18,6 +18,7 @@
 #include "runtime/content/map_session_pin_game.h"
 #include "runtime/content/map_session_pin_notice.h"
 #include "runtime/hook/addresses.h"
+#include "runtime/hook/load_timing.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"  // g_pGame (the game context)
 #include "runtime/lifecycle/return_to_lobby.h"
@@ -97,6 +98,18 @@ void WriteEvent(const PinEvent& e) {
     case PinEventKind::kNoticeNotWritten:
       Log(EchoVR::LogLevel::Warning, "[NEVR.MAPS] map_skew reason=notice_not_written id=%s", e.id.c_str());
       return;
+    case PinEventKind::kHoldArmed:
+      Log(EchoVR::LogLevel::Info, "[NEVR.MAPS] map_hold armed id=%s level=%s pin=%s notice=\"%s\"", e.id.c_str(), level.c_str(),
+          pin.c_str(), e.notice.c_str());
+      return;
+    case PinEventKind::kHoldReleased:
+      Log(EchoVR::LogLevel::Info, "[NEVR.MAPS] map_hold released id=%s level=%s pin=%s (the same join loads the mounted map)",
+          e.id.c_str(), level.c_str(), pin.c_str());
+      return;
+    case PinEventKind::kHoldLeave:
+      Log(EchoVR::LogLevel::Warning, "[NEVR.MAPS] map_hold leave reason=%s id=%s level=%s pin=%s notice=\"%s\"", e.reason.c_str(),
+          e.id.c_str(), level.c_str(), pin.c_str(), e.notice.c_str());
+      return;
   }
 }
 
@@ -160,6 +173,8 @@ class WinGameAccess final : public GameAccess {
   std::uint64_t NowMs() override { return GetTickCount64(); }
 
   void Event(const PinEvent& event) override { WriteEvent(event); }
+
+  bool CanHoldLoad() override { return nevr_load_timing::HoldsLoad(); }
 
  private:
   bool checked_ = false;

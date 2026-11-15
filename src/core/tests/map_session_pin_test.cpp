@@ -3,6 +3,7 @@
 // The vectors that pin the level names and the pin value are the ones the PC and the Quest were tested against.
 
 #include "core/map_session_pin.h"
+#include "core/map_server_hold.h"
 
 #include <gtest/gtest.h>
 
@@ -53,6 +54,7 @@ class FakeGame : public sp::GameAccess {
   std::uint64_t main_level = 0;
   bool schedule_ok = true;
   bool notice_ok = true;
+  bool can_hold = false;
   std::uint64_t now = 1000;
   int game_calls = 0;  // every call the tick makes into the game, except Callable
   int set_calls = 0;
@@ -99,6 +101,7 @@ class FakeGame : public sp::GameAccess {
   }
   std::uint64_t NowMs() override { return now; }
   void Event(const sp::PinEvent& event) override { events.push_back(event); }
+  bool CanHoldLoad() override { return can_hold; }
 
   std::size_t Count(sp::PinEventKind kind) const {
     std::size_t n = 0;
@@ -684,6 +687,158 @@ TEST_F(MapSessionPin, ANewViewDecidesTheSameSessionAgain) {
   for (int i = 0; i < 3; ++i) sp::TickWith(game);
   EXPECT_EQ(game.schedule_calls, 1);
   EXPECT_EQ(g_fetches, std::vector<std::string>{"arena_c"});
+}
+
+// The client's join hold (owner: "if a player trys to load arena_C but doesnt have it it should download, then mount, and load").
+class MapJoinHold : public MapSessionPin {
+ protected:
+  // A client that can hold its load joins a session on arena_c 1.0, which its channel lists but its cache lacks.
+  void JoinArenaC(const std::string& token = "not_cached") {
+    sp::ChannelView view;
+    view.listed = {{Level("arena_c"), "arena_c"}};
+    view.not_mounted = {{"arena_c", token}};
+    sp::SetChannelView(view);
+    sp::SetFetchRequest(&RecordFetch);
+    game.can_hold = true;
+    game.state = 7;
+    game.owner[sp::kOwnerLevelKey] = Level("arena_c");
+    game.owner[sp::kOwnerPinKey] = kPin10;
+    sp::TickWith(game);
+  }
+  // The worker stored the map and registered it; the frame has not mounted it yet.
+  static void Stored() {
+    sp::ChannelView view;
+    view.listed = {{Level("arena_c"), "arena_c"}};
+    sp::SetChannelView(view);
+  }
+  bool Held() const { return sp::JoinHeldFor(Level("arena_c"), game.now); }
+
+  const std::uint64_t kPin10 = sp::PinValue(Pin("arena_c", "1.0", kSourceA));
+  FakeGame game;
+};
+
+TEST_F(MapJoinHold, AMapTheCacheLacksHoldsTheJoinAndTheSameJoinLoadsItOnceTheSessionsVersionMounts) {
+  JoinArenaC();
+  ASSERT_EQ(game.Count(sp::PinEventKind::kHoldArmed), 1u);
+  EXPECT_EQ(game.First(sp::PinEventKind::kHoldArmed)->notice, "Downloading arena_c; the join continues when it is ready.");
+  EXPECT_EQ(g_fetches, std::vector<std::string>{"arena_c"});
+  EXPECT_EQ(game.schedule_calls, 0);
+  EXPECT_TRUE(game.notices.empty());
+  EXPECT_EQ(game.Count(sp::PinEventKind::kSkew), 0u);
+  EXPECT_TRUE(Held());
+  EXPECT_TRUE(sp::JoinHeldFor(sp::LowspecLevelOf("arena_c"), game.now));
+  EXPECT_FALSE(sp::JoinHeldFor(kStockLevel, game.now));
+
+  Stored();
+  sp::TickWith(game);
+  EXPECT_TRUE(Held());  // registered is not mounted: the load still waits for the frame's mount
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldReleased), 0u);
+
+  sp::SetMountedPins({Pin("arena_c", "1.0", kSourceA)});
+  sp::TickWith(game);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldReleased), 1u);
+  EXPECT_FALSE(Held());
+  sp::TickWith(game);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldReleased), 1u);
+  EXPECT_EQ(game.schedule_calls, 0);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldLeave), 0u);
+  EXPECT_EQ(g_fetches.size(), 1u);
+}
+
+TEST_F(MapJoinHold, ACachedMapNotYetAskedForIsHeldTheSameWay) {
+  JoinArenaC(nevr_maps::kNotAskedToken);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldArmed), 1u);
+  EXPECT_TRUE(Held());
+  sp::SetMountedPins({Pin("arena_c", "1.0", kSourceA)});
+  Stored();
+  sp::TickWith(game);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldReleased), 1u);
+}
+
+TEST_F(MapJoinHold, AHeldJoinIsNeverReleasedIntoAnotherVersion) {
+  JoinArenaC();
+  Stored();
+  sp::SetMountedPins({Pin("arena_c", "1.1", kSourceB)});  // the bucket moved on: the server still runs 1.0
+  sp::TickWith(game);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldReleased), 0u);
+  const sp::PinEvent* leave = game.First(sp::PinEventKind::kHoldLeave);
+  ASSERT_NE(leave, nullptr);
+  EXPECT_EQ(leave->reason, "version");
+  EXPECT_FALSE(Held());
+  EXPECT_EQ(game.schedule_calls, 1);
+  ASSERT_EQ(game.notices.size(), 1u);
+  EXPECT_EQ(game.notices[0].second, "Server's arena_c is not your 1.1; checking for update.");
+}
+
+TEST_F(MapJoinHold, AtTheDeadlineTheHeldJoinLeavesWithThePlainReason) {
+  JoinArenaC();
+  game.now += nevr_maps::kMapHoldCeilingMs - 1;
+  sp::TickWith(game);
+  EXPECT_TRUE(Held());
+  EXPECT_EQ(game.schedule_calls, 0);
+  game.now += 1;
+  EXPECT_FALSE(Held());  // the load stops waiting at the deadline even before the tick runs
+  sp::TickWith(game);
+  const sp::PinEvent* leave = game.First(sp::PinEventKind::kHoldLeave);
+  ASSERT_NE(leave, nullptr);
+  EXPECT_EQ(leave->reason, "hold_timeout");
+  EXPECT_EQ(game.schedule_calls, 1);
+  ASSERT_EQ(game.notices.size(), 1u);
+  EXPECT_EQ(game.notices[0].second, "Downloading arena_c took too long; join again later.");
+}
+
+TEST_F(MapJoinHold, AFailedFetchOfTheHeldMapLeavesAtOnceAndAnotherMapsFailureDoesNot) {
+  JoinArenaC();
+  sp::NoteFetchFailed("arena_d", "no such map");
+  sp::TickWith(game);
+  EXPECT_TRUE(Held());
+  sp::NoteFetchFailed("arena_c", "not enough room for arena_c");
+  sp::TickWith(game);
+  const sp::PinEvent* leave = game.First(sp::PinEventKind::kHoldLeave);
+  ASSERT_NE(leave, nullptr);
+  EXPECT_EQ(leave->reason, "fetch_failed");
+  EXPECT_FALSE(Held());
+  EXPECT_EQ(game.schedule_calls, 1);
+  ASSERT_EQ(game.notices.size(), 1u);
+  EXPECT_EQ(game.notices[0].second, "Map arena_c could not be downloaded. See the nevr log.");
+}
+
+TEST_F(MapJoinHold, LeavingTheSessionDropsTheHold) {
+  JoinArenaC();
+  game.state = 0;
+  sp::TickWith(game);
+  EXPECT_FALSE(Held());
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldLeave), 0u);
+}
+
+TEST_F(MapJoinHold, APlatformThatCannotHoldLeavesAndJoinsAgain) {
+  sp::ChannelView view;
+  view.listed = {{Level("arena_c"), "arena_c"}};
+  view.not_mounted = {{"arena_c", "not_cached"}};
+  sp::SetChannelView(view);
+  sp::SetFetchRequest(&RecordFetch);
+  game.state = 7;
+  game.owner[sp::kOwnerLevelKey] = Level("arena_c");
+  game.owner[sp::kOwnerPinKey] = kPin10;
+  sp::TickWith(game);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldArmed), 0u);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kSkew), 1u);
+  EXPECT_EQ(game.schedule_calls, 1);
+  EXPECT_FALSE(Held());
+}
+
+TEST_F(MapJoinHold, AMountedCopyAtAnotherVersionIsNotHeld) {
+  sp::ChannelView view;
+  view.listed = {{Level("arena_c"), "arena_c"}};
+  sp::SetChannelView(view);
+  sp::SetMountedPins({Pin("arena_c", "0.9", kSourceB)});
+  game.can_hold = true;
+  game.state = 7;
+  game.owner[sp::kOwnerLevelKey] = Level("arena_c");
+  game.owner[sp::kOwnerPinKey] = kPin10;
+  sp::TickWith(game);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldArmed), 0u);
+  EXPECT_EQ(game.schedule_calls, 1);
 }
 
 }  // namespace

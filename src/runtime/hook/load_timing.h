@@ -17,6 +17,9 @@ inline constexpr std::array<std::uint8_t, 8> kLoadLevelPrologue = {0x48, 0x8B, 0
 /// is then the one at that address and times the load itself (TimedLoad). Logs the outcome once.
 void Install(bool joinHoldHooksIt);
 
+/// True when this hook's LoadLevel detour is installed, so a client's map join hold (core/map_session_pin.h) can hold the load.
+bool HoldsLoad();
+
 /// Runs `call` (the game's LoadLevel) for the level `levelHash` and logs its `level_load` record. Passes the result on.
 std::uint64_t TimedLoad(std::uint64_t levelHash, std::uint64_t (*call)(void*, std::uint64_t, void*), void* gameSpace,
                         std::uint64_t p2, void* p3);

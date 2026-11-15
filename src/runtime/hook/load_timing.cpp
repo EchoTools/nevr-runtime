@@ -8,6 +8,7 @@
 
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
+#include "core/map_session_pin.h"
 #include "nevr/pc/nevr_common.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/hook/patching.h"
@@ -72,6 +73,10 @@ void LogNotArmed(const char* reason, const void* address) {
 void LogRecord(const std::string& line) { Log(EchoVR::LogLevel::Info, "%s", line.c_str()); }
 
 std::uint64_t __fastcall LoadLevelDetour(void* gameSpace, std::uint64_t p2, void* p3) {
+  // A client's map join hold: the load waits for the fetched map's mount. The caller is the game-space init fiber
+  // (docs/reference/join-hold.md step 7), and the frame that mounts the map and ticks the hold keeps running meanwhile.
+  while (nevr_map_session_pin::JoinHeldFor(p2, GetTickCount64()))
+    Sleep(static_cast<DWORD>(nevr_map_session_pin::kJoinHoldPollMs));
   return TimedLoad(p2, g_originalLoadLevel, gameSpace, p2, p3);
 }
 
@@ -105,6 +110,8 @@ void Install(bool joinHoldHooksIt) {
   }
   Log(EchoVR::LogLevel::Info, "[NEVR.BOOT] load timing armed hook=LoadLevel (each level load now writes a level_load record)");
 }
+
+bool HoldsLoad() { return g_originalLoadLevel != nullptr; }
 
 void OnGameLine(const char* line) {
   if (nevr_load_timing::IsEngineReadyLine(line)) g_boot.MarkEngineReady(ElapsedSinceProcessStartMs());

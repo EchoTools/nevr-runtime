@@ -6,6 +6,7 @@
 
 #include "core/map_format.h"
 #include "nevr/symbol_hash.h"
+#include "core/map_server_hold.h"
 
 namespace nevr_map_session_pin {
 
@@ -52,6 +53,19 @@ struct TickState {
 };
 TickState& g_tick() {
   static TickState instance;  // function-local: no load-time initializer in the sentinel (tools/check_quest_static_init.sh)
+  return instance;
+}
+
+// The client's join hold: armed and ended by the tick (game thread), read by the level load (JoinHeldFor) and failed by the
+// worker (NoteFetchFailed), so it sits under g_mutex.
+struct JoinHoldState {
+  bool armed = false;
+  std::string id, failed;  // failed: the consequence of a failed fetch of `id`
+  std::uint64_t lobby = 0, level = 0, pin = 0, deadline = 0;
+  std::uint64_t load_names[2] = {0, 0};  // both level names of the map, as the level load passes them
+};
+JoinHoldState& g_hold() {
+  static JoinHoldState instance;  // function-local: no load-time initializer in the sentinel (tools/check_quest_static_init.sh)
   return instance;
 }
 
@@ -172,6 +186,80 @@ void ServerTick(GameAccess& game, std::uint64_t lobby) {
   }
 }
 
+void WriteNoticeOrSay(GameAccess& game, const std::string& id, const std::string& notice) {
+  if (game.WriteNotice(kNoticeTitle, notice.c_str())) return;
+  PinEvent refused;
+  refused.kind = PinEventKind::kNoticeNotWritten;
+  refused.id = id;
+  game.Event(refused);
+}
+
+// A leave already retrying stands, whatever the level does meanwhile.
+void Leave(GameAccess& game, const std::string& id, std::uint64_t now) {
+  if (g_tick().leave_pending) return;
+  g_tick().leave_id = id;
+  TryLeave(game, now);
+}
+
+void AskFetch(const std::string& id) {
+  FetchRequestFn fetch = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex());
+    fetch = g_fetch;
+  }
+  if (fetch != nullptr) fetch(id);
+}
+
+void DropHold() {
+  std::lock_guard<std::mutex> lock(g_mutex());
+  g_hold() = JoinHoldState();
+}
+
+// While a join is held for this session the hold decides it: true. False when none is held for it.
+bool HoldTick(GameAccess& game, std::uint64_t lobby, std::uint64_t level, std::uint64_t pin, std::uint64_t now) {
+  JoinHoldState hold;
+  bool released = false;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex());
+    if (!g_hold().armed) return false;
+    if (g_hold().lobby != lobby || g_hold().level != level || g_hold().pin != pin) {
+      g_hold() = JoinHoldState();
+      return false;
+    }
+    const MapPin* mounted = PinById(g_mounted(), g_hold().id);
+    released = mounted != nullptr && PinValue(*mounted) == pin;
+    hold = g_hold();
+    if (released) g_hold() = JoinHoldState();
+  }
+  PinEvent event;
+  event.level = level;
+  event.pin = pin;
+  event.id = hold.id;
+  if (released) {
+    event.kind = PinEventKind::kHoldReleased;
+    game.Event(event);
+    return true;
+  }
+  if (!hold.failed.empty()) {
+    event.reason = "fetch_failed";
+    event.notice = FitLine({{"Map "}, {hold.id, true}, {" could not be downloaded. See the nevr log."}});
+  } else if (now >= hold.deadline) {
+    event.reason = "hold_timeout";
+    event.notice = FitLine({{"Downloading "}, {hold.id, true}, {" took too long; join again later."}});
+  } else {
+    const ClientDecision decision = DecideClient(level, pin);
+    if (decision.action != ClientAction::kLeave || decision.holdable) return true;
+    event.reason = decision.reason;
+    event.notice = decision.notice_line;
+  }
+  DropHold();
+  event.kind = PinEventKind::kHoldLeave;
+  game.Event(event);
+  WriteNoticeOrSay(game, hold.id, event.notice);
+  Leave(game, hold.id, now);
+  return true;
+}
+
 void ClientTick(GameAccess& game, std::uint64_t lobby, std::uint64_t now) {
   const std::int32_t state = game.NetState();
   // A client in a session: the decision is made again for each new session (a lobby, a level or a pin that changed).
@@ -179,6 +267,7 @@ void ClientTick(GameAccess& game, std::uint64_t lobby, std::uint64_t now) {
   if (lobby == 0 || !inSession) {
     ResetClientKey();
     g_tick().leave_pending = false;
+    DropHold();
     return;
   }
   if (g_tick().leave_pending) TryLeave(game, now);
@@ -186,13 +275,16 @@ void ClientTick(GameAccess& game, std::uint64_t lobby, std::uint64_t now) {
   const std::uint64_t level = SessionLevelWith(game);
   const std::uint64_t pin = game.OwnerSymbol(lobby, kOwnerPinKey);
   const std::uint64_t view = g_viewGeneration.load(std::memory_order_acquire);
+  const bool held = HoldTick(game, lobby, level, pin, now);
   TickState& tick = g_tick();
-  if (tick.have_key && tick.key_lobby == lobby && tick.key_level == level && tick.key_pin == pin && tick.key_view == view) return;
-  g_tick().have_key = true;
-  g_tick().key_lobby = lobby;
-  g_tick().key_level = level;
-  g_tick().key_pin = pin;
-  g_tick().key_view = view;
+  if (!held && tick.have_key && tick.key_lobby == lobby && tick.key_level == level && tick.key_pin == pin && tick.key_view == view)
+    return;
+  tick.have_key = true;
+  tick.key_lobby = lobby;
+  tick.key_level = level;
+  tick.key_pin = pin;
+  tick.key_view = view;
+  if (held) return;
 
   const ClientDecision decision = DecideClient(level, pin);
   PinEvent event;
@@ -218,28 +310,32 @@ void ClientTick(GameAccess& game, std::uint64_t lobby, std::uint64_t now) {
       break;
   }
 
+  if (decision.holdable && game.CanHoldLoad()) {
+    {
+      std::lock_guard<std::mutex> lock(g_mutex());
+      g_hold().armed = true;
+      g_hold().id = decision.id;
+      g_hold().lobby = lobby;
+      g_hold().level = level;
+      g_hold().pin = pin;
+      g_hold().load_names[0] = SessionLevelOf(decision.id);
+      g_hold().load_names[1] = LowspecLevelOf(decision.id);
+      g_hold().deadline = now + nevr_maps::kMapHoldCeilingMs;
+    }
+    event.kind = PinEventKind::kHoldArmed;
+    event.fetch = true;
+    event.notice = FitLine({{"Downloading "}, {decision.id, true}, {"; the join continues when it is ready."}});
+    game.Event(event);
+    AskFetch(decision.id);
+    return;
+  }
   event.kind = PinEventKind::kSkew;
   event.notice = decision.notice_line;
   event.fetch = decision.request_fetch;
   game.Event(event);
-  if (!game.WriteNotice(kNoticeTitle, decision.notice_line.c_str())) {
-    PinEvent refused;
-    refused.kind = PinEventKind::kNoticeNotWritten;
-    refused.id = decision.id;
-    game.Event(refused);
-  }
-  if (decision.request_fetch) {
-    FetchRequestFn fetch = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(g_mutex());
-      fetch = g_fetch;
-    }
-    if (fetch != nullptr) fetch(decision.id);
-  }
-  // A leave already retrying stands, whatever the level does meanwhile.
-  if (g_tick().leave_pending) return;
-  g_tick().leave_id = decision.id;
-  TryLeave(game, now);
+  WriteNoticeOrSay(game, decision.id, decision.notice_line);
+  if (decision.request_fetch) AskFetch(decision.id);
+  Leave(game, decision.id, now);
 }
 
 }  // namespace
@@ -398,12 +494,14 @@ ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin) {
     // Not cached, or cached at a version the channel no longer lists: fetched on demand and mounted with no restart.
     if (*token == "not_cached" || *token == nevr_maps::kStaleToken) {
       decision.request_fetch = true;
+      decision.holdable = true;
       decision.notice_line = FitLine({{"Downloading "}, {id, true}, {"; join again when it is ready."}});
       return decision;
     }
     // Cached and current, mounted only once a session asks: the request checks the manifest first and mounts with no restart.
     if (*token == nevr_maps::kNotAskedToken) {
       decision.request_fetch = true;
+      decision.holdable = true;
       decision.notice_line = FitLine({{"Loading "}, {id, true}, {"; join again when it is ready."}});
       return decision;
     }
@@ -413,6 +511,9 @@ ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin) {
   }
   decision.reason = "version";
   decision.request_fetch = true;
+  // A copy held at another version stays mounted (a mounted set is never replaced), so only a map held at no version can be
+  // cured by the fetch this run.
+  decision.holdable = mounted == nullptr && staged == nullptr;
   const MapPin* have = mounted != nullptr ? mounted : staged;
   // An if, not a ?: over two braced lists: GCC 15 reads the ?: as keeping the list past the call (-Wdangling-pointer).
   if (have != nullptr) {
@@ -478,8 +579,20 @@ std::vector<std::string> RegistrationEntries() {
   return entries;
 }
 
+bool JoinHeldFor(std::uint64_t level, std::uint64_t nowMs) {
+  std::lock_guard<std::mutex> lock(g_mutex());
+  if (!g_hold().armed || level == 0 || nowMs >= g_hold().deadline) return false;
+  return level == g_hold().load_names[0] || level == g_hold().load_names[1];
+}
+
+void NoteFetchFailed(const std::string& id, const std::string& consequence) {
+  std::lock_guard<std::mutex> lock(g_mutex());
+  if (g_hold().armed && g_hold().id == id) g_hold().failed = consequence.empty() ? std::string("failed") : consequence;
+}
+
 void ResetForTest() {
   std::lock_guard<std::mutex> lock(g_mutex());
+  g_hold() = JoinHoldState();
   g_view() = ChannelView();
   g_mounted().clear();
   g_fetch = nullptr;

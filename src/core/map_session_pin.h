@@ -38,6 +38,8 @@ inline constexpr std::uint64_t kLeaveRetryMs = 10000;
 // (src/quest/host_tests/groups/shared.cmake compiles it there). Outside them the client decides nothing.
 inline constexpr std::int32_t kFirstSessionState = 6;
 inline constexpr std::int32_t kLastSessionState = 9;
+// How often a held level load asks whether its join is still held (JoinHeldFor).
+inline constexpr std::uint64_t kJoinHoldPollMs = 50;
 
 // One map as the session pin sees it: its id, version and the two hashes that tie the PC and Quest packages of one version.
 struct MapPin {
@@ -106,6 +108,7 @@ struct ClientDecision {
   ClientAction action = ClientAction::kNone;
   std::string id, reason, notice_line, local_path;
   bool request_fetch = false;
+  bool holdable = false;  // a fetch and a later mount can make this client current this run: a join hold may wait for it
 };
 
 // The decision table (ADR 0048 decision 9), over the view and the mounted and staged pins. `pin` is the owner JSON's
@@ -116,10 +119,24 @@ struct ClientDecision {
 //   a local copy of the map (PC only)                           -> local (stays; no leave, no fetch)
 //   the map has a not-mounted token                             -> leave (reason not_mounted); fetch only for stock_changed
 //   otherwise                                                   -> leave (reason version); fetch
+// A leave is holdable when the map is not cached, stale or not yet asked for, or not held at any version: only then can the
+// fetch and a later mount bring the session's version this run.
 ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin);
 
 // What the platform does with a decision and the tick (see GameAccess). Each is one record the platform writes.
-enum class PinEventKind { kServerSet, kServerCleared, kUnpinned, kLocalMap, kSkew, kLeaveScheduled, kLeaveFailed, kNoticeNotWritten };
+enum class PinEventKind {
+  kServerSet,
+  kServerCleared,
+  kUnpinned,
+  kLocalMap,
+  kSkew,
+  kLeaveScheduled,
+  kLeaveFailed,
+  kNoticeNotWritten,
+  kHoldArmed,     // the join waits for the map: the notice says so
+  kHoldReleased,  // the session's version mounted: the same join loads it
+  kHoldLeave,     // the hold ended without it: the reason and the notice say why
+};
 
 struct PinEvent {
   PinEventKind kind = PinEventKind::kSkew;
@@ -143,6 +160,8 @@ class GameAccess {
   virtual bool ScheduleLeave() = 0;  // the return to lobby; false when it could not be scheduled now
   virtual std::uint64_t NowMs() = 0;
   virtual void Event(const PinEvent& event) = 0;  // every record the pin writes; the platform formats it
+  // True when the platform holds its level load while JoinHeldFor reads true. The default leaves and joins again instead.
+  virtual bool CanHoldLoad() { return false; }
 };
 
 // The level a session is at: the owner JSON's `level` when a lobby exists and it is non-zero, else the main level.
@@ -152,6 +171,21 @@ std::uint64_t SessionLevelWith(GameAccess& game);
 // session, and a leave writes the notice and is retried for kLeaveRetryMs. With no listed map and no mounted pin, it makes no
 // game call at all.
 void TickWith(GameAccess& game);
+
+// The client's join hold (owner: "if a player trys to load arena_C but doesnt have it it should download, then mount, and
+// load"). A holdable leave on a platform that can hold its level load holds the join instead: one kHoldArmed record with the
+// "Downloading <id>" notice, and the map is asked for. Each tick then releases it once the session's own pin is mounted
+// (kHoldReleased: the same join loads it), or leaves with a plain-words notice (kHoldLeave) when the fetch failed, when
+// nevr_maps::kMapHoldCeilingMs passed since the arm, or when the decision became a leave no mount can cure. Another version
+// is never released into. Another session (lobby, level or pin) drops the hold.
+//
+// The level load asks from its own thread: true while the join is held for `level` (either name of the held map) and `nowMs`
+// is before the hold's deadline.
+bool JoinHeldFor(std::uint64_t level, std::uint64_t nowMs);
+
+// The worker: a fetch that named `id` failed, with the request's plain-words consequence. A join held for `id` leaves on the
+// next tick; any other id is ignored.
+void NoteFetchFailed(const std::string& id, const std::string& consequence);
 
 // The login's nevr_maps: the mounted maps, then the staged maps not yet mounted (each with "mounted"). An empty array when none.
 nlohmann::json LoginEntries();
