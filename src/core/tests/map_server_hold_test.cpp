@@ -6,8 +6,6 @@
 #include <cstdio>
 #include <limits>
 #include <string>
-#include <utility>
-#include <vector>
 
 #include "core/map_server_hold.h"
 #include "quest/tests/test_check.h"
@@ -129,33 +127,6 @@ void TestHoldLiftedByMountOrTimeout() {
 }
 
 // A fetch that learns its size later moves the deadline: unknown at the ceiling, then the computed time, never past the ceiling.
-// Owner: "if a server has arena c loaded and arena c gets updated clients cant join the old arena c version". The check at a
-// session create finds the update: the hold stands past every deadline (no join reaches the old version) until the server exits,
-// and only once its session is empty.
-void TestAnUpdateOfAMountedMapHoldsEveryJoinUntilTheRestart() {
-  ServerMapHold hold;
-  QCHECK(hold.Arm("grp", 1000));
-  QCHECK(!hold.Updated("other"));
-  QCHECK(hold.Updated("grp"));
-  QCHECK(hold.WaitsForRestart());
-  QCHECK(hold.Poll(1000 + nevr_maps::kMapHoldCeilingMs * 10) == ServerMapHold::Step::kNone);
-  QCHECK(hold.Holding());
-  hold.Clear();
-  QCHECK(!hold.WaitsForRestart());
-
-  const std::vector<std::pair<std::string, std::string>> rows = {
-      {"arena_c", "mounted_other_version"}, {"beta", "not_cached"}, {"gamma", "stale"}, {"delta", "mounted_other_version"}};
-  const std::vector<std::string> updated = nevr_maps::UpdatedWhileMounted(rows);
-  QCHECK(updated.size() == 2 && updated[0] == "arena_c" && updated[1] == "delta");
-  QCHECK(nevr_maps::UpdatedWhileMounted({{"beta", "not_cached"}}).empty());
-
-  QCHECK(nevr_maps::RestartForUpdateNow(true, 0));
-  QCHECK(!nevr_maps::RestartForUpdateNow(true, 1));  // never mid-match
-  QCHECK(!nevr_maps::RestartForUpdateNow(false, 0));
-  QCHECK(nevr_maps::MapUpdateRestartLine("grp", updated).find("group=grp ids=arena_c,delta reason=mounted_other_version") !=
-         std::string::npos);
-}
-
 void TestDeadlineFollowsThePlanWithinTheCeiling() {
   ServerMapHold hold;
   QCHECK(hold.Arm("grp", 0));
@@ -207,7 +178,6 @@ int main() {
   TestOnlyTheAllocatedGroupIsFetched();
   TestHoldLiftedByMountOrTimeout();
   TestDeadlineFollowsThePlanWithinTheCeiling();
-  TestAnUpdateOfAMountedMapHoldsEveryJoinUntilTheRestart();
   TestComposeJoinHold();
   TestSignedOnlyRule();
   TestLines();

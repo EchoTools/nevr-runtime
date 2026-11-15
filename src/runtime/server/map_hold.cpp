@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
-#include <vector>
 
 #include "core/logging.h"
 #include "core/map_server_hold.h"
@@ -47,11 +46,9 @@ void OnSessionCreate(const std::string& group, const std::string& session) {
         "[NEVR.MAPS] map hold off reason=no_group session=%s (the session starts on the stock maps)", Show(session));
     return;
   }
-  if (nevr_join_hold::MapsArm(want) == nevr_join_hold::MapsArmResult::kRecheck) {
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.MAPS] map check group=%s session=%s (the group is mounted: the joins wait for its manifest check, so a new version "
-        "is never hidden behind the old one)",
-        want.c_str(), Show(session));
+  if (nevr_join_hold::MapsArm(want) == nevr_join_hold::MapsArmResult::kMounted) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.MAPS] map hold off group=%s reason=mounted session=%s", want.c_str(), Show(session));
+    return;
   }
   // Armed. The channel's worker fetches the group; a refusal (a bad id, a stopped queue) means nothing would mount it, so the
   // hold is dropped at once rather than held to its timeout.
@@ -73,16 +70,7 @@ void NoteFetchProgress(const nevr_maps::FetchProgress& progress) {
   nevr_join_hold::MapsNoteProgress(progress.group, plan);
 }
 
-void NoteFetchFailed(const std::string& group, const std::string& reason) {
-  nevr_join_hold::MapsNoteCheckFailed(group, reason);
-}
-
 void NoteGroupMounted(const std::string& group, const nevr_maps::MountReport& report) {
-  const std::vector<std::string> updated = nevr_maps::UpdatedWhileMounted(report.not_mounted);
-  if (!updated.empty()) {
-    nevr_join_hold::MapsNoteUpdated(group, updated);
-    return;
-  }
   nevr_join_hold::MapsNoteMounted(group);
   std::size_t refused = 0;
   for (const auto& row : report.refused) {

@@ -90,9 +90,6 @@ struct StockView {
   bool (*has)(void* ctx, std::uint64_t type, std::uint64_t name) = nullptr;
   void* ctx = nullptr;
   std::uint64_t records = 0;
-  // A later mount's (LaterMountView): true for a key an earlier mount of the run serves. A stock override may take a key the
-  // game has, never one a mounted set serves. Null: no earlier mount.
-  bool (*served)(void* ctx, std::uint64_t type, std::uint64_t name) = nullptr;
 };
 
 // One archive a set carries: its name and what it lists (docs/engine/asset-system.md, "Archives"). A level is the
@@ -132,7 +129,6 @@ struct Set {
   std::vector<std::uint64_t> levels;    // the names of the set's level roots, each with its archive in `archives`
   std::vector<OverrideRef> overrides;
   bool committed = false;
-  bool stock_override = false;  // a signed stock override (AddMapFile): may hold keys the game has, and is served before them
 };
 
 struct MountReport {
@@ -152,27 +148,6 @@ struct MountReport {
   std::vector<std::int64_t> handles_to_close;  // the files of the refused sets, which nothing will read
 };
 
-class Registry;
-
-// The stock a later mount of the same run checks its sets against (a map fetched mid-run): the game's manifests, and every key an
-// earlier mount serves. A later set naming a served key is refused (kStockKey), so two mounts never answer one key and a mounted
-// set is never replaced; a later level resolves what it depends on in either. Its own Registry builds its own shadow, which takes
-// the next chunk range of the run.
-class LaterMountView {
- public:
-  LaterMountView(const StockView& stock, const std::vector<const Registry*>& earlier);
-  // Valid while this object lives.
-  StockView stock() const {
-    return StockView{&LaterMountView::Has, const_cast<LaterMountView*>(this), base_.records, &LaterMountView::Served};
-  }
-
- private:
-  static bool Has(void* ctx, std::uint64_t type, std::uint64_t name);
-  static bool Served(void* ctx, std::uint64_t type, std::uint64_t name);
-  StockView base_;
-  std::vector<std::pair<std::uint64_t, std::uint64_t>> served_;  // sorted
-};
-
 class Registry {
  public:
   // `indexSpace`: how many chunk indices the shadow can give out (from kFirstChunkIndex to kChunkIndexLimit).
@@ -189,10 +164,8 @@ class Registry {
   // A map's set: the whole of the file open as `handle`, mapped at `bytes`, for `owner` ("map:<id>"). Add's checks at
   // file offset 0, except that a script record passes while the script waiver holds it (SetScriptWaiver). Held
   // committed: there is no init to wait for.
-  // `stockOverride`: the channel granted the map a signed stock override (nevr_maps::Mounter::StockOverride), so the mount lets
-  // the set hold keys the game has (never a key another set serves) and the resolver serves it before the game.
   Outcome AddMapFile(const std::string& owner, const std::string& label, const void* bytes, std::uint64_t size,
-                     std::int64_t handle, bool stockOverride = false);
+                     std::int64_t handle);
 
   // The plugin's init returned 0: its held sets are kept for the mount.
   void Commit(const std::string& plugin);
@@ -279,7 +252,6 @@ struct MapFileRequest {
   // fetch (ADR 0048 decision 4): the mount, which may run on the boot thread, always passes false, so it hashes nothing (ADR 0045
   // decision 7). True only on a worker, for a file whose stamp nobody verified: its bytes are hashed through the handle first.
   bool rehash = false;
-  bool stock_override = false;  // the set is a signed stock override (Registry::AddMapFile)
 };
 
 // The request's own rules, before the file is touched: kNone, or kFormat with the detail "bad_owner", "bad_label" or "bad_pin".
@@ -309,20 +281,16 @@ class HeldMapFile {
 Outcome RegisterMapFile(const MapFileRequest& request, HeldMapFile& file, const std::function<bool()>& mounted,
                         const std::function<Outcome(const void* view, std::uint64_t size)>& add);
 
-// The mount observer both platforms offer: the map channel's code is told which sets the run's mount mounted and refused, after
+// The mount observer both platforms offer: the map channel's code is told which sets the run's one mount mounted and refused, after
 // Registry::Mount and before the first request is answered from the shadow, with none of the platform's locks held. A run whose
-// registration ends without a mount (the resolver hook missing, a mount that failed) calls it with an empty report. A platform that
-// mounts sets fetched later in the run (PC) tells it of each later mount too. Thread-safe.
+// registration ends without a mount (the resolver hook missing, a mount that failed) calls it with an empty report. Thread-safe.
 class MountObserver {
  public:
   using Fn = void (*)(const MountReport& report);
   void Set(Fn fn) { fn_.store(fn); }
   bool Armed() const { return fn_.load() != nullptr; }
-  // The run's mount, abandon or failed mount: calls the observer once per run; true when it was called now, false when none is set
-  // or the run's mount was already reported.
+  // Calls the observer once per run: true when it was called now, false when none is set or it was already called.
   bool Notify(const MountReport& report);
-  // A later mount: calls the observer every time; false when none is set.
-  bool NotifyLaterMount(const MountReport& report);
   // Test support: no observer, never called.
   void Reset();
 

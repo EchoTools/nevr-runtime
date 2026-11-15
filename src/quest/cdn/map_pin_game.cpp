@@ -119,12 +119,6 @@ void WriteEvent(const core::PinEvent& e) {
                           {{"reason", "local_map"}, {"id", e.id.c_str()}, {"level", level.c_str()}, {"pin", pin.c_str()},
                            {"local", e.local_path.c_str()}});
       return;
-    case core::PinEventKind::kHoldArmed:
-    case core::PinEventKind::kHoldReleased:
-    case core::PinEventKind::kHoldLeave:
-      // The Quest cannot hold its level load yet (CanHoldLoad keeps the default), so the core never arms a hold here.
-      sentinel::LogFields(sentinel::LogLevel::kWarn, "map_hold", {{"status", "unexpected"}, {"reason", "no_hold_on_quest"}});
-      return;
     case core::PinEventKind::kServerSet:
     case core::PinEventKind::kServerCleared:
       // The Quest is never a server: the core only writes the pin on a server, so this is not reached.
@@ -180,9 +174,6 @@ class QuestGameAccess final : public core::GameAccess {
   }
 
   void Event(const core::PinEvent& event) override { WriteEvent(event); }
-
-  // The map sets mount once per run (quest/sentinel/map_sets.h): a map downloaded now plays after the next start.
-  bool MountsMidRun() override { return false; }
 };
 
 QuestGameAccess g_game;

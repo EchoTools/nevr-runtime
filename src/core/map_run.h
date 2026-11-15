@@ -70,13 +70,6 @@ class Mounter {
   virtual Grant DerivedScript(const std::string& owner, std::uint64_t hash, std::int64_t held,
                               const std::string& sha256, const std::string& stock_sha256, bool official) = 0;
   virtual void Withdraw(const std::string& owner) = 0;  // undo every grant of `owner`
-  // Before its Set: the map's set may hold keys the game has and is served before them (a signed stock override). A platform
-  // that cannot serve one refuses, the map is not mounted, and the game's level loads.
-  virtual Grant StockOverride(const std::string& /*owner*/) {
-    Grant grant;
-    grant.reason = "override_unsupported";
-    return grant;
-  }
 };
 
 // ADR 0048 decision 5, on both platforms: a map whose aliases are not all staged keeps nothing it registered (set, scripts,
@@ -90,9 +83,6 @@ inline std::string StageAliasesOrWithdraw(Mounter& mounter, const std::string& o
   return grant.reason.empty() ? "alias_partial" : grant.reason;
 }
 
-// maps.cache_cap_gib's default: the most the map cache holds on disk.
-inline constexpr std::uint64_t kDefaultCacheCapBytes = 20ull << 30;
-
 // What the channel is told by config.yaml (the `maps` section) and by the platform. Nothing here chooses a group.
 struct ChannelConfig {
   std::string dir, base_url, platform = kPlatformPc, game_build;
@@ -105,15 +95,6 @@ struct ChannelConfig {
   bool signed_only = false;          // -require-signed-plugins: a map's scripts count only under an official key (ADR 0048 decision 7)
   std::string channel;               // maps.channel; empty = the channel base_url was bound to at its first fetch
   std::uint32_t boot_budget_ms = 0;  // maps.boot_budget_ms: how long one mount may take; 0 = no limit
-  std::uint64_t cache_cap_bytes = kDefaultCacheCapBytes;  // maps.cache_cap_gib: the most the cache holds; 0 = no cap
-  // The platform's: a map mounts only when a session asks for it, after its group's manifest was checked, so a version the
-  // bucket moved past since the last run is never mounted at boot. False mounts every cached map at boot (the Quest, which has
-  // no later mount yet).
-  bool mount_on_demand = false;
-  // False: a map a session's request fetches mid-run is stored, not mounted, and plays after the next start; the request still
-  // lists its group's maps, so the session pin names what it lacks. The Quest: its map sets mount once per run
-  // (quest/sentinel/map_sets.h Mount), so a set registered later would be refused too late.
-  bool mounts_mid_run = true;
 };
 
 // Where a group's manifest is on the channel, and where the cache keeps the copy it verified.
@@ -126,16 +107,6 @@ std::vector<std::string> CachedGroupIds(nevr_cdn::Env& env, const std::string& d
 // The files a mount holds open take at most 1 part in this many of the descriptors the process has free (ADR 0045 decision 8);
 // the texture cargo's store files take their own share (cdn/cdn_limits.h, kDescriptorShareForStore).
 inline constexpr std::uint64_t kDescriptorShareForMaps = 4;
-
-// The refusal token of a cached version that no verified manifest lists now (`refused` of map_mounted, a Warning): the map does not
-// mount until the listed version is stored, so an old version never plays in its place.
-inline constexpr const char* kStaleToken = "stale";
-// The skip token of a map an earlier mount of this process holds at another version: a mounted set is never replaced in the process.
-inline constexpr const char* kMountedOtherVersionToken = "mounted_other_version";
-// The skip token of a cached, current map no session has asked for yet (ChannelConfig::mount_on_demand).
-inline constexpr const char* kNotAskedToken = "not_asked";
-// The refusal token of a stock override (MapEntry::overrides) whose manifest no compiled-in key verified: the game's level loads.
-inline constexpr const char* kOverrideUnofficialToken = "override_unofficial";
 
 struct MountedMap {
   std::string id, version, index_sha256, platform, source_sha256, title, group;
@@ -159,10 +130,7 @@ struct MountReport {
 class CacheMount {
  public:
   CacheMount(nevr_cdn::Env& env, MapFs& fs, const ChannelConfig& config, Mounter& mounter, Deriver* deriver);
-  // `only`, when given, are the ids this call may grant; every other cached map at its listed version is skipped (not_asked).
-  MountReport Mount(const std::vector<std::string>& groups, const std::string& now_utc,
-                    const std::vector<std::string>* only = nullptr);
-  std::vector<std::string> MountedIds() const;  // every map a call mounted, sorted
+  MountReport Mount(const std::vector<std::string>& groups, const std::string& now_utc);
 
  private:
   nevr_cdn::Env& env_;
@@ -200,44 +168,12 @@ struct FetchReport {
   std::string reason;  // "" unless the outcome is kFailed
   std::size_t maps_updated = 0, pieces_fetched = 0, pieces_reused = 0;
   std::uint64_t set_bytes = 0, bytes_to_fetch = 0, bytes_fetched = 0, elapsed_ms = 0;
-  // The first map the cache had no room for (reason over_budget): what it needs, the most the budget could make free for it, and
-  // the cap (0 = none).
-  std::string no_room_id;
-  std::uint64_t no_room_needed = 0, no_room_available = 0, no_room_cap = 0;
-  // A server's held group past the cap (FetchScope::server_group): what the cache holds once the group is in. 0 when within it.
-  std::uint64_t over_cap_held = 0;
-  // True once the group's manifest verified: a later failure is a map's (`failed_maps`) or the index write, never the manifest.
-  bool manifest_verified = false;
-  std::vector<std::pair<std::string, std::string>> failed_maps;  // (id, reason) of each map this pass could not store
 };
 
-// Which of the maps a group's manifest lists one fetch stores. By default every listed map (a server's group, ADR 0048 decision 13).
-// On demand (a client's fetch): only the ids the caller names (the map its session needs) and the maps the cache already holds at a
-// version the manifest no longer lists, so a bucket of many maps costs a player only the maps it plays. A named id the manifest
-// does not list for this platform fails the fetch (not_listed); nothing outside the verified manifest is ever fetched.
-//
-// The cache budget: what the cache holds stays within ChannelConfig::cache_cap_bytes, and what one fetch adds within the device's
-// storage share. A map that does not fit evicts whole maps, the least recently played first (never played counts as oldest), and
-// fails over_budget when evicting every map it may evict still leaves too little. Never evicted: `in_use` (the maps this run
-// mounted, stamped as played now), the ids the scope names, the maps this fetch stores, and on a whole-group fetch (a server's
-// held group) every map the group lists.
-//
-// A dedicated server's held group (`server_group`) is stored whole even past the cap: the cap still evicts every other map it
-// may evict, and only the device's storage share refuses a map of the group. The report then names the bytes held
-// (`over_cap_held`), so the log can say what the group needs against the cap.
-struct FetchScope {
-  bool on_demand = false;
-  bool server_group = false;
-  std::vector<std::string> ids;
-  std::vector<std::string> in_use;
-};
-
-// Fetches one group's manifest and the maps `scope` takes of it. `deferred` are maps a mount deferred (MountReport::deferred):
-// their files are hashed again before the plan. `progress` (optional) is called after the plan and after every piece, on the
-// worker.
+// Fetches one group's manifest and the maps it lists. `deferred` are maps a mount deferred (MountReport::deferred): their files
+// are hashed again before the plan. `progress` (optional) is called after the plan and after every piece, on the worker.
 FetchReport FetchGroup(nevr_cdn::Env& env, MapFs& fs, const ChannelConfig& config, const std::string& group,
                        const std::vector<std::string>& deferred, Deriver* deriver, const std::string& now_utc,
-                       const std::function<bool()>& keep_going, const FetchProgressFn& progress = nullptr,
-                       const FetchScope& scope = FetchScope());
+                       const std::function<bool()>& keep_going, const FetchProgressFn& progress = nullptr);
 
 }  // namespace nevr_maps

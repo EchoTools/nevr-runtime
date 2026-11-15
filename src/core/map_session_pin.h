@@ -16,7 +16,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -39,10 +38,6 @@ inline constexpr std::uint64_t kLeaveRetryMs = 10000;
 // (src/quest/host_tests/groups/shared.cmake compiles it there). Outside them the client decides nothing.
 inline constexpr std::int32_t kFirstSessionState = 6;
 inline constexpr std::int32_t kLastSessionState = 9;
-// How often a held level load asks whether its join is still held (JoinHeldFor).
-inline constexpr std::uint64_t kJoinHoldPollMs = 50;
-// A held load stops once the game's loop has run no frame for this long: the loop is waiting for the load's thread.
-inline constexpr std::uint64_t kJoinHoldStallMs = 250;
 
 // One map as the session pin sees it: its id, version and the two hashes that tie the PC and Quest packages of one version.
 struct MapPin {
@@ -99,10 +94,6 @@ void SetChannelView(ChannelView view);
 void SetMountedPins(std::vector<MapPin> pins);
 std::vector<MapPin> MountedPins();  // any thread; a copy taken under the same mutex
 
-// The pins the mounted pins may name: the maps of `run` (every grant of this run's mounts) whose sets the registry confirmed
-// mounted (`mounted_ids`). A grant the registry refused, or one whose later mount has not run yet, is never published.
-std::vector<MapPin> PinsMounted(const nevr_maps::MountReport& run, const std::vector<std::string>& mounted_ids);
-
 using FetchRequestFn = void (*)(const std::string& id);
 void SetFetchRequest(FetchRequestFn fn);  // default none: no request is made
 
@@ -115,7 +106,6 @@ struct ClientDecision {
   ClientAction action = ClientAction::kNone;
   std::string id, reason, notice_line, local_path;
   bool request_fetch = false;
-  bool holdable = false;  // a fetch and a later mount can make this client current this run: a join hold may wait for it
 };
 
 // The decision table (ADR 0048 decision 9), over the view and the mounted and staged pins. `pin` is the owner JSON's
@@ -126,24 +116,10 @@ struct ClientDecision {
 //   a local copy of the map (PC only)                           -> local (stays; no leave, no fetch)
 //   the map has a not-mounted token                             -> leave (reason not_mounted); fetch only for stock_changed
 //   otherwise                                                   -> leave (reason version); fetch
-// A leave is holdable when the map is not cached, stale or not yet asked for, or not held at any version: only then can the
-// fetch and a later mount bring the session's version this run.
 ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin);
 
 // What the platform does with a decision and the tick (see GameAccess). Each is one record the platform writes.
-enum class PinEventKind {
-  kServerSet,
-  kServerCleared,
-  kUnpinned,
-  kLocalMap,
-  kSkew,
-  kLeaveScheduled,
-  kLeaveFailed,
-  kNoticeNotWritten,
-  kHoldArmed,     // the join waits for the map: the notice says so
-  kHoldReleased,  // the session's version mounted: the same join loads it
-  kHoldLeave,     // the hold ended without it: the reason and the notice say why
-};
+enum class PinEventKind { kServerSet, kServerCleared, kUnpinned, kLocalMap, kSkew, kLeaveScheduled, kLeaveFailed, kNoticeNotWritten };
 
 struct PinEvent {
   PinEventKind kind = PinEventKind::kSkew;
@@ -167,10 +143,6 @@ class GameAccess {
   virtual bool ScheduleLeave() = 0;  // the return to lobby; false when it could not be scheduled now
   virtual std::uint64_t NowMs() = 0;
   virtual void Event(const PinEvent& event) = 0;  // every record the pin writes; the platform formats it
-  // True when the platform holds its level load while JoinHeldFor reads true. The default leaves and joins again instead.
-  virtual bool CanHoldLoad() { return false; }
-  // False when a map fetched this run plays only after the next start (the Quest: ChannelConfig::mounts_mid_run).
-  virtual bool MountsMidRun() { return true; }
 };
 
 // The level a session is at: the owner JSON's `level` when a lobby exists and it is non-zero, else the main level.
@@ -180,33 +152,6 @@ std::uint64_t SessionLevelWith(GameAccess& game);
 // session, and a leave writes the notice and is retried for kLeaveRetryMs. With no listed map and no mounted pin, it makes no
 // game call at all.
 void TickWith(GameAccess& game);
-
-// The client's join hold (owner: "if a player trys to load arena_C but doesnt have it it should download, then mount, and
-// load"). A holdable leave on a platform that can hold its level load holds the join instead: one kHoldArmed record with the
-// "Downloading <id>" notice, and the map is asked for. Each tick then releases it once the session's own pin is mounted
-// (kHoldReleased: the same join loads it), or leaves with a plain-words notice (kHoldLeave) when the fetch failed, when
-// nevr_maps::kMapHoldCeilingMs passed since the arm, or when the decision became a leave no mount can cure. Another version
-// is never released into. Another session (lobby, level or pin) drops the hold.
-//
-// The level load asks from its own thread: true while the join is held for `level` (either name of the held map) and `nowMs`
-// is before the hold's deadline.
-bool JoinHeldFor(std::uint64_t level, std::uint64_t nowMs);
-
-// The level load's side of the hold, on the thread that runs the load. Off the game's loop thread it waits (`sleep_ms`,
-// kJoinHoldPollMs at a time) while JoinHeldFor reads true and the loop's frames (`loop_frames`, a count the loop thread advances)
-// keep coming. On the loop thread it never waits, since the frame that mounts the map and ticks the hold runs there; and once no
-// frame came for kJoinHoldStallMs the loop is waiting on this thread, so it stops. Either way the hold is marked unholdable, and
-// the next tick leaves with a "join again" notice while the download goes on. Returns true when it waited the hold out.
-bool WaitWhileJoinHeld(std::uint64_t level, bool on_loop_thread, const std::function<std::uint64_t()>& now_ms,
-                       const std::function<void(std::uint64_t)>& sleep_ms, const std::function<std::uint64_t()>& loop_frames);
-
-// The worker: a fetch that named `id` failed, with the request's plain-words consequence. A join held for `id` leaves on the
-// next tick; any other id is ignored.
-void NoteFetchFailed(const std::string& id, const std::string& consequence);
-
-// The mount observer: the registry refused the set of map `id` (a key clash with the stock or an earlier mount). A join held for
-// `id` leaves on the next tick with a plain notice; any other id is ignored.
-void NoteMountRefused(const std::string& id);
 
 // The login's nevr_maps: the mounted maps, then the staged maps not yet mounted (each with "mounted"). An empty array when none.
 nlohmann::json LoginEntries();

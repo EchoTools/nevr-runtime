@@ -44,7 +44,6 @@ std::atomic<bool> g_active{false};  // hooks in and the key above 0: the gate is
 std::atomic<std::size_t> g_queued{0};  // the queue size, readable without the lock (ReleaseDue's idle path)
 std::atomic<bool> g_mapsHolding{false};  // the maps hold stands (ReleaseDue reads it with g_queued, without the lock)
 std::set<std::string> g_mountedGroups;   // the groups whose maps mounted in this process, under g_mutex
-std::atomic<bool> g_updateWaits{false};  // a mounted map was updated on the channel: the server restarts once its session is empty
 std::string g_sessionId;                 // for the detours' lines, under g_mutex
 
 std::uint64_t NowMs() { return GetTickCount64(); }
@@ -282,13 +281,17 @@ MapsArmResult MapsArm(const std::string& group) {
     g_mapsHolding.store(false, std::memory_order_release);
     return MapsArmResult::kNoGroup;
   }
-  const MapsArmResult armed = g_mountedGroups.count(group) != 0 ? MapsArmResult::kRecheck : MapsArmResult::kArmed;
+  if (g_mountedGroups.count(group) != 0) {
+    maps.Clear();
+    g_mapsHolding.store(false, std::memory_order_release);
+    return MapsArmResult::kMounted;
+  }
   // A hold already standing for this group keeps its deadline: a session both frames name arms it once.
-  if (maps.Holding() && maps.Group() == group) return armed;
+  if (maps.Holding() && maps.Group() == group) return MapsArmResult::kArmed;
   maps.Arm(group, NowMs());
   g_mapsHolding.store(true, std::memory_order_release);
   Log(EchoVR::LogLevel::Info, "%s", nevr_maps::MapHoldArmedLine(group, nevr_maps::kMapHoldCeilingMs).c_str());
-  return armed;
+  return MapsArmResult::kArmed;
 }
 
 void MapsNoteProgress(const std::string& group, const nevr_maps::HoldPlan& plan) {
@@ -306,30 +309,6 @@ void MapsNoteMounted(const std::string& group) {
   g_mapsHolding.store(false, std::memory_order_release);
   Log(EchoVR::LogLevel::Info, "%s",
       nevr_maps::MapHoldMountedLine(group, now >= armed ? now - armed : 0).c_str());
-}
-
-void MapsNoteUpdated(const std::string& group, const std::vector<std::string>& ids) {
-  {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    g_gate.Maps().Updated(group);
-    g_updateWaits.store(true, std::memory_order_release);
-  }
-  Log(EchoVR::LogLevel::Warning, "%s", nevr_maps::MapUpdateRestartLine(group, ids).c_str());
-}
-
-void MapsNoteCheckFailed(const std::string& group, const std::string& reason) {
-  {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (g_mountedGroups.count(group) == 0) return;
-    if (g_gate.Maps().Mounted(group) == nevr_maps::ServerMapHold::Step::kMounted) {
-      g_mapsHolding.store(false, std::memory_order_release);
-    }
-  }
-  Log(EchoVR::LogLevel::Warning, "%s", nevr_maps::MapCheckFailedLine(group, reason).c_str());
-}
-
-bool MapsRestartForUpdateDue(std::uint64_t entrants) {
-  return nevr_maps::RestartForUpdateNow(g_updateWaits.load(std::memory_order_acquire), entrants);
 }
 
 }  // namespace nevr_join_hold

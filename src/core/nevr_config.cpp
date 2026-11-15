@@ -271,10 +271,10 @@ const std::map<std::string, std::set<std::string>>& KnownSections() {
       // development source (ResolveSource): `base` and `pins`, which only a development Quest runtime uses. No PC reader reads them.
       {"update", {"enabled", "channel", "base", "pins"}},
       // The custom-map channel (docs/adr/0048): the keys the PC reads through service_map.cpp and the Quest through
-      // quest_config.cpp. cache_cap_gib caps the map cache (default 20, 0 = no cap); what one fetch adds also stays
-      // within a share of the device's free space (docs/adr/0045, decision 8). No subscription or server allow-list
-      // key: no local config chooses which maps a player or a host has; clients and servers both follow their guilds.
-      {"maps", {"base_url", "official_keys", "trusted_keys", "channel", "boot_budget_ms", "cache_cap_gib"}},
+      // quest_config.cpp. No cache-size key: the cache's cap is a share of the device's facts (docs/adr/0045,
+      // decision 8), never a configured constant. No subscription or server allow-list key: no local config chooses
+      // which maps a player or a host has; clients and servers both follow their guilds.
+      {"maps", {"base_url", "official_keys", "trusted_keys", "channel", "boot_budget_ms"}},
       {"combat", {"force", "heaps", "memsys", "refresh_rate", "refresh_rate_lobby", "refresh_rate_quest2_72", "levelname", "meshstep", "instmodel", "shaderstep",
                   "tablestep", "pfx", "pfxtev", "gate_perm", "gate_bots", "gate_link", "gate_link_libs", "impactsnd", "impactsnd_write", "decals",
                   "decals_flip_u", "decals_flip_v", "bvh", "bvh_gate", "bvh_touch", "wallfire", "sendguard", "music", "sensorwd", "ec", "ec_words",

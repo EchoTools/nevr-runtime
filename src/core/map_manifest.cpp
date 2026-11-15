@@ -169,10 +169,6 @@ std::string ReadMapEntry(const json& v, const std::string& id, MapEntry* m) {
   }
   if (const std::string* title = StringAt(v, "title")) m->title = *title;
   if (const std::string* author = StringAt(v, "author")) m->author = *author;
-  if (const json* overrides = Find(v, "overrides")) {
-    if (!overrides->is_boolean()) return "malformed";
-    m->overrides = overrides->get<bool>();
-  }
   if (const json* thumbnail = Find(v, "thumbnail")) {
     const std::string reason = ReadPin(thumbnail, kMaxPieceBytes, &m->thumbnail);
     if (!reason.empty()) return reason;

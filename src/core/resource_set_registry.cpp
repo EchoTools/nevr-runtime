@@ -153,11 +153,9 @@ Outcome Registry::Add(const std::string& plugin, const std::string& label, const
 }
 
 Outcome Registry::AddMapFile(const std::string& owner, const std::string& label, const void* bytes, std::uint64_t size,
-                              std::int64_t handle, bool stockOverride) {
+                              std::int64_t handle) {
   if (!IsMapOwner(owner)) return Refuse(Refusal::kFormat, "bad_owner (a map's set is registered for \"map:<id>\")");
-  const Outcome outcome = AddChecked(owner, label, bytes, size, handle, 0, true);
-  if (outcome.ok()) sets_.back()->stock_override = stockOverride;
-  return outcome;
+  return AddChecked(owner, label, bytes, size, handle, 0, true);
 }
 
 Outcome Registry::AddChecked(const std::string& plugin, const std::string& label, const void* bytes, std::uint64_t size,
@@ -333,25 +331,6 @@ std::vector<std::int64_t> Registry::DropMap(const std::string& owner) {
   return handles;
 }
 
-LaterMountView::LaterMountView(const StockView& stock, const std::vector<const Registry*>& earlier) : base_(stock) {
-  for (const Registry* registry : earlier) {
-    for (const Set* set : registry->MountedSets()) {
-      for (const nevr_shadow::Record& r : set->records) served_.emplace_back(r.type, r.name);
-    }
-  }
-  std::sort(served_.begin(), served_.end());
-}
-
-bool LaterMountView::Has(void* ctx, std::uint64_t type, std::uint64_t name) {
-  const LaterMountView& view = *static_cast<const LaterMountView*>(ctx);
-  return Served(ctx, type, name) || view.base_.has(view.base_.ctx, type, name);
-}
-
-bool LaterMountView::Served(void* ctx, std::uint64_t type, std::uint64_t name) {
-  const LaterMountView& view = *static_cast<const LaterMountView*>(ctx);
-  return std::binary_search(view.served_.begin(), view.served_.end(), std::make_pair(type, name));
-}
-
 MountReport Registry::Mount(const StockView& stock) {
   MountReport report;
   report.stock_records = stock.records;
@@ -368,11 +347,7 @@ MountReport Registry::Mount(const StockView& stock) {
     }
     Outcome outcome;
     for (const nevr_shadow::Record& r : set.records) {
-      const bool clash = set.stock_override
-                             ? SortedHas(served, Key{r.type, r.name}) ||
-                                   (stock.served != nullptr && stock.served(stock.ctx, r.type, r.name))
-                             : stock.has(stock.ctx, r.type, r.name);
-      if (clash) {
+      if (stock.has(stock.ctx, r.type, r.name)) {
         outcome = Refuse(Refusal::kStockKey, KeyText(r.type, r.name));
         break;
       }
@@ -562,13 +537,6 @@ Outcome RegisterMapFile(const MapFileRequest& request, HeldMapFile& file, const 
 bool MountObserver::Notify(const MountReport& report) {
   const Fn fn = fn_.load();
   if (fn == nullptr || notified_.exchange(true)) return false;
-  fn(report);
-  return true;
-}
-
-bool MountObserver::NotifyLaterMount(const MountReport& report) {
-  const Fn fn = fn_.load();
-  if (fn == nullptr) return false;
   fn(report);
   return true;
 }

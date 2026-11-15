@@ -16,7 +16,6 @@ add_library(nevr_quest_maps STATIC
   ../../core/map_derive.cpp
   ../../core/map_local_precedence.cpp
   ../../core/map_fetch_queue.cpp
-  ../../core/map_request.cpp
   ../../core/stock_source.cpp
   ../../core/map_session_pin.cpp
   ../../core/map_set_tables.cpp

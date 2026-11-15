@@ -1,9 +1,7 @@
 /* The custom-map channel on the Quest (docs/adr/0048-custom-maps-channel.md; ADR 0045 decision 7): the core's start (core/map_channel.h)
  * over the POSIX cache under <internalDataPath>/nevr/cache/maps/, mounting each cached group's maps at boot with no network, then one
  * detached thread that waits for the game's manifest (the resource request hook sees the first request), mounts the sets against it,
- * updates the maps the cache holds, then answers the sessions' requests on demand: a lobby session asks for its group, and the
- * session pin for a map of it the Quest lacks (core/map_request.h). Only that map downloads, never the whole group. The map sets
- * mount once per run, so what arrives mounts at the next launch, and the pin says so.
+ * and fetches the planned groups in the background. What arrives mounts at the next launch.
  *
  * The map scripts (route B) and aliases are granted with their set, all or nothing (map_mount.h). Recipes rebuild through the Deriver
  * the caller gives (the stock source over the game's data root and the APK, map_start.cpp); with none, a recipe map is refused

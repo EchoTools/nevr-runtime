@@ -116,21 +116,6 @@ void SettingsWithoutBaseUrlNeverParseAKey() {
   QCHECK(mc::DecideStart(s) == mc::Start::kOff);
 }
 
-void TheCacheCapIsReadInGibAndAMalformedValueKeepsTheDefault() {
-  auto cap = [](const std::string& text) {
-    const Values v{{"maps_base_url", "https://maps.test"}, {"maps_cache_cap_gib", text}};
-    return mc::ReadSettings(Scalars(v), Items({}), mc::CompiledOfficialKeys()).cache_cap_bytes;
-  };
-  QCHECK(cap("") == nevr_maps::kDefaultCacheCapBytes);
-  QCHECK(nevr_maps::kDefaultCacheCapBytes == (std::uint64_t{20} << 30));
-  QCHECK(cap("5") == (std::uint64_t{5} << 30));
-  QCHECK(cap(" 7 ") == (std::uint64_t{7} << 30));
-  QCHECK(cap("0") == 0);
-  QCHECK(cap("20gb") == nevr_maps::kDefaultCacheCapBytes);
-  QCHECK(cap("-1") == nevr_maps::kDefaultCacheCapBytes);
-  QCHECK(cap("99999999999") == nevr_maps::kDefaultCacheCapBytes);
-}
-
 void SettingsReadTheBaseUrlWithItsSlashTheChannelAndTheBudget() {
   const Values v{{"maps_base_url", "https://maps.test"}, {"maps_channel", "echo"}, {"maps_boot_budget_ms", "2500"}};
   const mc::Settings s = mc::ReadSettings(Scalars(v), Items({}), mc::CompiledOfficialKeys());
@@ -447,7 +432,6 @@ void TheRecordedGroupSeamAnswersTheRequestsAsTheyAreAskedFor() {
 int main() {
   SettingsWithoutBaseUrlNeverParseAKey();
   SettingsReadTheBaseUrlWithItsSlashTheChannelAndTheBudget();
-  TheCacheCapIsReadInGibAndAMalformedValueKeepsTheDefault();
   NoOfficialKeyIsCompiledIn();
   AConfiguredOfficialKeyIsOfficialButNeverCompiled();
   ACompiledKeyIsOfficialAndCompiled();

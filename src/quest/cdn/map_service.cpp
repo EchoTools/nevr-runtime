@@ -10,11 +10,8 @@
 #include <vector>
 
 #include "core/config_alias.h"
-#include "core/map_request.h"
-#include "core/map_session_pin.h"
 #include "core/resource_set_registry.h"
 #include "cdn/posix_map_fs.h"
-#include "quest/cdn/map_pin_game.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/map_sets.h"
 #include "quest/sentinel/resource_request_hook.h"
@@ -52,7 +49,6 @@ struct State {
   PosixMapFs fs;
   std::unique_ptr<nevr_map_channel::Channel> channel;
   std::unique_ptr<QuestMounter> mounter;  // the boot's cache mount keeps a reference to it, so it lives as long as the state
-  std::unique_ptr<nevr_maps::MapRequests> requests;  // the sessions' requests; the seams call into it for the process
 };
 
 // A seam's answer, or none when the platform gave no such seam.
@@ -66,7 +62,6 @@ nevr_maps::ChannelConfig MakeChannelConfig(const std::string& cache_dir) {
   nevr_maps::ChannelConfig c;
   c.dir = cache_dir;
   c.platform = nevr_maps::kPlatformQuest;
-  c.mounts_mid_run = false;  // map_sets::Mount is the run's one mount
   return c;
 }
 
@@ -125,12 +120,7 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
     return false;  // the core logged why (not_configured or the refusal); nothing was granted, no thread starts
   }
   for (const std::string& id : boot.report.mounted) g_granted_owners().push_back(std::string(nevr_resource_sets::kMapOwnerPrefix) + id);
-  // A session success asks for its group (the shared session router) and the session pin for a map the Quest lacks; the worker
-  // below answers both on demand (core/map_request.h).
-  state->requests = std::make_unique<nevr_maps::MapRequests>(*env, /*is_server=*/false, /*mounts_now=*/false);
-  nevr_maps::InstallRequestSeams(state->requests.get());
-  nevr_map_session_pin::SetChannelView(nevr_map_session_pin::ViewFromMount(boot.report));
-  pin::InstallTick();
+  nevr_map_channel::ArmSessionGroupRequest();  // a session success now queues its group for the worker (ADR 0048 decision 15)
   map_sets::SetMountObserver(&OnMount);
   nevr_config_alias::InstallIfStaged();
   sentinel::LogFields(sentinel::LogLevel::kInfo, "maps_start",
@@ -142,18 +132,9 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
     MountWhenManifestReady(&resource_request::GameManifestRecords, &resource_request::GameManifestHolds,
                            &resource_request::PublishMapSets, kManifestWaitMs, always);
     // The groups to fetch: this run's session requests merged with the cache index's groups (RecordedGroupSeams), filtered by FetchGroups.
-    // On demand: a group bounds what may be pulled, so the pass updates the maps the cache holds and downloads no other map the
-    // group lists. A map the Quest does not hold is fetched when a session asks for it, below.
     const nevr_map_channel::Seams seams = nevr_map_channel::RecordedGroupSeams(*state->env, state->channel->config().dir);
     state->channel->FetchPass(*state->env, state->fs, deriver, nevr_map_channel::FetchGroups(Ask(seams.recorded_groups)), NowUtc(),
-                              always, /*on_demand=*/true);
-    // Each answer lists its group without mounting (mounts_mid_run is false): the pin then names what this run lacks and what
-    // plays after the next start.
-    state->channel->ServeRequests(
-        *state->env, state->fs, deriver, *state->requests, [] { return NowUtc(); }, always, nullptr,
-        [](const nevr_maps::FetchReport&, const nevr_maps::MountReport&, const nevr_maps::MountReport& run) {
-          nevr_map_session_pin::SetChannelView(nevr_map_session_pin::ViewFromMount(run));
-        });
+                              always);
   }).detach();
   return true;
 }

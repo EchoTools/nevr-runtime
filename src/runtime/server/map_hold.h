@@ -5,8 +5,8 @@
 // for, beside the levels hold). This file is the seam between the session and the channel:
 //
 //   game thread   the session create (gameserver_callbacks.cpp, kLobbySessionCreate's group id, and the legacy session start's
-//                 group GUID) calls OnSessionCreate: the one group the server is allocated for is fetched, or checked for an
-//                 update when its maps are mounted, and joins wait for that, or for the timeout.
+//                 group GUID) calls OnSessionCreate: the one group the server is allocated for is fetched when its maps are not
+//                 mounted, and joins wait for them, or for the timeout.
 //   channel       its worker calls NoteFetchProgress from FetchGroup's progress callback, and NoteGroupMounted after its mount has
 //                 run for the group. The channel sets RequestFetch at its start.
 //
@@ -39,11 +39,7 @@ void NoteFetchProgress(const nevr_maps::FetchProgress& progress);
 
 /// The channel's mount has run and the group's maps are mounted in this process (the report is the mount's: its signed_only
 /// refusals are counted, and one Warning per process says that the scripted maps were refused). Any thread.
-// A map the check found at a new version while its old one is mounted holds the joins until the server restarts (MapsNoteUpdated).
 void NoteGroupMounted(const std::string& group, const nevr_maps::MountReport& report);
-
-/// The channel's fetch of `group` failed before its manifest verified, for `reason` (join_hold.h MapsNoteCheckFailed). Any thread.
-void NoteFetchFailed(const std::string& group, const std::string& reason);
 
 /// The group a legacy GameServerSessionStart frame names: the GUID at its +0x10 (messages.h, the frame's two GUIDs), in the same
 /// lowercase text the protobuf group id is taken as. "" when the frame is too short to carry it.

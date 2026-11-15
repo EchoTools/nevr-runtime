@@ -30,7 +30,6 @@
 #include "cdn/cdn_env.h"
 #include "core/config_alias.h"
 #include "core/map_manifest.h"
-#include "core/map_request.h"
 #include "core/map_run.h"
 #include "core/map_types.h"
 
@@ -39,8 +38,8 @@ namespace nevr_map_channel {
 // The keys compiled into this build as official (ADR 0048 decision 12). Empty until the official key is chosen.
 const std::vector<nevr_maps::PinnedKey>& CompiledOfficialKeys();
 
-// The maps.* values by their flat keys (service_map.cpp: maps_base_url, maps_channel, maps_boot_budget_ms, maps_cache_cap_gib,
-// maps_official_keys, maps_trusted_keys). A scalar answers "" when absent; a list answers one entry per item, in file order.
+// The maps.* values by their flat keys (service_map.cpp: maps_base_url, maps_channel, maps_boot_budget_ms, maps_official_keys,
+// maps_trusted_keys). A scalar answers "" when absent; a list answers one entry per item, in file order.
 using ScalarLookup = std::function<std::string(const char* flat_key)>;
 using ListLookup = std::function<std::vector<std::string>(const char* flat_key)>;
 
@@ -50,8 +49,6 @@ struct Settings {
   std::string base_url;   // maps.base_url with a trailing '/'; empty when not configured
   std::string channel;    // maps.channel: the channel name the base URL is bound to ("" = the first verified manifest's)
   std::uint32_t boot_budget_ms = 0;  // maps.boot_budget_ms: how long one boot mount may take; 0 = no limit
-  // maps.cache_cap_gib: the most the map cache holds, in GiB; 0 = no cap. Absent or not a whole number keeps the default.
-  std::uint64_t cache_cap_bytes = nevr_maps::kDefaultCacheCapBytes;
   // The trust set: the compiled-in official keys (official and compiled), then maps.official_keys (official, never compiled), then
   // maps.trusted_keys (author keys, not official). Official and author keys are never both present (`mixed_keys`, decision 3).
   std::vector<nevr_maps::PinnedKey> keys;
@@ -110,10 +107,6 @@ MountDecision DecideMount(const std::vector<std::string>& expected, const nevr_c
                           const std::function<void(const std::string& owner)>& withdraw,
                           const std::function<bool(const std::string& owner, std::uint64_t alias)>& holds_alias);
 
-// A later mount's report folded into the run's: the maps it mounted are added, and a map's not-mounted token is the latest mount's
-// (a map that mounted later loses its earlier token). The session pin's view is taken from the folded report (ViewFromMount).
-void MergeMountReport(nevr_maps::MountReport& into, const nevr_maps::MountReport& later);
-
 struct BootResult {
   Start start = Start::kOff;
   std::string reason;  // "not_configured", the refusal, or "ok"
@@ -143,28 +136,12 @@ class Channel {
   // Stops early when keep_going turns false. Empty when the channel does not run or Boot has not run.
   std::vector<nevr_maps::FetchReport> FetchPass(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_maps::Deriver* deriver,
                                                 const std::vector<std::string>& groups, const std::string& now_utc,
-                                                const std::function<bool()>& keep_going, bool on_demand = false);
+                                                const std::function<bool()>& keep_going);
 
   // Mounts the given groups' cached maps now, in this process, through the boot's own CacheMount (one per process, so a map Boot
   // mounted at a version is not granted again). A server mounts the group it fetched this way, at once (ADR 0048 decision 13).
-  // The mount is folded into run(). Empty when Boot did not run the channel. Worker thread only, after Boot.
+  // Empty when Boot did not run the channel. Worker thread only, after Boot.
   nevr_maps::MountReport MountGroups(const std::vector<std::string>& groups, const std::string& now_utc);
-  // Every mount of the run, folded: the boot's, then each later one (MountGroups, ServeRequests). Its staged maps are the ones a
-  // server pins. Worker thread only, after Boot.
-  const nevr_maps::MountReport& run() const { return run_; }
-  // A dedicated server's scope for the group a session names: the whole group, every map this process mounted kept from eviction
-  // (the game reads their files), and the group stored whole even past the cap (FetchScope::server_group).
-  nevr_maps::FetchScope ServerGroupScope() const;
-  // The worker, after FetchPass: answers `requests` until keep_going turns false or the requests stop. Each fetch is followed by a
-  // mount of its group from the cache through the boot's mount (the hot mount): a map that arrived mounts now, with no restart; a
-  // map this run mounted at another version is skipped (mounted_other_version), never replaced, so a loaded level is never
-  // swapped. `after` hears each fetch with its mount and the run's folded report, on the worker, before the requests' answers.
-  // With ChannelConfig::mounts_mid_run false the mount only lists the group: what arrived plays after the next start.
-  using AfterMount = std::function<void(const nevr_maps::FetchReport& fetched, const nevr_maps::MountReport& mounted,
-                                        const nevr_maps::MountReport& run)>;
-  void ServeRequests(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_maps::Deriver* deriver, nevr_maps::MapRequests& requests,
-                     const std::function<std::string()>& now_utc, const std::function<bool()>& keep_going,
-                     const nevr_maps::FetchProgressFn& progress, const AfterMount& after);
 
  private:
   nevr_maps::ChannelConfig config_;
@@ -173,11 +150,7 @@ class Channel {
   std::unique_ptr<nevr_maps::CacheMount> mount_;  // made by Boot once the channel runs; its references live as long as the channel
   bool booted_ = false;
   BootResult result_;
-  nevr_maps::MountReport run_;                    // every mount of the run, folded (worker only after Boot)
 };
-
-// How long the worker parks between checks of keep_going while no request waits.
-inline constexpr std::uint32_t kServeWaitMs = 250;
 
 // The background pass's thread: one pass, then it parks until a request (one more pass) or a stop. Heap-owned by the platform: on a
 // stop that times out it is left alive with whatever its pass references. The pass must not throw (the build has no exceptions on

@@ -54,7 +54,6 @@ target_sources(nevr_core PRIVATE ${_maps_derive_sources})
 set(_maps_run_sources
   "${CMAKE_CURRENT_LIST_DIR}/map_run.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/map_fetch_queue.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/map_request.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/map_local_precedence.cpp")
 set_source_files_properties(${_maps_run_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 target_sources(nevr_core PRIVATE ${_maps_run_sources})
@@ -70,8 +69,6 @@ target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_session_pin.cpp"
 # Its PC glue is runtime/server/map_hold.cpp and join_hold.cpp. Platform-free: no PCH, no Log().
 set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/map_server_hold.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_server_hold.cpp")
-# Same-owner replace of a mounted map (core/map_swap.h): the decision and the serving table. Platform-free.
-target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_swap.cpp")
 
 # The custom-map channel's start (core/map_channel.h; ADR 0048 decisions 3, 7, 8, 12): the settings, the start decision, the boot and
 # its idempotence, the mount observer's decision (DecideMount) and the background worker. Platform-free: no PCH. Its tests are the Quest
@@ -153,15 +150,6 @@ if(BUILD_TESTING AND GTest_FOUND)
     nlohmann_json::nlohmann_json)
   gtest_discover_tests(test_map_run DISCOVERY_MODE PRE_TEST)
 
-  # The owner's version rules end to end: the request entry, the worker's hot mount and the session pin's decision, on the same
-  # Test edge as test_map_run.
-  add_executable(test_map_request "${CMAKE_CURRENT_LIST_DIR}/tests/map_request_test.cpp")
-  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/tests/map_request_test.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-  target_include_directories(test_map_request PRIVATE "${CMAKE_SOURCE_DIR}/src" "${_maps_monocypher_dir}")
-  target_link_libraries(test_map_request PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk
-    nlohmann_json::nlohmann_json)
-  gtest_discover_tests(test_map_request DISCOVERY_MODE PRE_TEST)
-
   # The session pin's pure part over a fake game (ADR 0048 decision 9): the level names and the pin value by their vectors, the
   # decision table, the notice fit, the view's replacement, the empty-state gate and the tick's events. No game, no Win32.
   add_executable(test_map_session_pin_core "${CMAKE_CURRENT_LIST_DIR}/tests/map_session_pin_test.cpp")
@@ -170,12 +158,4 @@ if(BUILD_TESTING AND GTest_FOUND)
   target_link_libraries(test_map_session_pin_core PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk
     nlohmann_json::nlohmann_json)
   gtest_discover_tests(test_map_session_pin_core DISCOVERY_MODE PRE_TEST)
-
-  # Same-owner replace (core/map_swap.h) on the Test edge's Env: swap, defer, restart, and the old keys never served after a swap.
-  add_executable(test_map_swap "${CMAKE_CURRENT_LIST_DIR}/tests/map_swap_test.cpp")
-  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/tests/map_swap_test.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-  target_include_directories(test_map_swap PRIVATE "${CMAKE_SOURCE_DIR}/src")
-  target_link_libraries(test_map_swap PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk
-    nlohmann_json::nlohmann_json)
-  gtest_discover_tests(test_map_swap DISCOVERY_MODE PRE_TEST)
 endif()

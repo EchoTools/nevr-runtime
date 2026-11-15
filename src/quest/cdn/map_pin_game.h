@@ -11,8 +11,8 @@
 namespace nevr_quest::maps::pin {
 
 // Proves the two functions and registers the tick, once. False (logged) when this libr15 is not the pinned build or the
-// dispatcher is full. The channel's start (map_service.cpp Start) is the one caller, so a run that gives no maps config installs
-// nothing.
+// dispatcher is full. Nothing calls it yet: the channel's start (a later piece) is the one caller, so a run that gives no maps
+// config installs nothing.
 bool InstallTick() noexcept;
 
 // The Quest's main level (rad_hash("<id>_lowspec") for a map) for ConfigAlias's main-level source; 0 until InstallTick proved this

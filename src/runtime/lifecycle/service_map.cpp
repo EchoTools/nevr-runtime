@@ -92,7 +92,6 @@ const std::unordered_map<std::string, std::string>& FlatKeyMap() {
       {"maps_trusted_keys", "maps.trusted_keys"},
       {"maps_channel", "maps.channel"},
       {"maps_boot_budget_ms", "maps.boot_budget_ms"},
-      {"maps_cache_cap_gib", "maps.cache_cap_gib"},
       // arena rule overrides (floats)
       {"arena_round_time", "arena.round_time"},
       {"arena_celebration_time", "arena.celebration_time"},

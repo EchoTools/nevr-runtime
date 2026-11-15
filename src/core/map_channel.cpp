@@ -79,10 +79,6 @@ Settings ReadSettings(const ScalarLookup& value, const ListLookup& list, const s
   s.base_url = base;
   s.channel = Trim(value("maps_channel"));
   s.boot_budget_ms = static_cast<std::uint32_t>(std::strtoul(value("maps_boot_budget_ms").c_str(), nullptr, 10));
-  const std::string cap = Trim(value("maps_cache_cap_gib"));
-  if (!cap.empty() && cap.find_first_not_of("0123456789") == std::string::npos && cap.size() <= 9) {
-    s.cache_cap_bytes = std::strtoull(cap.c_str(), nullptr, 10) << 30;
-  }
 
   std::vector<nevr_maps::PinnedKey> configured_official, author;
   if (!ReadKeys(list("maps_official_keys"), "maps.official_keys", true, &configured_official, &s) ||
@@ -242,7 +238,6 @@ Channel::Channel(nevr_maps::ChannelConfig config, const Settings& settings) : co
   config_.base_url = settings.base_url;
   config_.channel = settings.channel;
   config_.boot_budget_ms = settings.boot_budget_ms;
-  config_.cache_cap_bytes = settings.cache_cap_bytes;
   config_.keys = settings.keys;
   refusal_ = settings.reason;
   refusal_detail_ = settings.detail;
@@ -269,9 +264,7 @@ const BootResult& Channel::Boot(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_m
   config_.local_maps = LocalShadowIds(local_ids);
   // The cache index's groups, latest first: the mount reads them, and hashes nothing it has stamped (decision 4, ADR 0045 decision 7).
   mount_ = std::make_unique<nevr_maps::CacheMount>(env, fs, config_, mounter, deriver);
-  const std::vector<std::string> none;
-  result_.report = mount_->Mount(nevr_maps::CachedGroupIds(env, config_.dir), now_utc, config_.mount_on_demand ? &none : nullptr);
-  run_ = result_.report;
+  result_.report = mount_->Mount(nevr_maps::CachedGroupIds(env, config_.dir), now_utc);
   result_.reason = "ok";
   env.Event(nevr_cdn::EventLevel::kInfo, "map_start",
             {{"reason", "ok"},
@@ -281,78 +274,21 @@ const BootResult& Channel::Boot(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_m
   return result_;
 }
 
-void MergeMountReport(nevr_maps::MountReport& into, const nevr_maps::MountReport& later) {
-  std::set<std::string> settled(later.mounted.begin(), later.mounted.end());
-  settled.insert(later.kept.begin(), later.kept.end());
-  for (const auto& row : later.not_mounted) settled.insert(row.first);
-  auto& rows = into.not_mounted;
-  rows.erase(std::remove_if(rows.begin(), rows.end(), [&](const auto& row) { return settled.count(row.first) != 0; }), rows.end());
-  rows.insert(rows.end(), later.not_mounted.begin(), later.not_mounted.end());
-
-  std::set<std::string> listed;
-  for (const auto& row : into.listed) listed.insert(row.second);
-  for (const auto& row : later.listed)
-    if (listed.insert(row.second).second) into.listed.push_back(row);
-
-  into.mounted.insert(into.mounted.end(), later.mounted.begin(), later.mounted.end());
-  into.staged.insert(into.staged.end(), later.staged.begin(), later.staged.end());
-  into.refused.insert(into.refused.end(), later.refused.begin(), later.refused.end());
-  into.groups_refused.insert(into.groups_refused.end(), later.groups_refused.begin(), later.groups_refused.end());
-  into.deferred = later.deferred;
-}
-
-void Channel::ServeRequests(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_maps::Deriver* deriver,
-                            nevr_maps::MapRequests& requests, const std::function<std::string()>& now_utc,
-                            const std::function<bool()>& keep_going, const nevr_maps::FetchProgressFn& progress,
-                            const AfterMount& after) {
-  if (start_ != Start::kRun || !booted_ || !mount_) return;
-  while (keep_going() && !requests.stopped()) {
-    if (!requests.WaitForRequest(kServeWaitMs)) continue;
-    requests.RunNext([&](const std::string& group, const nevr_maps::FetchScope& asked) {
-      nevr_maps::FetchScope scope = asked;
-      scope.in_use = mount_->MountedIds();
-      const nevr_maps::FetchReport fetched =
-          nevr_maps::FetchGroup(env, fs, config_, group, run_.deferred, deriver, now_utc(), keep_going, progress, scope);
-      static const std::vector<std::string> kListOnly;  // every map of the group is listed and none mounts (mounts_mid_run false)
-      const std::vector<std::string>* only = !config_.mounts_mid_run    ? &kListOnly
-                                             : config_.mount_on_demand ? &asked.ids
-                                                                       : nullptr;
-      const nevr_maps::MountReport mounted = mount_->Mount({group}, now_utc(), only);
-      MergeMountReport(run_, mounted);
-      if (after) after(fetched, mounted, run_);
-      return fetched;
-    });
-  }
-}
-
 std::vector<nevr_maps::FetchReport> Channel::FetchPass(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_maps::Deriver* deriver,
                                                        const std::vector<std::string>& groups, const std::string& now_utc,
-                                                       const std::function<bool()>& keep_going, bool on_demand) {
+                                                       const std::function<bool()>& keep_going) {
   std::vector<nevr_maps::FetchReport> reports;
   if (start_ != Start::kRun || !booted_) return reports;
-  nevr_maps::FetchScope scope;
-  scope.on_demand = on_demand;
-  if (mount_) scope.in_use = mount_->MountedIds();
   for (const std::string& group : groups) {
     if (!keep_going()) break;
-    reports.push_back(
-        nevr_maps::FetchGroup(env, fs, config_, group, result_.report.deferred, deriver, now_utc, keep_going, nullptr, scope));
+    reports.push_back(nevr_maps::FetchGroup(env, fs, config_, group, result_.report.deferred, deriver, now_utc, keep_going));
   }
   return reports;
 }
 
-nevr_maps::FetchScope Channel::ServerGroupScope() const {
-  nevr_maps::FetchScope scope;
-  scope.server_group = true;
-  if (mount_) scope.in_use = mount_->MountedIds();
-  return scope;
-}
-
 nevr_maps::MountReport Channel::MountGroups(const std::vector<std::string>& groups, const std::string& now_utc) {
   if (start_ != Start::kRun || !booted_ || !mount_) return nevr_maps::MountReport();
-  const nevr_maps::MountReport mounted = mount_->Mount(groups, now_utc);
-  MergeMountReport(run_, mounted);
-  return mounted;
+  return mount_->Mount(groups, now_utc);
 }
 
 // ---- FetchWorker -------------------------------------------------------------------------------------------------------------------

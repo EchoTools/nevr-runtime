@@ -41,7 +41,6 @@
 #include "runtime/patch/binary_bug_fixes.h"
 
 #include "runtime/frame/frame_stats.h"
-#include "runtime/hook/load_timing.h"
 #include "runtime/frame/tick.h"
 #include "runtime/patch/mode_patches.h"
 #include "runtime/hook/hook_liveness.h"
@@ -195,7 +194,6 @@ static uint64_t __fastcall GetTimeMicrosecondsHook() {
     // The ring push is wait-free and logs nothing (frame_stats.h).
     if (nevr_frame_stats::IsLoopHeadReturn(reinterpret_cast<uintptr_t>(__builtin_return_address(0)), g_base)) {
         nevr_frame_stats::OnLoopHead(QpcMicroseconds());
-        nevr_load_timing::OnLoopFrame();
     }
     // Replicate the original's global override check.
     // When the engine pauses or fixes time, it sets a flag and cached value.

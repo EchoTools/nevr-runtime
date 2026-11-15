@@ -96,9 +96,6 @@ struct PlatformEntry {
 struct MapEntry {
   std::string title, author;
   Pin thumbnail;
-  // Signed per map: its set may replace the game's level of the same name (mnu_master, mpl_lobby_b2). Honoured only under a key
-  // compiled into the build (docs/adr/0048-custom-maps-channel.md, "Amendment proposed: stock overrides").
-  bool overrides = false;
   std::map<std::string, PlatformEntry> platforms;  // keyed by kPlatformPc / kPlatformQuest
 };
 

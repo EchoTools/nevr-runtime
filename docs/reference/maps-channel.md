@@ -24,7 +24,6 @@ optional. `docs/reference/example-config.yaml` shows the section.
 | `maps.base_url` | string (URL) | empty: channel off | The base URL. A trailing `/` is added when it is missing. A group's manifest is read from `guilds/<group id>/manifest` under it (`GroupManifestUrl`, `core/map_run.h`). |
 | `maps.channel` | string | empty | The channel name the base URL is bound to. Empty: the name of the first verified manifest (`core/map_channel.h`). |
 | `maps.boot_budget_ms` | non-negative integer, milliseconds | 0: no limit | How long one boot mount may take. A map that would start after the budget is spent is skipped with `reason=boot_budget`. |
-| `maps.cache_cap_gib` | non-negative integer, GiB | 20 | The map cache's cap. A fetch that would pass it first removes the least recently played maps (never one this run mounted); when that frees too little the map fails `over_budget` and the request says so. Old versions of an updated map are removed after the index commit. 0: no cap (the device's storage share still applies). |
 | `maps.official_keys` | list of minisign public keys | empty | Keys in official trust. They are never compiled in: the build compiles in no official key (`CompiledOfficialKeys`, `core/map_channel.cpp`). |
 | `maps.trusted_keys` | list of minisign public keys | empty | Author keys. They are not official. |
 
@@ -143,7 +142,6 @@ All records carry the tag `[NEVR.MAPS]`. The full table, with each event's field
 | `map hold off reason=no_group` | A dedicated server's session names no group to fetch: the session starts on the stock maps. |
 | `map_start reason=bad_key` / `reason=mixed_keys` | The configuration is refused; nothing is mounted. |
 | `map_skipped reason=local_map` | A CDN map is skipped because a local copy wins. The local name is in `local_name`. |
-| `map_mounted refused=stale` | The cache holds a version no verified manifest lists now; the map does not mount until the next fetch stores the listed one. |
 | `map script refused reason=<token>` | A map script is not served. The token is in `core/map_script_check.h` or `core/script_image_rules.h`. |
 | `map_skew reason=version` / `reason=not_mounted` | The client is leaving a session whose map version it does not match. |
 | `map_pin status=off reason=<token>` | The session pin did not install; the token names the check that failed. |

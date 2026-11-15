@@ -48,9 +48,6 @@ struct CachedMap {
   FileStamp index_stamp;
   std::vector<CachedFile> files;
   std::vector<StockStamp> stock_stamps;  // the stock files the rebuild read
-  // When a session last played the map, in the manifests' fixed-width UTC form (text order is time order); "" = never. The cache
-  // budget evicts the least recently played first. An index written before this field reads as never.
-  std::string last_played_utc;
   bool operator==(const CachedMap& o) const;
 };
 

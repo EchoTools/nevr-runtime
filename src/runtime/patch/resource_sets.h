@@ -56,13 +56,6 @@ void NoteRequest();
 // from it.
 void OnFrame(bool onLoopThread);
 
-// The channel's worker, after it registered the sets of maps fetched mid-run: the next frame mounts them in a later mount
-// (core LaterMountView), publishes their shadow beside the earlier ones, and calls the mount observer. Any thread.
-void MountLaterSets();
-
-// True when a set of `owner` is registered and waits for the next later mount (the one running now, if any, does not carry it).
-bool AwaitsLaterMount(const std::string& owner);
-
 // The resolver's question for one request made to `manager`: the shadow manager to fill it from when a mounted set
 // holds (type, name) and `manager`'s manifest does not, else null (the game's own manifest answers). No lock, no
 // allocation, no log line.

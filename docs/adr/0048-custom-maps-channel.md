@@ -149,54 +149,14 @@ the arena override's precedence line in `src/runtime/lifecycle/arena_rules_hook.
 core and both game halves (`map_session_pin.h`, `runtime/content/map_session_pin_game.cpp` on the PC,
 `quest/cdn/map_pin_game.cpp` on the Quest). The PC calls its tick every frame (`src/runtime/frame/tick.cpp`), and its login
 carries the pins (`LoginEntries`, `src/runtime/compat/ws_bridge.cpp`). The Quest's login sets `map_report` to `LoginEntries`
-(`src/quest/integration/production_steps.cpp`). `RegistrationEntries` has no caller (KNOWN-WRONG #TBD at that site).
-
-The Quest's request entry is wired (`src/quest/cdn/map_service.cpp` `Start`): a `MapRequests` behind `InstallRequestSeams`, so the
-shared session router's `RequestSessionGroup` asks for the session's group and the session pin (`InstallTick`, with the boot's
-view) asks for the one map the Quest lacks; the worker answers both on demand after its background pass (`ServeRequests`). The
-Quest's map sets mount once per run (`src/quest/sentinel/map_sets.h` `Mount`), so its channel runs with `mounts_mid_run` false:
-a request's mount only lists the group, the map downloads now and mounts at the next start, and the pin's notice and the
-`map_request` record say so ("restart the game to play it").
+(`src/quest/integration/production_steps.cpp`). `RegistrationEntries` has no caller, and the Quest's `InstallTick` has no caller
+(KNOWN-WRONG #TBD at each site).
 
 The server's group fetch and its join hold are wired. The PC boot runs the channel on a dedicated server, and `StartFetch` starts a
 server worker (`StartServerWorker`, `src/runtime/content/map_channel.cpp`) that fetches only the group the server is allocated
 for. That worker registers `SetRequestFetch`, so `OnSessionCreate` (`src/runtime/server/map_hold.cpp`, called from
 `src/runtime/server/gameserver_callbacks.cpp`) arms the maps hold (`src/core/map_server_hold.h`, `src/runtime/server/join_hold.cpp`).
 The signed-only rule of decision 18 is `ServerMountsScripts`, which the mount calls (`src/core/map_run.cpp`).
-
-Every session create checks its group again, also when its maps are mounted (`MapsArm` returns `kRecheck` and the joins wait for
-the manifest check). A new version of a mounted map cannot be hosted in the process (a mounted set is never replaced:
-`mounted_other_version`), so the hold stands with no deadline, a `map update` Warning names the maps, and the server exits
-through its graceful shutdown once its session has no entrant (`MapsRestartForUpdateDue`, `src/runtime/server/gameserver.cpp`),
-never mid-match. Its restart mounts the new version at boot. This needs a supervisor that restarts an exited server. A failed
-check of a mounted group lifts the hold with a Warning: the session goes ahead on what is mounted.
-
-What the restart-for-update plan depends on, for the operator:
-- A supervisor that restarts an exited server is required. Without one the server stays down after the exit, and the only
-  signal is the `map update` Warning.
-- Once a check found an update, the server exits at its next empty session even when the update was for a group the hold was
-  not holding (`g_updateWaits` is set for any update the check finds).
-- A CDN that never answers holds every session's joins for the maps hold's timeout (at most 120 s), since the check runs at
-  every session create.
-
-A server fetches its group with `Channel::ServerGroupScope`: every map the process mounted is never evicted (the mount holds
-only the set file, so an eviction would delete the rest of a mounted map's files under the running server), and the group is
-stored whole even past `maps.cache_cap_gib`. Refusing a map of a server's group would leave the whole group unmounted, so the
-cap still evicts every other map it may evict, and a group that alone needs more logs `map group over cap` with what it needs
-and the cap; only the device's storage share refuses a map then. Once the group's manifest verified, what was stored mounts even
-when one map failed (`map group partial` names it); `map check failed` (with its `reason`) is written only when the manifest
-itself could not be had or verified.
-
-Known limit: an eviction drops the map from the index before its directory is deleted. A directory that cannot be deleted (a
-file in it is held open) keeps its bytes on disk while the budget counts them as freed, until a later GC deletes it as
-unlisted. Maps this process mounted are never evicted, so this needs a file held by something else.
-
-The client's join hold waits inside the game's `LoadLevel` only off the game's loop thread (`WaitWhileJoinHeld`,
-`src/runtime/hook/load_timing.cpp`): which thread runs the game-space init fiber is not read from the binary, and waiting on the
-loop thread would stop the frame that mounts the map. The hold is offered only after a level load was seen off that thread, and
-the first load logs `level load thread=... join_hold=hold|leave`. A load on the loop thread never waits: the join leaves with
-"Downloading <id>; join again when it is ready." while the download goes on. A later mount that refuses the held map's set
-makes the join leave ("could not be loaded this run"); the mounted pins name only the sets the registry confirmed.
 
 ## Consequences
 
@@ -216,40 +176,3 @@ makes the join leave ("could not be loaded this run"); the mounted pins name onl
   enumerates.
 - An attacker who can rewrite `%LOCALAPPDATA%\nevr` and restore file stamps can already replace nevr (ADR 0010): not defended.
 - Expiry blocks scripted maps only, so script-free maps keep working offline.
-
-## Amendment proposed: stock overrides
-
-Status: proposed, in its own commit. The maintainer may drop that commit; decisions 5 and 8 above are unchanged until this is
-accepted.
-
-The owner wants to push an update to a stock level, such as `mpl_lobby_b2` or `mnu_master`, and have the client load it over the
-original. Decision 5 ("maps only add resources") and decision 8 ("a map never replaces a stock name") refuse that today, in two
-places: `Registry::Mount` refuses a set holding a key the game has (`stock_key`), and the resolver (`ManagerFor`) answers from the
-game whenever the game holds the key. The proposal changes both decisions for one signed case only:
-
-1. **The permission is signed, per map.** A map entry may carry `"overrides": true`. It is honoured only when the manifest
-   verified under a key compiled into the build (`compiled_official`, decision 7). Under any other key the entry is refused
-   `override_unofficial`: it is never fetched, and a copy fetched earlier is never mounted.
-2. **The override is a shadow layer the stock lookup consults first.** The channel grants the map a stock override
-   (`Mounter::StockOverride`) before its set. The registry then lets that set hold keys the game has, but never a key another set
-   of the run serves, so two mounts still never answer one key. The resolver serves an override's keys before the game's copy.
-   Every other set still yields to the game.
-3. **When it takes effect.** A mounted set is never replaced in the process, so:
-   - `mnu_master` takes effect at the next start. The boot mount runs before the first level load, and the level stays loaded.
-   - `mpl_lobby_b2` takes effect the next time the lobby loads, when the override was fetched this run and mounted by a later
-     mount. An update to an override that is already mounted takes effect at the next start (`mounted_other_version`).
-   - An on-demand pass fetches an official override unasked, and a mount on demand mounts it unasked, because every player loads
-     the level it replaces.
-4. **Never a stale copy; the stock level is the fallback.** A cached override that no verified manifest lists is refused `stale`.
-   Any refusal (`override_unofficial`, `override_unsupported`, `stale`, a failed fetch, a `stock_key` clash) registers no set, so
-   the game's own level loads. The menu can never be lost.
-5. **Version agreement.** The session pin (decision 9) is keyed by level, so a server that mounted the `mpl_lobby_b2` override
-   pins it, and a client at another version is handled as for any map. The gap: a server without the override writes no pin. A
-   client that holds the override then sees `kUnpinned` and plays its own copy. It cannot fall back to stock mid-run, because a
-   mounted set is never replaced. This is left open: closing it needs a pin for "stock" that servers write.
-6. **Platforms.** The PC serves overrides. The Quest mounter does not implement `StockOverride`, so the Quest refuses an override
-   `override_unsupported` and loads stock. The Quest still fetches the entry when its manifest lists a Quest platform; publish
-   overrides for the PC platform only until the Quest serves them.
-
-Not verified in game: what the engine does when one level key is held twice (stock package and shadow), on load, unload and
-reload of the lobby, and with the menu at boot.
