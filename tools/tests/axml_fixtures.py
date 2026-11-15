@@ -1,11 +1,12 @@
-"""A binary AndroidManifest.xml (Android's compiled XML, "AXML") built by hand, for the tests of
-tools/quest_apk_version.py, tools/quest_apk_label.py and tools/quest_apk_rename_package.py.
+"""A binary AndroidManifest.xml (Android's compiled XML, "AXML") built by hand, for the Python tests of
+tools/quest_apk_version.py, tools/quest_apk_label.py and tools/quest_apk_rename_package.py. The Go twin is
+tools/internal/axmlfix; this copy stays for test_package_release.py and test_quest_release_base.py until they port.
 
 The layout is the one aapt2 writes (frameworks/base/libs/androidfw/include/androidfw/ResourceTypes.h):
 an XML document chunk holding a string pool, a resource map (one resource id per leading string: the id is
 what Android looks an attribute up by, the name is only a label), then the namespace and element chunks.
-Every test that builds a manifest here is also run against the real store APK's manifest when the file is
-present (test_quest_apk_version.py), so a builder that mirrors a misreading of the format is caught.
+The Go tests that build a manifest run it through aapt2 (a reader that is not ours), so a builder that mirrors a
+misreading of the format is caught there.
 """
 
 from __future__ import annotations
