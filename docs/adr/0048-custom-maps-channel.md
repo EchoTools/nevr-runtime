@@ -80,8 +80,8 @@ session they are in is the lobby group id.
    Two cases do not leave, and the decision table (`map_session_pin.h`) keeps both:
    - **`kUnpinned`.** A session whose owner JSON states no pin (`nevr_map_pin` 0) is logged as `map_unpinned` and the client stays.
      The client has no version to compare, and a server that states none has nothing to match; leaving would split the players of
-     every server that does not write a pin. What would change it: every server writing a pin. The channel does not serve dedicated
-     servers yet (see What is built).
+     every server that does not write a pin. What would change it: every server writing a pin, which needs the registration report
+     (KNOWN-WRONG #TBD, decision 9 above).
    - **`kLocal` (PC only).** A client that holds a local copy of the session's map (a hand-installed level file, decision 8) stays
      in the session and logs `local_map` once, as a Warning. The copy is the player's own file, and leaving would stop every session
      of that map for a player who keeps it. What would change it: a rule that a hand-installed copy never plays a channel session;
@@ -137,11 +137,12 @@ nothing, and `maps.official_keys` and `maps.trusted_keys` are read with the `mix
 
 The channel's starts are built. The PC boots the channel from `src/runtime/lifecycle/boot.cpp` (`nevr_map_channel::pc::Boot`,
 then `StartFetch`), with the PC glue in `src/runtime/content/map_channel.cpp`. The Quest starts it from
-`src/quest/integration/production_steps.cpp` (`StartFromConfig`, `src/quest/cdn/map_start.cpp`). Both pass no seams
-(`NoSeams()`): no group is named to the background pass, and no local level or id is supplied. So no group is fetched, the
-session request is not set (`SetSessionGroupRequest` has no caller, so a session success logs `session group no_channel`), and
-no CDN map is skipped as local (decision 8: the core decides it, `src/core/map_local_precedence.cpp`, but nothing gives it
-names). KNOWN-WRONG #TBD at each of these sites.
+`src/quest/integration/production_steps.cpp` (`StartFromConfig`, `src/quest/cdn/map_start.cpp`, which calls `Start` in
+`src/quest/cdn/map_service.cpp`). Both give the background pass the recorded groups (`RecordedGroupSeams`: this run's session
+requests merged with the cache index's groups), and both arm the session request (`ArmSessionGroupRequest` sets
+`SetSessionGroupRequest`), so a session success queues its group. No local level name or local id is supplied on either
+platform (`local_level_names` is never assigned; `local_map_ids` is unset), so no CDN map is skipped as local (decision 8: the
+core decides it, `src/core/map_local_precedence.cpp`, but nothing gives it names). KNOWN-WRONG #TBD at that site.
 
 The config-alias hooks are built (`src/runtime/content/config_alias_hook.cpp`, `src/quest/sentinel/config_alias_hook.cpp`, with
 the arena override's precedence line in `src/runtime/lifecycle/arena_rules_hook.cpp`). The session pin (decision 9) has its pure
@@ -151,12 +152,11 @@ carries the pins (`LoginEntries`, `src/runtime/compat/ws_bridge.cpp`). The Quest
 (`src/quest/integration/production_steps.cpp`). `RegistrationEntries` has no caller, and the Quest's `InstallTick` has no caller
 (KNOWN-WRONG #TBD at each site).
 
-The server's group fetch and its join hold have their rules built in `src/core/map_server_hold.h` and their PC glue in
-`src/runtime/server/map_hold.cpp` and `src/runtime/server/join_hold.cpp`. The PC boot does not start the channel on a dedicated
-server (`map_start reason=server_not_served`, `src/runtime/content/map_channel.cpp`), and `SetRequestFetch` has no caller, so
-`OnSessionCreate` returns before it arms a hold: the hold is inert (KNOWN-WRONG #TBD). The server mount (decision 18) has its
-signed-only rule written as `ServerMountsScripts`, which nothing calls yet: the mount tests the same rule inline
-(`src/core/map_run.cpp`), so the two are one rule in two places until the channel's mount calls the function.
+The server's group fetch and its join hold are wired. The PC boot runs the channel on a dedicated server, and `StartFetch` starts a
+server worker (`StartServerWorker`, `src/runtime/content/map_channel.cpp`) that fetches only the group the server is allocated
+for. That worker registers `SetRequestFetch`, so `OnSessionCreate` (`src/runtime/server/map_hold.cpp`, called from
+`src/runtime/server/gameserver_callbacks.cpp`) arms the maps hold (`src/core/map_server_hold.h`, `src/runtime/server/join_hold.cpp`).
+The signed-only rule of decision 18 is `ServerMountsScripts`, which the mount calls (`src/core/map_run.cpp`).
 
 ## Consequences
 

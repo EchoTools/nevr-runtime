@@ -59,25 +59,31 @@ Downloaded maps live in `<nEVR root>\cache\maps\` (`MapsCacheDir`, `src/core/nev
 - The boot calls the channel's boot mount (`nevr_map_channel::pc::Boot`) after the plugins load, then its background
   pass starts (`StartFetch`), both from `src/runtime/lifecycle/boot.cpp`. The boot mount reads the cache index and mounts
   cached groups with no network.
-- The background pass fetches the groups the channel's seams give it. The PC passes no seams (`NoSeams()`,
-  `src/runtime/content/map_channel.cpp`), so the pass has no group to fetch. KNOWN-WRONG #TBD: nothing fetches a group yet.
-- The session request is not set. `SetSessionGroupRequest` has no caller (`src/core/map_groups.h`), so each lobby session
-  success logs `session group no_channel group=<id>` and asks for nothing.
-- `StopFetch` is not called from the shutdown path. KNOWN-WRONG #TBD.
+- The background pass fetches the groups `RecordedGroupSeams` names (`src/runtime/content/map_channel.cpp`): this run's
+  session requests, merged with the groups the cache index holds, filtered by `FetchGroups`.
+- A lobby session success queues its group for that pass. `ArmSessionGroupRequest` (`src/core/map_channel.cpp`) sets
+  `SetSessionGroupRequest` to `RecordRequestedGroup` once the boot returns a running channel. The session logs
+  `session group requested group=<id>`; without a running channel it logs `no_channel`.
+- `StopFetch` (`src/runtime/content/map_channel.cpp`) has no caller, so the PC shutdown path does not stop the fetch.
+  KNOWN-WRONG #TBD.
 
 ### Quest client
 
 - `StartFromConfig` (`src/quest/cdn/map_start.cpp`) is called from the sentinel's integration step that runs after the
-  `CFile` request-log hook installs (`src/quest/integration/production_steps.cpp`).
-- Like the PC, it passes no seams, so the background pass has no group to fetch. KNOWN-WRONG #TBD.
+  `CFile` request-log hook installs (`src/quest/integration/production_steps.cpp`). It calls `Start`
+  (`src/quest/cdn/map_service.cpp`).
+- `Start` arms the session request (`ArmSessionGroupRequest`) and its background pass fetches the same
+  `RecordedGroupSeams` groups as the PC.
 - The Quest's mounter is built with `signed_only` false (`src/quest/cdn/map_service.cpp`).
 
 ### Local copies (ADR 0048 decision 8)
 
 The core decides local precedence (`src/core/map_local_precedence.h`, `DecideLocalPrecedence`; used in `src/core/map_run.cpp`):
-a CDN map whose id or level name matches a local copy is skipped with `map_skipped reason=local_map`. Neither platform
-supplies the names: `local_level_names` is never set, and the local ids come from `NoSeams()`. So today the channel skips
-nothing as local. KNOWN-WRONG #TBD. The session pin's own `local_map` record (PC only, below) does work.
+a CDN map whose id or level name matches a local copy is skipped with `map_skipped reason=local_map`. The names come from
+`ChannelConfig::local_level_names` and `local_map_ids`, and neither platform supplies them: `local_level_names` is never
+assigned in production code, the PC boot passes an empty list (`src/runtime/content/map_channel.cpp`), and the Quest boot
+passes `{}` (`src/quest/cdn/map_service.cpp`). So today the channel skips nothing as local. KNOWN-WRONG #TBD: no reader of
+hand-installed copies exists on either platform. The session pin's own `local_map` record (PC only, below) does work.
 
 ### Session pin (ADR 0048 decision 9)
 
@@ -93,12 +99,16 @@ leave: a session that states no pin (`map_unpinned`), and a client with a local 
 
 ### Dedicated server
 
-- The PC boot logs `map_start reason=server_not_served` and starts no channel on a dedicated server
-  (`src/runtime/content/map_channel.cpp`). KNOWN-WRONG #TBD: a server does not fetch its group's maps yet.
-- The server's join hold has its rules in `src/core/map_server_hold.h` and its glue in `src/runtime/server/map_hold.cpp` and
-  `src/runtime/server/join_hold.cpp`. `OnSessionCreate` returns before it arms anything while no request function is set,
-  and `SetRequestFetch` has no caller. So the maps hold is inert today: no join waits for maps. KNOWN-WRONG #TBD.
-- Joins are held only by the levels hold (`network.join_hold_ms`, `docs/reference/join-hold.md`).
+- The PC boot runs the channel on a dedicated server too: `src/runtime/lifecycle/boot.cpp` passes `is_server` to
+  `nevr_map_channel::pc::Boot`. `StartFetch` starts a server worker (`StartServerWorker`, `src/runtime/content/map_channel.cpp`)
+  instead of the background pass, and that worker fetches only the group the server is allocated for.
+- The session create arms the worker. `nevr_map_hold::OnSessionCreate` (called from `src/runtime/server/gameserver_callbacks.cpp`)
+  takes the allocated group, arms the maps hold (`src/core/map_server_hold.h`, `src/runtime/server/map_hold.cpp`), and asks the
+  worker for the group through `RequestServerGroup`, which `SetRequestFetch` registers. A session with no group, or with a
+  group that is already mounted, logs `map hold off` and arms nothing.
+- The hold lifts when the group mounts (`map hold released`) or times out (`map hold timeout`; the session then starts on
+  stock content). It is separate from the levels hold (`network.join_hold_ms`, `docs/reference/join-hold.md`).
+- Without `maps.base_url` no request function is set, so no hold is armed.
 
 ### Signed-only runs
 
@@ -129,7 +139,7 @@ All records carry the tag `[NEVR.MAPS]`. The full table, with each event's field
 | --- | --- |
 | `map_start reason=not_configured` | No `maps.base_url`: the channel does not run. |
 | `map_start reason=ok` | The channel runs; `mounted`, `deferred` and `local` count its maps. |
-| `map_start reason=server_not_served` | A dedicated server: the channel does not run (see Dedicated server). |
+| `map hold off reason=no_group` | A dedicated server's session names no group to fetch: the session starts on the stock maps. |
 | `map_start reason=bad_key` / `reason=mixed_keys` | The configuration is refused; nothing is mounted. |
 | `map_skipped reason=local_map` | A CDN map is skipped because a local copy wins. The local name is in `local_name`. |
 | `map script refused reason=<token>` | A map script is not served. The token is in `core/map_script_check.h` or `core/script_image_rules.h`. |
@@ -143,12 +153,9 @@ Map file contents are never logged. A script's bytes are never logged. A path or
 
 ## Known gaps, in one list
 
-Every `KNOWN-WRONG #TBD` on this page is a place where the code states a part is not wired yet:
+Every `KNOWN-WRONG #TBD` on this page marks a part the code states is not wired yet:
 
-- No group is fetched on the PC or the Quest (no seams are passed).
-- The session group request is not set, so `session group no_channel` is logged on every success.
-- No local level name is supplied, so local precedence does not skip any CDN map.
-- `StopFetch` is not called from the PC shutdown path.
-- A dedicated server does not start the channel, and its maps hold is inert.
-- `RegistrationEntries` is not called, so a server does not report its pin at registration.
-- The Quest's `InstallTick` is not called, so the Quest does not run the pin's tick.
+- `StopFetch` has no caller, so the PC shutdown path does not stop the background fetch.
+- `RegistrationEntries` has no caller, so a server does not report its pin at registration.
+- The Quest's `InstallTick` has no caller, so the Quest does not run the pin's tick.
+- No local level name or local map id is supplied on either platform, so local precedence does not skip any CDN map.
