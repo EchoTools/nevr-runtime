@@ -165,6 +165,21 @@ func (p *Pack) Rekey(name, stockSource string) error {
 type Step struct {
 	Name  string
 	Apply func(p *Pack) error
+	// Writes are the fields of the records the step changes, as the oracle test (oracle_test.go) compares them with
+	// another build's output of the same records. A step compares only what it declares: a byte it does not declare
+	// is not its claim.
+	Writes []Field
+}
+
+// Field is one part of a record a step writes: the same part of each named record of Set and Type is read out by Read
+// and compared. Read is the rule's own view of the record (a row, a byte range, a list's entries), so a field survives
+// rows that move when the step adds one.
+type Field struct {
+	Name    string
+	Set     string
+	Type    uint64
+	Records []uint64
+	Read    func(record []byte) ([]byte, error)
 }
 
 // steps is the build's list, in order. The EchoCombat pack's steps join it one slice at a time (#600).

@@ -37,10 +37,67 @@ var droneLevels = []uint64{0x42670f2bed45703c, 0x43e2da7914642604, 0x43e2da7a0c6
 
 func init() {
 	steps = append(steps,
-		Step{Name: "drone bullet takes the assault bullet's effects", Apply: forEachLevel(bulletTableType, droneBulletEffects)},
-		Step{Name: "drone bullet gets the assault bullet's particle rows", Apply: forEachLevel(particleTableType, droneParticleRows)},
-		Step{Name: "drone actor runs script 190ed14fe6c74dd3", Apply: forEachLevel(scriptTable, droneScriptRow)},
+		Step{Name: "drone bullet takes the assault bullet's effects", Apply: forEachLevel(bulletTableType, droneBulletEffects),
+			Writes: []Field{{Name: "drone bullet row, particle-effect ids +0x58..+0x68", Set: Sets[0], Type: bulletTableType, Records: droneLevels,
+				Read: readDroneBulletEffects}}},
+		Step{Name: "drone bullet gets the assault bullet's particle rows", Apply: forEachLevel(particleTableType, droneParticleRows),
+			Writes: []Field{{Name: "particle rows of the drone bullet", Set: Sets[0], Type: particleTableType, Records: droneLevels,
+				Read: readRowsWhere(keyOff, droneBullet)}}},
+		Step{Name: "drone actor runs script 190ed14fe6c74dd3", Apply: forEachLevel(scriptTable, droneScriptRow),
+			Writes: []Field{{Name: "script rows of script 190ed14fe6c74dd3 for the drone actor", Set: Sets[0], Type: scriptTable, Records: droneLevels,
+				Read: readScriptRowsOfDrone}}},
 	)
+}
+
+// readDroneBulletEffects is the drone bullet row's two particle-effect ids.
+func readDroneBulletEffects(b []byte) ([]byte, error) {
+	t, err := radpack.ParseRowTable(b)
+	if err != nil {
+		return nil, err
+	}
+	drone := t.Find(keyOff, droneBullet)
+	if drone < 0 || t.Size < effectsOff+effectsLen {
+		return nil, fmt.Errorf("no drone bullet row (%d) of %d bytes", drone, t.Size)
+	}
+	return t.Rows[drone][effectsOff : effectsOff+effectsLen], nil
+}
+
+// readRowsWhere is a reader of the rows whose u64 at off is v, in table order.
+func readRowsWhere(off int, v uint64) func([]byte) ([]byte, error) {
+	return func(b []byte) ([]byte, error) {
+		t, err := radpack.ParseRowTable(b)
+		if err != nil {
+			return nil, err
+		}
+		if t.Size < off+8 {
+			return nil, fmt.Errorf("rows of %d bytes end before +%#x", t.Size, off)
+		}
+		var out []byte
+		for _, r := range t.Rows {
+			if radpack.U64(r, off) == v {
+				out = append(out, r...)
+			}
+		}
+		return out, nil
+	}
+}
+
+// readScriptRowsOfDrone is the rows that run script 190ed14fe6c74dd3 for the drone actor.
+func readScriptRowsOfDrone(b []byte) ([]byte, error) {
+	t, err := radpack.ParseRowTable(b)
+	if err != nil {
+		return nil, err
+	}
+	if t.Size < keyOff+8 {
+		return nil, fmt.Errorf("script rows of %d bytes end before the actor id at +%#x", t.Size, keyOff)
+	}
+	var out []byte
+	for _, r := range t.Rows {
+		if radpack.U64(r, 0) == sharedScript && radpack.U64(r, keyOff) == droneActor {
+			out = append(out, r...)
+		}
+	}
+	return out, nil
 }
 
 func forEachLevel(typ uint64, rule func(*radpack.RowTable) error) func(*Pack) error {

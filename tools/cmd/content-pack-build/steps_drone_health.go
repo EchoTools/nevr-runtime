@@ -36,7 +36,33 @@ const (
 )
 
 func init() {
-	steps = append(steps, Step{Name: "damageable health of actor 10e40287a9bf5a13 9999 to 70", Apply: forEachLevel(damageableTable, droneHealthRow)})
+	steps = append(steps, Step{Name: "damageable health of actor 10e40287a9bf5a13 9999 to 70", Apply: forEachLevel(damageableTable, droneHealthRow),
+		Writes: []Field{{Name: "damageable record of the drone actor, health f32 +0x24", Set: Sets[0], Type: damageableTable, Records: droneLevels,
+			Read: readDroneHealth}}})
+}
+
+// readDroneHealth is the f32 at +0x24 of the one damageable record of the drone actor.
+func readDroneHealth(b []byte) ([]byte, error) {
+	t, err := radpack.ParseRowTable(b)
+	if err != nil {
+		return nil, err
+	}
+	if t.Size < healthEnd {
+		return nil, fmt.Errorf("damageable rows of %d bytes end before the health at +%#x", t.Size, healthOff)
+	}
+	at := -1
+	for i, r := range t.Rows {
+		if radpack.U64(r, keyOff) == droneActor {
+			if at >= 0 {
+				return nil, fmt.Errorf("more than one damageable record for the drone actor (rows %d and %d), expected 1", at, i)
+			}
+			at = i
+		}
+	}
+	if at < 0 {
+		return nil, fmt.Errorf("no damageable record for the drone actor %016x, expected 1", uint64(droneActor))
+	}
+	return t.Rows[at][healthOff:healthEnd], nil
 }
 
 // droneHealthRow sets the drone's health in one level's damageable table. A drone already at the target is left as it

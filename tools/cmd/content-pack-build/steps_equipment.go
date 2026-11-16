@@ -37,7 +37,54 @@ var equipmentAdds = []struct {
 }
 
 func init() {
-	steps = append(steps, Step{Name: "equipment lists offer magnum, smg, chain, rifle, loc, dot and drone", Apply: equipmentLists})
+	var writes []Field
+	for _, add := range equipmentAdds {
+		writes = append(writes, Field{Name: "gear_table." + add.list + ": the added entries", Set: Sets[0], Type: jsonResourceType,
+			Records: []uint64{equipmentName}, Read: readAddedGear(add.list)})
+	}
+	steps = append(steps, Step{Name: "equipment lists offer magnum, smg, chain, rifle, loc, dot and drone", Apply: equipmentLists, Writes: writes})
+}
+
+// readAddedGear is a reader of the entries (name and display_name, as JSON lines) of gear_table.<list> that equipmentAdds
+// names for it, in the list's order: an entry of the stock list, or a key of an entry other than those two, is not read.
+func readAddedGear(list string) func([]byte) ([]byte, error) {
+	return func(b []byte) ([]byte, error) {
+		if len(b) < jsonHeader || binary.LittleEndian.Uint64(b[jsonLengthOff:]) != uint64(len(b)-jsonHeader) {
+			return nil, fmt.Errorf("not a JSON resource of %d bytes (a 0x220-byte header whose +8 is the body's length)", len(b))
+		}
+		var doc struct {
+			Gear map[string]json.RawMessage `json:"gear_table"`
+		}
+		if err := json.Unmarshal(b[jsonHeader:], &doc); err != nil {
+			return nil, err
+		}
+		var entries []gearEntry
+		if raw, ok := doc.Gear[list]; !ok {
+			return nil, fmt.Errorf("gear_table has no %q", list)
+		} else if err := json.Unmarshal(raw, &entries); err != nil {
+			return nil, fmt.Errorf("gear_table.%s: %w", list, err)
+		}
+		added := map[string]bool{}
+		for _, add := range equipmentAdds {
+			if add.list == list {
+				for _, e := range add.entries {
+					added[e.Name] = true
+				}
+			}
+		}
+		var out bytes.Buffer
+		for _, e := range entries {
+			if added[e.Name] {
+				j, err := json.Marshal(e)
+				if err != nil {
+					return nil, err
+				}
+				out.Write(j)
+				out.WriteByte('\n')
+			}
+		}
+		return out.Bytes(), nil
+	}
 }
 
 func equipmentLists(p *Pack) error {

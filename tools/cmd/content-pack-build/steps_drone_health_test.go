@@ -133,3 +133,23 @@ func TestTheDroneHealthStepChangesTheFiveCombatLevelsAndNoOther(t *testing.T) {
 		t.Error("a level that is not a combat level was changed")
 	}
 }
+
+func TestTheDroneHealthFieldReadsOnlyTheDronesHealth(t *testing.T) {
+	tb := parse(t, table(damageableRow, nil, healthRow(0xa1, stockHealth), healthRow(droneActor, stockHealth)))
+	if err := droneHealthRow(tb); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readDroneHealth(tb.Bytes())
+	if err != nil || len(got) != 4 || math.Float32frombits(binary.LittleEndian.Uint32(got)) != droneHealth {
+		t.Errorf("drone health field %x, %v", got, err)
+	}
+	if _, err := readDroneHealth(table(damageableRow, nil, healthRow(0xa1, stockHealth))); err == nil {
+		t.Error("a table with no drone record was read")
+	}
+	if _, err := readDroneHealth(table(damageableRow, nil, healthRow(droneActor, 1), healthRow(droneActor, 2))); err == nil {
+		t.Error("a table with two drone records was read")
+	}
+	if _, err := readDroneHealth(table(hpAt, nil, row(hpAt, map[int]uint64{keyOff: droneActor}))); err == nil {
+		t.Error("rows that end before the health were read")
+	}
+}
