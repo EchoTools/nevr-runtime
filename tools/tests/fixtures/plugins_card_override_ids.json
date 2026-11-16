@@ -1,5 +1,5 @@
 {
   "override_file": "0xa691ec467180d00c.0xac360e41e4ede056",
-  "tutorials": {"offset": 4080, "component": "0x35ec861316abbb35"},
-  "plugins": {"offset": 5616, "component": "0x35ec861316abbbf1"}
+  "tutorials": {"offset": 4080},
+  "plugins": {"offset": 5616}
 }
