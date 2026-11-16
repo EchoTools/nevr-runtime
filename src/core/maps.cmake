@@ -158,4 +158,12 @@ if(BUILD_TESTING AND GTest_FOUND)
   target_link_libraries(test_map_session_pin_core PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk
     nlohmann_json::nlohmann_json)
   gtest_discover_tests(test_map_session_pin_core DISCOVERY_MODE PRE_TEST)
+
+  # The combat level class rule shared with the Quest (core/combat_level_class.h): each id by the CSymbol64 of its name, in the
+  # map-switch order, which the Quest's membership test does not pin.
+  add_executable(test_combat_level_class "${CMAKE_CURRENT_LIST_DIR}/tests/combat_level_class_test.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/tests/combat_level_class_test.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  target_include_directories(test_combat_level_class PRIVATE "${CMAKE_SOURCE_DIR}/src")
+  target_link_libraries(test_combat_level_class PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk)
+  gtest_discover_tests(test_combat_level_class DISCOVERY_MODE PRE_TEST)
 endif()

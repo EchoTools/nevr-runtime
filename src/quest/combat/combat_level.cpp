@@ -2,6 +2,7 @@
 
 #include <atomic>
 
+#include "core/combat_level_class.h"
 #include "quest/combat/combat_level_targets.h"
 #include "quest/combat/safe_read.h"
 
@@ -9,9 +10,6 @@ namespace nevr_quest::combat::level {
 
 namespace {
 
-constexpr std::uint64_t kCombatLevels[4] = {0x43e2da7914642604ULL, 0x42670f2bed45703cULL, 0xdf5ca7b7dfa383d4ULL, 0x43e2da7a0c623a19ULL};
-constexpr std::uint64_t kCombatLobby = 0xcb9977f7fc2b4526ULL;  // mpl_lobby_b_combat
-constexpr std::uint64_t kEchoArenaLevels[4] = {0x576ed3f8428ebc4bULL, 0x7691d78d414c5701ULL, 0x576ed3f8428ebc48ULL, 0x3f20b99c97955721ULL};
 namespace pin = targets;
 constexpr std::uintptr_t kTables[2][2] = {{pin::kTable0Rows, pin::kTable0Count}, {pin::kTable1Rows, pin::kTable1Count}};
 constexpr std::uint64_t kMaxGamespaces = 64;
@@ -32,19 +30,20 @@ constexpr NamedLevel kNames[] = {
     {0x6daa00a6d33d44b7ULL, "mpl_lobby_b_arena"}, {0xcb9967f7f220453eULL, "mpl_lobby_b_social"},
 };
 
-template <std::size_t N>
-bool In(std::uint64_t level, const std::uint64_t (&set)[N]) noexcept {
-  for (const std::uint64_t v : set) {
-    if (level == v) return true;
-  }
-  return false;
-}
+// The class rows of kNames are the shared class rule's ids (core/combat_level_class.h): one id, one place.
+static_assert(kNames[0].id == nevr_combat_level::kCombatMaps[0] && kNames[1].id == nevr_combat_level::kCombatMaps[1] &&
+                  kNames[2].id == nevr_combat_level::kCombatMaps[2] && kNames[3].id == nevr_combat_level::kCombatMaps[3],
+              "kNames rows 0-3 are the combat maps, in order");
+static_assert(kNames[4].id == nevr_combat_level::kCombatLobby, "kNames row 4 is the combat lobby");
+static_assert(kNames[5].id == nevr_combat_level::kEchoArenaLevels[0] && kNames[6].id == nevr_combat_level::kEchoArenaLevels[1] &&
+                  kNames[7].id == nevr_combat_level::kEchoArenaLevels[2] && kNames[8].id == nevr_combat_level::kEchoArenaLevels[3],
+              "kNames rows 5-8 are the Echo Arena levels, in order");
 
 }  // namespace
 
-bool IsCombatMap(std::uint64_t level) noexcept { return In(level, kCombatLevels); }
-bool IsCombatLobby(std::uint64_t level) noexcept { return level == kCombatLobby; }
-bool IsEchoArenaLevel(std::uint64_t level) noexcept { return In(level, kEchoArenaLevels); }
+bool IsCombatMap(std::uint64_t level) noexcept { return nevr_combat_level::IsCombatMap(level); }
+bool IsCombatLobby(std::uint64_t level) noexcept { return nevr_combat_level::IsCombatLobby(level); }
+bool IsEchoArenaLevel(std::uint64_t level) noexcept { return nevr_combat_level::IsEchoArenaLevel(level); }
 
 const char* LevelName(std::uint64_t level) noexcept {
   for (const NamedLevel& named : kNames) {

@@ -70,6 +70,7 @@
 #include "runtime/combat/write_gate.h"  // nEVR port
 #include "runtime/combat/equip_cell.h"  // nEVR port (#600): the cell the script guards read
 #include "runtime/combat/rules_state.h"  // nEVR port (#600): the RULES mailbox fields, in one place
+#include "core/combat_level_class.h"  // nEVR port (#2242 R7a): the four combat map ids, shared with the Quest
 #include "runtime/combat/match_control_rules.h"  // nEVR port (#2242): the 'G' word, a client's 'G' / 'R' writes, the maps, shared with the Quest
 #include "runtime/combat/match_type.h"  // nEVR port (#2289)
 #include "runtime/combat/payload_speed_rules.h"  // nEVR port (#2242): PAYLOAD SPEED, the payload PAUSE rule, the third row's text
@@ -615,8 +616,8 @@ constexpr uint32_t WANT_KIND_MASK = 0xF0000000;  // the top nibble of a 'C' ask 
 constexpr int MAP_COUNT = nevr_combat::match_control::kMapCount;   // nEVR port (#2242): shared with the Quest
 constexpr uint64_t EVT_MAPSWITCH[MAP_COUNT] = {
     0xc60e17c86d1f3df0ull, 0x63093755a2c24ebeull, 0x3d77042c79604528ull, 0xc60e17cb751921edull};   // mapswitch_<map>
-constexpr uint64_t LEVEL_SYM[MAP_COUNT] = {
-    0x43e2da7914642604ull, 0x42670f2bed45703cull, 0xdf5ca7b7dfa383d4ull, 0x43e2da7a0c623a19ull};   // mpl_combat_<map>
+static_assert(MAP_COUNT == 4, "the shared class rule has four combat maps");
+constexpr const uint64_t (&LEVEL_SYM)[MAP_COUNT] = nevr_combat_level::kCombatMaps;   // mpl_combat_<map>, one copy shared with the Quest (#2242 R7a)
 const char *const *const kMapNames = nevr_combat::match_control::kMapNames;   // nEVR port (#2242): shared with the Quest
 // The map buttons' button actors (fix_map_terminal.py: symbol64("mapswitch_<map>_0")). Once a
 // switch is under way every client greys them (the podium's own way: evt_btn_disable to the
