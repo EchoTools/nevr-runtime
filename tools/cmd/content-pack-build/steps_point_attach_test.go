@@ -142,12 +142,39 @@ func attachStep(t *testing.T) Step {
 	return Step{}
 }
 
+// pointEntryKey is the point copy's CScriptResourceWin10 entry (scriptgate.ScriptType, named by the copy).
+func pointEntryKey() radpack.Key {
+	var typ, name uint64 = scriptgate.ScriptType, pointAttachScript // not constants: the ids overflow a constant int64 conversion
+	return radpack.Key{Type: int64(typ), Name: int64(name)}
+}
+
+// fieldOf is the step's declared field of type typ; the test fails when the step declares none.
+func fieldOf(t *testing.T, st Step, typ uint64) Field {
+	t.Helper()
+	for _, f := range st.Writes {
+		if f.Type == typ {
+			return f
+		}
+	}
+	t.Fatalf("step %q declares no field of type %016x", st.Name, typ)
+	return Field{}
+}
+
 // stockPack is a pack over a stock global CScriptCR table holding table, with the barrier script on disk for Rekey.
 func stockPack(t *testing.T, rows []byte) *Pack {
+	t.Helper()
+	return stockPackListing(t, rows, false)
+}
+
+// stockPackListing is stockPack, and when entry is set the stock set also lists the point copy's entry.
+func stockPackListing(t *testing.T, rows []byte, entry bool) *Pack {
 	t.Helper()
 	var table, level uint64 = scriptTable, globalLevel // not constants: the ids overflow a constant int64 conversion
 	data := t.TempDir()
 	res := map[radpack.Key][]byte{{Type: int64(table), Name: int64(level)}: rows}
+	if entry {
+		res[pointEntryKey()] = make([]byte, scriptResourceEntry)
+	}
 	if err := radpack.WriteStockSet(data, Sets[0], []map[radpack.Key][]byte{res}); err != nil {
 		t.Fatal(err)
 	}
@@ -184,6 +211,34 @@ func TestTheAttachStepWritesTheGlobalLevelAndNamesTheCopy(t *testing.T) {
 	if len(p.rekeys) != 1 || p.rekeys[0].Name != wantName || p.rekeys[0].StockSource != wantSource {
 		t.Errorf("rekeys %+v, want the point copy of the barrier script", p.rekeys)
 	}
+	entry, ok := p.changes[Sets[0]][pointEntryKey()]
+	if !ok || !bytes.Equal(entry, make([]byte, scriptResourceEntry)) {
+		t.Errorf("the point copy's entry %x (written %v), want %d zero bytes", entry, ok, scriptResourceEntry)
+	}
+}
+
+// A stock set that already lists the point copy's entry is refused before anything is written, the table included.
+func TestTheAttachStepRefusesAStockSetThatAlreadyListsTheCopy(t *testing.T) {
+	p := stockPackListing(t, stockGlobalCRShape(), true)
+	if err := attachStep(t).Apply(p); err == nil {
+		t.Fatal("a stock set listing the point copy's entry was attached")
+	}
+	if len(p.changes[Sets[0]]) != 0 || len(p.rekeys) != 0 {
+		t.Errorf("a refused attach left changes %d and rekeys %+v", len(p.changes[Sets[0]]), p.rekeys)
+	}
+}
+
+// The declarations are what the step writes: the records it changed are the ones its fields name (checkChanged, the
+// oracle of the gated test), so no typed count of fields is needed.
+func TestThePointAttachDeclaresWhatItWrites(t *testing.T) {
+	p := stockPackListing(t, stockGlobalCRShape(), false)
+	st := attachStep(t)
+	if err := st.Apply(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkChanged([]Step{st}, p.changes); err != nil {
+		t.Error(err)
+	}
 }
 
 // A table that is not the stock one writes nothing and names no copy.
@@ -199,12 +254,19 @@ func TestTheAttachStepRefusedWritesNothing(t *testing.T) {
 
 func TestThePointAttachFieldReadsWhatItWrites(t *testing.T) {
 	st := attachStep(t)
-	if len(st.Writes) != 1 {
-		t.Fatalf("%d fields declared, want 1", len(st.Writes))
-	}
-	f := st.Writes[0]
-	if f.Type != scriptTable || len(f.Records) != 1 || f.Records[0] != globalLevel {
+	f := fieldOf(t, st, scriptTable)
+	if len(f.Records) != 1 || f.Records[0] != globalLevel {
 		t.Errorf("field %+v", f)
+	}
+	entryField := fieldOf(t, st, scriptgate.ScriptType)
+	if len(entryField.Records) != 1 || entryField.Records[0] != pointAttachScript {
+		t.Errorf("entry field %+v", entryField)
+	}
+	if got, err := entryField.Read(make([]byte, scriptResourceEntry)); err != nil || len(got) != scriptResourceEntry {
+		t.Errorf("a %d-byte entry read %x, %v", scriptResourceEntry, got, err)
+	}
+	if _, err := entryField.Read(make([]byte, scriptResourceEntry+1)); err == nil {
+		t.Error("an entry of the wrong length was read")
 	}
 	stock := stockGlobalCRShape()
 	if got, err := f.Read(stock); err != nil || len(got) != 0 {

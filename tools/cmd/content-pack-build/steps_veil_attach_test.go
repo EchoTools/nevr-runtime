@@ -35,6 +35,18 @@ func veilRow(actor, script uint64) []byte {
 // barrier script (or none, when withStock is false).
 func veilAttachPack(t *testing.T, in []byte, withStock bool) *Pack {
 	t.Helper()
+	return veilAttachPackListing(t, in, withStock, false)
+}
+
+// veilEntryKey is the veil copy's CScriptResourceWin10 entry (scriptgate.ScriptType, named by the copy).
+func veilEntryKey() radpack.Key {
+	var typ, name uint64 = scriptgate.ScriptType, veilCopy // not constants: the ids overflow a constant int64 conversion
+	return radpack.Key{Type: int64(typ), Name: int64(name)}
+}
+
+// veilAttachPackListing is veilAttachPack, and when entry is set the stock set also lists the veil copy's entry.
+func veilAttachPackListing(t *testing.T, in []byte, withStock, entry bool) *Pack {
+	t.Helper()
 	dir := t.TempDir()
 	scripts := filepath.Join(dir, "bin", "win10", "scripts")
 	if err := os.MkdirAll(scripts, veilDirMode); err != nil {
@@ -45,10 +57,22 @@ func veilAttachPack(t *testing.T, in []byte, withStock bool) *Pack {
 			t.Fatal(err)
 		}
 	}
-	var typ uint64 = scriptTable
-	key := radpack.Key{Type: int64(typ), Name: int64(globalLevel)}
-	// the set is named so Put accepts it; Read and Put use the staged changes, so no radpack.Set is read
-	return &Pack{gameDir: dir, sets: map[string]*radpack.Set{Sets[0]: nil},
+	var typ, level uint64 = scriptTable, globalLevel // not constants: the ids overflow a constant int64 conversion
+	data := t.TempDir()
+	res := map[radpack.Key][]byte{{Type: int64(typ), Name: int64(level)}: in}
+	if entry {
+		res[veilEntryKey()] = make([]byte, scriptResourceEntry)
+	}
+	if err := radpack.WriteStockSet(data, Sets[0], []map[radpack.Key][]byte{res}); err != nil {
+		t.Fatal(err)
+	}
+	s, _, err := radpack.OpenSet(data, Sets[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the stock set is real, so the attach's stock check reads it; Read and Put use the staged changes, which hold the table
+	key := radpack.Key{Type: int64(typ), Name: int64(level)}
+	return &Pack{gameDir: dir, sets: map[string]*radpack.Set{Sets[0]: s},
 		changes: map[string]map[radpack.Key][]byte{Sets[0]: {key: in}}, scripts: map[string][]byte{}}
 }
 
@@ -96,6 +120,60 @@ func TestTheVeilCopyIsListedAndEachPlayerBarrierRowGetsItsCopyAfterIt(t *testing
 		p.rekeys[0].StockSha256 != digest(veilStockBytes) {
 		t.Errorf("rekeys %+v, want the copy %s of %s with the stock's sha-256", p.rekeys, veilCopyName, veilBarrierName)
 	}
+	entry, ok := p.changes[Sets[0]][veilEntryKey()]
+	if !ok || !bytes.Equal(entry, make([]byte, scriptResourceEntry)) {
+		t.Errorf("the veil copy's entry %x (written %v), want %d zero bytes", entry, ok, scriptResourceEntry)
+	}
+}
+
+// A stock set that already lists the veil copy's entry is refused before anything is written, the table included.
+func TestTheVeilAttachRefusesAStockSetThatAlreadyListsTheCopy(t *testing.T) {
+	in := veilTable(veilRow(veilPlayerActors[0], veilBarrier))
+	p := veilAttachPackListing(t, in, true, true)
+	if err := veilAttach(p); err == nil {
+		t.Fatal("a stock set listing the veil copy's entry was attached")
+	}
+	if !bytes.Equal(veilChanged(t, p), in) || len(p.changes[Sets[0]]) != 1 || len(p.rekeys) != 0 {
+		t.Errorf("a refused attach changed %d resources and listed %d copies", len(p.changes[Sets[0]]), len(p.rekeys))
+	}
+}
+
+// The declarations are what the step writes: the records it changed are the ones its fields name (checkChanged).
+func TestTheVeilAttachDeclaresWhatItWrites(t *testing.T) {
+	p := veilAttachPack(t, veilTable(veilRow(veilPlayerActors[0], veilBarrier)), true)
+	st := veilAttachStepOf(t)
+	if err := st.Apply(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkChanged([]Step{st}, p.changes); err != nil {
+		t.Error(err)
+	}
+}
+
+// The veil attach's entry field reads the four-byte entry of the copy, and only it.
+func TestTheVeilAttachEntryFieldReadsTheEntry(t *testing.T) {
+	f := fieldOf(t, veilAttachStepOf(t), scriptgate.ScriptType)
+	if len(f.Records) != 1 || f.Records[0] != veilCopy {
+		t.Errorf("entry field %+v", f)
+	}
+	if got, err := f.Read(make([]byte, scriptResourceEntry)); err != nil || len(got) != scriptResourceEntry {
+		t.Errorf("a %d-byte entry read %x, %v", scriptResourceEntry, got, err)
+	}
+	if _, err := f.Read(make([]byte, scriptResourceEntry+1)); err == nil {
+		t.Error("an entry of the wrong length was read")
+	}
+}
+
+// veilAttachStepOf is the registered veil attach step.
+func veilAttachStepOf(t *testing.T) Step {
+	t.Helper()
+	for _, st := range steps {
+		if st.Name == veilAttachStep {
+			return st
+		}
+	}
+	t.Fatalf("step %q is not registered", veilAttachStep)
+	return Step{}
 }
 
 // The gate (G2, scriptgate.Check) passes the attached table only when the label lists the copy: the rows name the copy, and

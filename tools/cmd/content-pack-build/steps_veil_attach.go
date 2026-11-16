@@ -20,13 +20,15 @@ import (
 // script-image patches, the H pieces (10.1: H-CTRL, H-BARR, H-WALL-a).
 //
 // The step refuses, before it writes anything (4.4), when: the table is not rows of scriptgate.RowStride bytes; a row already
-// runs the copy; a barrier row of a player actor carries pool data (Cat's tool refuses the same); or no barrier row of a
-// player actor is there, so the attach would add nothing. A missing stock barrier script refuses through Rekey.
+// runs the copy; a barrier row of a player actor carries pool data (Cat's tool refuses the same); no barrier row of a
+// player actor is there, so the attach would add nothing; or the stock set already lists the copy's entry. A missing stock
+// barrier script refuses through Rekey.
 //
 // The table is the same layout as the other CScriptCR tables (radpack.RowTable: a 0x38-byte header, rows, a tail kept as it
 // is), and scriptgate reads the rows this step writes (G2: the label's scripts list holds the copy, so the rows pass).
 //
-// Declared fields (Step.Writes, what the stage82 oracle compares): the global level's CScriptCR rows whose script is the copy.
+// Declared fields (Step.Writes, what the stage82 oracle compares): the global level's CScriptCR rows whose script is the copy,
+// and the copy's CScriptResourceWin10 entry (four zero bytes, scriptgate.ScriptType; fix_smoke.py:403-404 writes it).
 const (
 	veilCopy        = veilAttachScript // fix_smoke.py:74, SMOKE_SCRIPT (CSymbol64("mp_combat_ability_smoke")), steps_attach_order.go
 	veilCopyName    = "94ba7ca09dcf7b0b"
@@ -62,14 +64,20 @@ const veilAttachStep = "UMBRAL VEIL attaches its script copy in the global level
 // shows both orders.
 func init() {
 	steps = append(steps, Step{Name: veilAttachStep, Apply: veilAttach, OrderFree: []string{pointAttachStep},
-		Writes: []Field{{Name: "CScriptCR of the global level: the rows that run the veil copy", Set: Sets[0], Type: scriptTable,
-			Records: []uint64{globalLevel}, Read: readRowsWhere(scriptgate.ScriptOffset, veilCopy)}}})
+		Writes: []Field{
+			{Name: "CScriptCR of the global level: the rows that run the veil copy", Set: Sets[0], Type: scriptTable,
+				Records: []uint64{globalLevel}, Read: readRowsWhere(scriptgate.ScriptOffset, veilCopy)},
+			{Name: "CScriptResourceWin10 entry of the veil script copy, four zero bytes", Set: Sets[0], Type: scriptgate.ScriptType,
+				Records: []uint64{veilCopy}, Read: readScriptResourceEntry},
+		}})
 }
 
-// veilAttach reads the global level's CScriptCR table, attaches the copy (attachVeil), and then lists the copy in the
-// label's scripts list (Rekey). The table is refused before any change; Rekey refuses before the table is written.
+// veilAttach reads the global level's CScriptCR table, attaches the copy (attachVeil), writes the copy's entry and then
+// lists the copy in the label's scripts list (Rekey). The table is refused before any change, and the stock set's entry is
+// checked before Rekey, so a refusal writes nothing and lists nothing.
 func veilAttach(p *Pack) error {
-	var typ uint64 = scriptTable // not a constant: the table id overflows a constant int64 conversion (steps_veil.go)
+	var typ uint64 = scriptTable                                 // not a constant: the table id overflows a constant int64 conversion (steps_veil.go)
+	var entry, copyName uint64 = scriptgate.ScriptType, veilCopy // not constants: the ids overflow a constant int64 conversion
 	b, err := p.Read(Sets[0], int64(typ), int64(globalLevel))
 	if err != nil {
 		return err
@@ -78,10 +86,18 @@ func veilAttach(p *Pack) error {
 	if err != nil {
 		return fmt.Errorf("CScriptCR of the global level %016x: %w", uint64(globalLevel), err)
 	}
+	if _, found, err := p.sets[Sets[0]].Read(int64(entry), int64(copyName)); err != nil {
+		return err
+	} else if found {
+		return fmt.Errorf("the stock set already lists the CScriptResourceWin10 entry of %016x; the copy would replace it", copyName)
+	}
 	if err := p.Rekey(veilCopyName, veilBarrierName); err != nil {
 		return err
 	}
-	return p.Put(Sets[0], int64(typ), int64(globalLevel), out)
+	if err := p.Put(Sets[0], int64(typ), int64(globalLevel), out); err != nil {
+		return err
+	}
+	return p.Put(Sets[0], int64(entry), int64(copyName), make([]byte, scriptResourceEntry))
 }
 
 // attachVeil is the CScriptCR table with a copy of the veil row for each player actor, put at its place in attachOrder
