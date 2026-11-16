@@ -83,6 +83,18 @@ std::vector<std::string> Lines(const char* event) {
   return out;
 }
 
+// Whether a line with `event` was logged at or after index `cursor` of the log, and moves `cursor` to the end of the log. A wait
+// loop asks on every pass; Lines() would read the whole log each time, so the loop reads each line once.
+bool LoggedSince(const char* event, std::size_t& cursor) {
+  const std::string needle = std::string("\"event\":\"") + event + "\"";
+  bool found = false;
+  std::lock_guard<std::mutex> lock(g_logMutex);
+  for (; cursor < g_lines.size(); ++cursor) {
+    if (g_lines[cursor].find(needle) != std::string::npos) found = true;
+  }
+  return found;
+}
+
 // The raw text of a field's value (quotes kept for a string), or "<absent>".
 std::string Field(const std::string& line, const char* key) {
   const std::string needle = std::string("\"") + key + "\":";
@@ -550,7 +562,8 @@ void TheKeyTableIsBoundedAndSaysSoOnce() {
   g_fill.allHits = true;  // every key is a hit: the table is the subject, not the manifest
   unsigned char request[layout::kRequestBytes] = {};
   unsigned long long keys = 0;
-  while (keys < 30000 && Lines("resource_request_table_full").empty()) {
+  std::size_t seen = 0;
+  while (keys < 30000 && !LoggedSince("resource_request_table_full", seen)) {
     Call(kBaseType, 0x10000 + keys, 0, request);
     ++keys;
   }
@@ -576,7 +589,8 @@ void TheUnloggedCountIsWrittenAsItGrows() {
   g_fill.allHits = true;
   unsigned char request[layout::kRequestBytes] = {};
   unsigned long long keys = 0;
-  while (keys < 30000 && Lines("resource_request_table_full").empty()) {
+  std::size_t seen = 0;
+  while (keys < 30000 && !LoggedSince("resource_request_table_full", seen)) {
     Call(kBaseType, 0x10000 + keys, 0, request);
     ++keys;
   }
@@ -1126,8 +1140,9 @@ void AFullKeyTableDoesNotHideAReleaseFailure() {
   ReleaseReset();
   unsigned char request[layout::kRequestBytes] = {};
   unsigned long long calls = 0;
+  std::size_t seen = 0;
   // Every call opens a new window, so the limit never drops one and each distinct failure writes its line.
-  while (calls < 30000 && Lines("resource_request_table_full").empty()) {
+  while (calls < 30000 && !LoggedSince("resource_request_table_full", seen)) {
     g_nowMs += rr::kFailureWindowMs;
     Call(kBaseType, MissOf(calls), 0, request);
     ++calls;
