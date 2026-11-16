@@ -222,6 +222,9 @@ func TestRefusalsWriteNothing(t *testing.T) {
 
 func TestTheProductionStepsAreTheEchoCombatOnesInOrder(t *testing.T) {
 	want := []string{
+		// steps_buff.go first: the files' init functions run in file-name order
+		"equipment lists offer the OVERCHARGE tac mod",
+		"each combat player's actor gets OVERCHARGE's own heal bubble",
 		"DOT FIELD magazine drops its leftover rigid-attach rows",
 		"DOT FIELD magazine drops its leftover parented-constraint rows",
 		"DOT FIELD dampener starts off and its nodes sit at the origin",

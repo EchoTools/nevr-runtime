@@ -47,8 +47,9 @@ var gunPatchTables = map[uint64]map[uint64]string{
 // transform table is the one steps_dot_damp.go already changes, so it is one resource, counted once;
 // steps_dot_field_texmat.go: the texture-streaming table), steps_equipment.go changes the one mp_equipment resource,
 // steps_dot_preset.go the one mp_weapon_settings resource, steps_dot_field_texmat.go adds the two red materials, and
-// steps_rules_terminal.go changes the one RULES canvas, in whichever client set lists it.
-// (5 + 2 + 2 + 2 - 1 + 1) x 5 + 1 + 1 + 2 + 1 = 60, over both client sets.
+// steps_rules_terminal.go changes the one RULES canvas, in whichever client set lists it, and steps_buff.go changes the
+// global level's heal bubble table (its tac-mod step changes mp_equipment, which equipmentResources already counts).
+// (5 + 2 + 2 + 2 - 1 + 1) x 5 + 1 + 1 + 2 + 1 + 1 = 61, over both client sets.
 // The count covers every step, so a step that changes a resource it does not name fails here; what each data step
 // writes into its own tables is checked by that step's own test, and the gun patch's files by gunPatchTables above.
 const (
@@ -69,6 +70,8 @@ const (
 	weaponSettingsResources = 1
 	// steps_rules_terminal.go: the RULES page canvas ui_display_mpl_mm_custom_rules1, which the gun patch's files do not cover
 	rulesCanvasResources = 1
+	// steps_buff.go: the global level's heal bubble table, one resource; its tac-mod step's mp_equipment is equipmentResources
+	healBubbleTableResources = 1
 )
 
 func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testing.T) {
@@ -85,7 +88,11 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 		}
 		p.sets[setID] = s
 	}
+	// The gun patch's mp_equipment has no OVERCHARGE (steps_buff.go adds it), so its sha-256 is compared before that step.
 	for _, st := range steps {
+		if st.Name == buffTacmodStep {
+			continue
+		}
 		if err := st.Apply(p); err != nil {
 			t.Fatalf("%s: %v", st.Name, err)
 		}
@@ -100,6 +107,13 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 			sum := sha256.Sum256(b)
 			if got := hex.EncodeToString(sum[:]); got != want {
 				t.Errorf("%016x.%016x: sha256 %s, the gun patch's is %s", typ, lvl, got, want)
+			}
+		}
+	}
+	for _, st := range steps {
+		if st.Name == buffTacmodStep {
+			if err := st.Apply(p); err != nil {
+				t.Fatalf("%s: %v", st.Name, err)
 			}
 		}
 	}
@@ -123,8 +137,8 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 		changed += len(p.changes[setID])
 	}
 	levelTables := levelTableSteps + dotConstraintTables + dotDampTables + dotFieldTables - dotFieldTablesSharedWithDamp + dotFieldTexStreamTables
-	if want := levelTables*len(droneLevels) + equipmentResources + weaponSettingsResources + dotFieldMaterialResources + rulesCanvasResources; changed != want {
-		t.Errorf("%d resources changed, want %d (%d level tables + %d DOT constraint tables + %d DOT dampener tables + %d DOT FIELD tables - %d shared + %d DOT FIELD texture streaming table, x %d levels, mp_equipment, mp_weapon_settings, %d red materials, and the RULES canvas)", changed,
+	if want := levelTables*len(droneLevels) + equipmentResources + weaponSettingsResources + dotFieldMaterialResources + rulesCanvasResources + healBubbleTableResources; changed != want {
+		t.Errorf("%d resources changed, want %d (%d level tables + %d DOT constraint tables + %d DOT dampener tables + %d DOT FIELD tables - %d shared + %d DOT FIELD texture streaming table, x %d levels, mp_equipment, mp_weapon_settings, %d red materials, the RULES canvas and the global level's heal bubble table)", changed,
 			want, levelTableSteps, dotConstraintTables, dotDampTables, dotFieldTables, dotFieldTablesSharedWithDamp, dotFieldTexStreamTables, len(droneLevels), dotFieldMaterialResources)
 	}
 	t.Log(fmt.Sprintf("%d resources match the gun patch's", len(p.changes[Sets[0]])))

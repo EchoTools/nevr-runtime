@@ -48,6 +48,20 @@ func init() {
 // readAddedGear is a reader of the entries (name and display_name, as JSON lines) of gear_table.<list> that equipmentAdds
 // names for it, in the list's order: an entry of the stock list, or a key of an entry other than those two, is not read.
 func readAddedGear(list string) func([]byte) ([]byte, error) {
+	added := map[string]bool{}
+	for _, add := range equipmentAdds {
+		if add.list == list {
+			for _, e := range add.entries {
+				added[e.Name] = true
+			}
+		}
+	}
+	return readGearNamed(list, added)
+}
+
+// readGearNamed is a reader of the entries (name and display_name, as JSON lines) of gear_table.<list> whose name is in
+// names, in the list's order.
+func readGearNamed(list string, names map[string]bool) func([]byte) ([]byte, error) {
 	return func(b []byte) ([]byte, error) {
 		if len(b) < jsonHeader || binary.LittleEndian.Uint64(b[jsonLengthOff:]) != uint64(len(b)-jsonHeader) {
 			return nil, fmt.Errorf("not a JSON resource of %d bytes (a 0x220-byte header whose +8 is the body's length)", len(b))
@@ -64,17 +78,9 @@ func readAddedGear(list string) func([]byte) ([]byte, error) {
 		} else if err := json.Unmarshal(raw, &entries); err != nil {
 			return nil, fmt.Errorf("gear_table.%s: %w", list, err)
 		}
-		added := map[string]bool{}
-		for _, add := range equipmentAdds {
-			if add.list == list {
-				for _, e := range add.entries {
-					added[e.Name] = true
-				}
-			}
-		}
 		var out bytes.Buffer
 		for _, e := range entries {
-			if added[e.Name] {
+			if names[e.Name] {
 				j, err := json.Marshal(e)
 				if err != nil {
 					return nil, err
