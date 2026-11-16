@@ -38,6 +38,9 @@
 #include "core/system_info.h"
 #include "abi/echovr_functions.h"
 #include "runtime/hook/addresses.h"
+#ifdef NEVR_MEASURE_SCRIPT_HOOKS
+#include "runtime/hook/script_hook_calls.h"
+#endif
 #include "runtime/patch/binary_bug_fixes.h"
 #include "runtime/patch/xpid_patch.h"
 #include "runtime/patch/pnsrad_enabler.h"
@@ -374,6 +377,12 @@ static VOID InitializeAfterGameImageGuard() {
 
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] info; Initializing v%s base=%p\n", NEVR_PROJECT_VERSION, EchoVR::g_GameBaseAddress);
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] info; %s\n", nevr_build_identity::IdentityLiteral());
+#ifdef NEVR_MEASURE_SCRIPT_HOOKS
+  // ADR 0037 rule 4: a build with a measurement option names it in its first lines. Compiled only into that build, so a build
+  // without the option carries none of these bytes.
+  const std::string variantLine = nevr_build_variant::VariantLine();
+  if (!variantLine.empty()) nevr_boot_log_tee::TeeFprintf("%s\n", variantLine.c_str());
+#endif
   // Where this run is hosted (#673): a crash report names the Wine version without a second question.
   // Boot phase (the tee is open, the game's CLog is not): Get() touches only ntdll and kernel32, as at the mic-policy line below.
   nevr_boot_log_tee::TeeFprintf("%s", nevr_host_environment::BootLine(nevr_system_info::Get()).c_str());

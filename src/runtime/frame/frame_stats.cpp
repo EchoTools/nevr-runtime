@@ -12,6 +12,7 @@
 #include "nevr/pc/nevr_common.h"
 #include "runtime/hook/hook_liveness.h"
 #include "runtime/hook/patching.h"
+#include "runtime/hook/script_hook_calls.h"
 
 namespace nevr_frame_stats {
 namespace {
@@ -66,6 +67,15 @@ const char* InstallPerfStatsHook(uintptr_t gameBase, bool isServer) {
   return "installed";
 }
 
+// ADR 0037 rule 7, ADR 0038 rule 2: in a measurement build, one line per counted script-hook row in the window just closed, so
+// calls per frame is calls / frames. Nothing in every other build.
+void ReportScriptHookCalls([[maybe_unused]] uint64_t frames) {
+#ifdef NEVR_MEASURE_SCRIPT_HOOKS
+  nevr_script_hook_calls::ReportWindow(nevr_script_hook_calls::Global(), frames,
+                                       [](const char* row_line) { Log(EchoVR::LogLevel::Info, "%s", row_line); });
+#endif
+}
+
 }  // namespace
 
 void Configure(uintptr_t gameBase, bool isServer, Mode mode, bool recognised) {
@@ -112,6 +122,7 @@ void Poll(uint64_t nowUs) {
   char line[512];
   FormatWindowLine(line, sizeof(line), window);
   Log(EchoVR::LogLevel::Info, "%s", line);
+  ReportScriptHookCalls(window.frames);
 }
 
 }  // namespace nevr_frame_stats

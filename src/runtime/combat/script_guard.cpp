@@ -9,6 +9,7 @@
 
 #include "core/logging.h"
 #include "runtime/combat/equip_cell.h"
+#include "runtime/hook/script_hook_calls.h"
 #include "runtime/hook/script_hooks.h"
 
 namespace nevr_combat::script_guard {
@@ -32,6 +33,7 @@ std::atomic_bool g_registered{false};
 
 template <std::size_t I>
 std::uint64_t Dispatch(std::int64_t* thread) {
+  NEVR_SCRIPT_HOOK_CALL(kGuards[I].name);
   const Guard& g = kGuards[I];
   const std::uint64_t selected = g_cell != nullptr ? g_cell[0] : 0;
   const std::int64_t node = thread[2];

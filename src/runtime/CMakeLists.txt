@@ -612,6 +612,18 @@ if(NEVR_ALLOW_UNSIGNED_PLUGINS)
   set_property(SOURCE host/host_identity.cpp APPEND PROPERTY COMPILE_DEFINITIONS NEVR_ALLOW_UNSIGNED_PLUGINS=1)
   message(STATUS "NEVR_ALLOW_UNSIGNED_PLUGINS=ON: BugSplat64.dll is marked as a plugin developer build (never ship)")
 endif()
+# The script-hook measurement option (ADR 0037, ADR 0038 rule 2; hook/script_hook_calls.h). Off by default and set only by the
+# `mingw-measure` preset, which inherits `mingw-plugin-dev`: a measurement build is always a plugin-developer build, so its
+# NEVR-PLUGIN-TRUST literal says dev and tools/package_release.py refuses to package it (ADR 0037 rule 5). A configure that
+# asks for the option without NEVR_ALLOW_UNSIGNED_PLUGINS stops here. tools/internal/measureopt reads this block.
+option(NEVR_MEASURE_SCRIPT_HOOKS "Count script-hook calls per window and name the variant script-hook-calls (measurement build, never ship)" OFF)
+if(NEVR_MEASURE_SCRIPT_HOOKS)
+  if(NOT NEVR_ALLOW_UNSIGNED_PLUGINS)
+    message(FATAL_ERROR "NEVR_MEASURE_SCRIPT_HOOKS=ON needs NEVR_ALLOW_UNSIGNED_PLUGINS=ON (use the mingw-measure preset): a measurement build must carry NEVR-PLUGIN-TRUST dev so the release packaging refuses it")
+  endif()
+  add_compile_definitions(NEVR_MEASURE_SCRIPT_HOOKS=1)
+  message(STATUS "NEVR_MEASURE_SCRIPT_HOOKS=ON: script-hook calls are counted and the variant is script-hook-calls (never ship)")
+endif()
 set_source_files_properties(ext/plugin_signature.cpp ext/plugin_tree.cpp ext/plugin_trust.cpp ext/plugin_pins.cpp ext/self_provenance.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # Scenario-test control endpoint (docs/design/2026-10-01-social-scenario-harness.md). It can inject

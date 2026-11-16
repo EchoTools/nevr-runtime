@@ -37,6 +37,7 @@
 #include "runtime/combat/team_ready.h"
 #include "runtime/combat/unlock_time.h"
 #include "runtime/hook/hook_guard.h"
+#include "runtime/hook/script_hook_calls.h"
 #include "runtime/hook/script_hooks.h"
 #include "runtime/hook/script_resource_hook.h"
 
@@ -424,5 +425,39 @@ TEST_F(ScriptResourceHook, AFailedLoadAndAnEmptyFreeTouchNoScript) {
   srh::BeforeUnload(res.bytes);
   EXPECT_EQ(s_.Call(kRvaA), 1);
 }
+
+#ifdef NEVR_MEASURE_SCRIPT_HOOKS
+// The mingw-measure build (ADR 0037): a counted row reports its calls with the window's frames, and the first line names the word.
+// There is no default-build case: a release build compiles the counter and the line away (script_hook_calls.h).
+constexpr const char* kCountedRow = "test counted row";
+int CountedDetour() {
+  NEVR_SCRIPT_HOOK_CALL(kCountedRow);
+  return 10 + g_origA();
+}
+
+TEST_F(ScriptHooks, ThreeCallsOfACountedRowReportCallsThreeWithTheWindowsFrames) {
+  const sh::Hook rows[] = {Row(kRvaA, kPrologue, reinterpret_cast<void*>(&CountedDetour), &g_origA, kCountedRow)};
+  sh::Register(rows, 1);
+  sh::OnLoaded(kScript, s_.base);
+  for (int i = 0; i < 3; ++i) EXPECT_EQ(s_.Call(kRvaA), 11) << "counting returns the original's result, changed only by the detour";
+  std::vector<std::string> lines;
+  nevr_script_hook_calls::ReportWindow(nevr_script_hook_calls::Global(), 600,
+                                       [&lines](const char* line) { lines.emplace_back(line); });
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_EQ(lines[0], "[NEVR.PERF] script_hook calls=3 frames=600 row=test counted row");
+  lines.clear();
+  nevr_script_hook_calls::ReportWindow(nevr_script_hook_calls::Global(), 600,
+                                       [&lines](const char* line) { lines.emplace_back(line); });
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_EQ(lines[0], "[NEVR.PERF] script_hook calls=0 frames=600 row=test counted row") << "the next window starts at 0";
+  sh::OnUnloading(kScript, s_.base);
+}
+
+TEST(ScriptHookVariant, TheFirstLineNamesTheMeasurementWord) {
+  const std::string line = nevr_build_variant::VariantLine();
+  EXPECT_EQ(line, "[NEVR.PATCH] info; variant=script-hook-calls (a measurement build: never a release)");
+  EXPECT_NE(line.find(nevr_build_variant::kScriptHookCallsWord), std::string::npos);
+}
+#endif
 
 }  // namespace

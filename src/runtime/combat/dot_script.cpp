@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "core/logging.h"
+#include "runtime/hook/script_hook_calls.h"
 #include "runtime/hook/script_hooks.h"
 
 namespace nevr_combat::dot_script {
@@ -25,7 +26,10 @@ std::uint64_t PlaySoundExecute(void* node, void* ctx) {
   return g_execute(node, ctx);
 }
 
-std::uint64_t NextNodeHook(std::uint64_t node, std::uint64_t port) { return NextNode(node, g_next_node(node, port)); }
+std::uint64_t NextNodeHook(std::uint64_t node, std::uint64_t port) {
+  NEVR_SCRIPT_HOOK_CALL("DOT FIELD resolve_next_node");
+  return NextNode(node, g_next_node(node, port));
+}
 
 }  // namespace
 

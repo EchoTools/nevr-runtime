@@ -113,6 +113,14 @@
             "cacheVariables": {
                 "NEVR_ALLOW_UNSIGNED_PLUGINS": "ON"
             }
+        },
+        {
+            "name": "mingw-measure",
+            "displayName": "MinGW plugin-dev build that counts script-hook calls (ADR 0037; never ship)",
+            "inherits": "mingw-plugin-dev",
+            "cacheVariables": {
+                "NEVR_MEASURE_SCRIPT_HOOKS": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -160,6 +168,11 @@
             "name": "mingw-plugin-dev",
             "displayName": "Build MinGW (loads unsigned plugins, plugin developers only)",
             "configurePreset": "mingw-plugin-dev"
+        },
+        {
+            "name": "mingw-measure",
+            "displayName": "Build MinGW script-hook measurement (never ship)",
+            "configurePreset": "mingw-measure"
         }
     ]
 }
