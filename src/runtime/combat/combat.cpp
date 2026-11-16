@@ -11,9 +11,8 @@
 #include <vector>
 
 #include "core/logging.h"
-#include "core/combat_balance/balance_merge.h"
+#include "core/combat_balance/balance_values_gunpatch.h"
 #include "core/combat_balance/balance_values.h"
-#include "core/combat_balance/balance_values_absent.h"
 #include "runtime/combat/capture_scores.h"
 #include "runtime/combat/capture_time.h"
 #include "runtime/combat/cat_compat.h"
@@ -83,9 +82,8 @@ bool BalanceTransform(const void* original, uint64_t originalSize, const void** 
   if (g_balanceOn == 0) return false;
   std::string merged;
   std::size_t changed = 0;
-  const balance::Result r = balance::Apply(static_cast<const std::uint8_t*>(original), static_cast<std::size_t>(originalSize),
-                                           balance::kCatWeaponSettings, &merged, &changed,
-                                           balance::kCatAbsentValues);
+  const balance::Result r = balance::ApplyShippedValues(static_cast<const std::uint8_t*>(original),
+                                                        static_cast<std::size_t>(originalSize), &merged, &changed);
   if (r != balance::Result::kApplied) {
     Log(r == balance::Result::kUnchanged ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
         "[NEVR.COMBAT] balance not applied resource=mp_weapon_settings result=%s size=%llu (the game's own values stay)",
@@ -96,8 +94,8 @@ bool BalanceTransform(const void* original, uint64_t originalSize, const void** 
   *out = g_balanceBuffers.back().data();
   *outSize = g_balanceBuffers.back().size();
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.COMBAT] balance applied resource=mp_weapon_settings values=%llu size=%llu->%llu %s (Cat's weapon tuning merged "
-      "into the stock settings)",
+      "[NEVR.COMBAT] balance applied resource=mp_weapon_settings values=%llu size=%llu->%llu %s (the gun patch's differences and Cat's weapon tuning "
+      "merged into the stock settings)",
       static_cast<unsigned long long>(changed), static_cast<unsigned long long>(originalSize),
       static_cast<unsigned long long>(*outSize),
       balance::ProbeText(balance::ReadProbe(static_cast<const std::uint8_t*>(*out), static_cast<std::size_t>(*outSize))).c_str());

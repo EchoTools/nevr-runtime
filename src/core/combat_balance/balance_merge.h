@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include <utility>
 
@@ -91,12 +92,12 @@ inline std::size_t MergeAbsent(nlohmann::ordered_json& into, const nlohmann::ord
   return added;
 }
 
-/// The resource `blob` with `values` merged into its body, in `*out` (header kept, length updated). `*changed` is the
-/// number of values set. `absentValues`, when given, is then merged with MergeAbsent (keys the stock body lacks only) and its
-/// additions count in `*changed`. Nothing is thrown: a blob that is not a JSON resource, or a body or values that do not parse,
-/// is a Result and `*out` is untouched.
-inline Result Apply(const std::uint8_t* blob, std::size_t size, const char* values, std::string* out, std::size_t* changed,
-                    const char* absentValues = nullptr) {
+/// The resource `blob` with each of `layers` merged into its body in turn (a later layer wins), then `absentValues`, when
+/// given, merged with MergeAbsent (keys the layered body still lacks only), in `*out` (header kept, length updated).
+/// `*changed` is the number of values set and added. Nothing is thrown: a blob that is not a JSON resource, or a body, a
+/// layer or the absent values that do not parse, is a Result and `*out` is untouched.
+inline Result ApplyLayers(const std::uint8_t* blob, std::size_t size, std::initializer_list<const char*> layers, std::string* out,
+                          std::size_t* changed, const char* absentValues = nullptr) {
   *changed = 0;
   if (blob == nullptr || size < kHeaderSize) return Result::kNotAResource;
   std::uint64_t declared = 0;
@@ -104,9 +105,11 @@ inline Result Apply(const std::uint8_t* blob, std::size_t size, const char* valu
   if (declared != size - kHeaderSize) return Result::kNotAResource;
   nlohmann::ordered_json body = nlohmann::ordered_json::parse(blob + kHeaderSize, blob + size, nullptr, false);
   if (body.is_discarded() || !body.is_object()) return Result::kBodyUnparsed;
-  nlohmann::ordered_json src = nlohmann::ordered_json::parse(values, nullptr, false);
-  if (src.is_discarded() || !src.is_object()) return Result::kValuesUnparsed;
-  *changed = Merge(body, src);
+  for (const char* values : layers) {
+    nlohmann::ordered_json src = nlohmann::ordered_json::parse(values, nullptr, false);
+    if (src.is_discarded() || !src.is_object()) return Result::kValuesUnparsed;
+    *changed += Merge(body, src);
+  }
   if (absentValues != nullptr) {
     nlohmann::ordered_json absent = nlohmann::ordered_json::parse(absentValues, nullptr, false);
     if (absent.is_discarded() || !absent.is_object()) return Result::kValuesUnparsed;
@@ -120,6 +123,12 @@ inline Result Apply(const std::uint8_t* blob, std::size_t size, const char* valu
   result += text;
   *out = std::move(result);
   return Result::kApplied;
+}
+
+/// One layer: `values` merged into the resource `blob`, then `absentValues` when given (ApplyLayers with one layer).
+inline Result Apply(const std::uint8_t* blob, std::size_t size, const char* values, std::string* out, std::size_t* changed,
+                    const char* absentValues = nullptr) {
+  return ApplyLayers(blob, size, {values}, out, changed, absentValues);
 }
 
 /// The values the log line of a merge reads back from the merged resource: Cat's PROTOSTAR (magnum) body damage, head
