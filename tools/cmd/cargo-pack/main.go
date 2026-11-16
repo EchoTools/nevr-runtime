@@ -93,8 +93,18 @@ type entryDoc struct {
 
 // labelDoc is one label: its entries, and the records of 0 bytes it names with their platform (the label's `empty`).
 type labelDoc struct {
-	Entries []entryDoc `json:"entries"`
-	Empty   []emptyDoc `json:"empty,omitempty"`
+	Entries []entryDoc  `json:"entries"`
+	Empty   []emptyDoc  `json:"empty,omitempty"`
+	Scripts []scriptDoc `json:"scripts,omitempty"`
+}
+
+// scriptDoc is one entry of a label's `scripts` list (src/cdn/cdn_manifest.h): the runtime makes the copy `name` on the player's
+// machine from the stock script `stock_source`, whose sha-256 is `stock_sha256`. No script byte is in the set.
+type scriptDoc struct {
+	Name        string `json:"name"`
+	Platform    string `json:"platform"`
+	StockSource string `json:"stock_source"`
+	StockSha256 string `json:"stock_sha256"`
 }
 
 // manifestDoc is the manifest. The top-level `empty` is always written as [] (a record of 0 bytes belongs to its label).
@@ -170,15 +180,19 @@ func run(args []string, stdout, stderr io.Writer, log *slog.Logger) int {
 		return exitUsage
 	}
 	var recs []record
+	var scripts []scriptDoc
 	var err error
 	if bySpec {
 		recs, err = specRecords(*specPath)
 	} else {
 		recs, err = contentPackRecords(*contentPack, *label, *platformName, log)
+		if err == nil {
+			scripts, err = contentPackScripts(*contentPack, *label, *platformName, log)
+		}
 	}
 	var sum *summary
 	if err == nil {
-		sum, err = build(recs, *out, *maxWindow, log)
+		sum, err = buildLabeled(recs, map[string][]scriptDoc{*label: scripts}, *out, *maxWindow, log)
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, "cargo-pack:", err)
@@ -302,6 +316,12 @@ func specRecords(specPath string) ([]record, error) {
 
 // build frames every record, checks the set whole, and only then writes the objects and the manifest frame.
 func build(recs []record, out string, maxWindow uint64, log *slog.Logger) (*summary, error) {
+	return buildLabeled(recs, nil, out, maxWindow, log)
+}
+
+// buildLabeled is build with each label's `scripts` list (label -> entries): a list is written on its label's entry, and a label
+// with records is the only one it can name.
+func buildLabeled(recs []record, scripts map[string][]scriptDoc, out string, maxWindow uint64, log *slog.Logger) (*summary, error) {
 	type built struct {
 		doc   entryDoc
 		label string
@@ -365,6 +385,17 @@ func build(recs []record, out string, maxWindow uint64, log *slog.Logger) (*summ
 		l := man.Labels[e.label]
 		l.Empty = append(l.Empty, e.doc)
 		man.Labels[e.label] = l
+	}
+	for label, list := range scripts {
+		if len(list) == 0 {
+			continue
+		}
+		l, ok := man.Labels[label]
+		if !ok {
+			return nil, fmt.Errorf("label %q has scripts and no record", label)
+		}
+		l.Scripts = list
+		man.Labels[label] = l
 	}
 	for name, l := range man.Labels {
 		if l.Entries == nil {

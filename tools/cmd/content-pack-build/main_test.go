@@ -376,3 +376,80 @@ func TestAFailedWriteNeverFollowsALinkPlantedInStaging(t *testing.T) {
 		t.Errorf("the staging folder was left: %v", left)
 	}
 }
+
+const (
+	rekeyCopy   = "00000000000000c1"
+	rekeySource = "190ed14fe6c74dd3"
+)
+
+func TestARekeyIsListedWithTheSha256OfItsStockScriptAndCarriesNoByte(t *testing.T) {
+	f := newFixture(t)
+	out := f.out("rekeypack")
+	list := append([]Step{{Name: "copy a stock script", Apply: func(p *Pack) error { return p.Rekey(rekeyCopy, rekeySource) }}}, testSteps[:2]...)
+	code, stdout, stderr := f.run(list, "-game-dir", f.game, "-out", out, "-id", "rekeypack", "-version", "1.0.0")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	var res Result
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil || res.Rekeys != 1 || res.Scripts != 0 {
+		t.Fatalf("stdout %q (%v)", stdout, err)
+	}
+	text, err := os.ReadFile(filepath.Join(out, "content.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cj contentJSON
+	if err := json.Unmarshal(text, &cj); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte("MZ stock script"))
+	want := RekeyEntry{Name: rekeyCopy, Platform: "windows-x86_64", StockSource: rekeySource, StockSha256: hex.EncodeToString(sum[:])}
+	if len(cj.Rekeys) != 1 || cj.Rekeys[0] != want {
+		t.Fatalf("rekeys %+v, want [%+v]", cj.Rekeys, want)
+	}
+	if len(cj.Scripts) != 0 {
+		t.Errorf("scripts %v: a rekey carries no script", cj.Scripts)
+	}
+	for rel := range cj.Files {
+		if strings.HasPrefix(rel, "scripts/") {
+			t.Errorf("the pack carries %s", rel)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(out, "scripts")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("scripts folder written: %v", err)
+	}
+}
+
+func TestARekeyThatCannotBeMadeIsRefusedAndWritesNothing(t *testing.T) {
+	cases := map[string]func(p *Pack) error{
+		"stock script absent": func(p *Pack) error { return p.Rekey(rekeyCopy, "94ba7ca39fc97e1a") },
+		"bad source":          func(p *Pack) error { return p.Rekey(rekeyCopy, "../x") },
+		"bad name":            func(p *Pack) error { return p.Rekey("C1", rekeySource) },
+		"itself":              func(p *Pack) error { return p.Rekey(rekeySource, rekeySource) },
+		"twice": func(p *Pack) error {
+			if err := p.Rekey(rekeyCopy, rekeySource); err != nil {
+				return err
+			}
+			return p.Rekey(rekeyCopy, rekeySource)
+		},
+		"a name the pack carries": func(p *Pack) error {
+			if err := p.PutScript(rekeyCopy, []byte("MZ")); err != nil {
+				return err
+			}
+			return p.Rekey(rekeyCopy, rekeySource)
+		},
+	}
+	for what, apply := range cases {
+		f := newFixture(t)
+		out := f.out("rekeypack")
+		// A step that changes a resource comes first, so only the rekey can be what refuses the build.
+		list := []Step{{Name: "add a resource", Apply: func(p *Pack) error { return p.Put(Sets[0], 2, 8, []byte("new")) }}, {Name: what, Apply: apply}}
+		code, _, stderr := f.run(list, "-game-dir", f.game, "-out", out, "-id", "rekeypack", "-version", "1.0.0")
+		if code != 1 || !strings.Contains(stderr, "step "+what) {
+			t.Errorf("%s: exit %d, want 1 from that step: %s", what, code, stderr)
+		}
+		if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s: out written", what)
+		}
+	}
+}

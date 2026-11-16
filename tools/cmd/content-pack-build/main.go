@@ -7,7 +7,8 @@
 // The pack's game data is built from the player's own stock files on the machine that runs the build; nothing of the
 // game's is in this repository (ADR 0028). A changed set is written as the stock manifest with the pack's resources
 // added or replaced and one new package holding them (tools/internal/radpack); a script is written as
-// scripts/<16 hex>.dll. The steps are the build's list (steps below); the EchoCombat pack's steps are added to it one
+// scripts/<16 hex>.dll; a script copy a step names with Pack.Rekey is only listed, as `rekeys` in content.json (name, platform,
+// stock_source, stock_sha256 of the stock file read), and carries no byte. The steps are the build's list (steps below); the EchoCombat pack's steps are added to it one
 // slice at a time (#600). With no step that changes anything the build refuses: a pack that serves nothing is not made.
 // A refusal exits 1 and names what failed, and -out is not written: the pack is written into a new folder beside -out
 // and renamed to -out only when every file is in it, so a failed write leaves no -out. -out may not be inside -game-dir:
@@ -54,6 +55,20 @@ type Pack struct {
 	sets    map[string]*radpack.Set
 	changes map[string]map[radpack.Key][]byte // set -> resource -> bytes
 	scripts map[string][]byte                 // 16 hex -> DLL
+	rekeys  []RekeyEntry                      // the copies a step named: listed, never carried (Rekey)
+}
+
+// RekeyPlatform is the platform a rekey entry names: Rekey reads the PC's stock scripts.
+const RekeyPlatform = "windows-x86_64"
+
+// RekeyEntry is one script copy a label asks the runtime to make: `name` is the copy, `stock_source` the stock script it is
+// made from, and `stock_sha256` the sha-256 of that stock file as the build read it (docs/adr/0045, the label's `scripts` list;
+// the entry shape is the manifest parser's, src/cdn/cdn_manifest.h). No script byte is part of it.
+type RekeyEntry struct {
+	Name        string `json:"name"`
+	Platform    string `json:"platform"`
+	StockSource string `json:"stock_source"`
+	StockSha256 string `json:"stock_sha256"`
 }
 
 // Read is the pack's current bytes for a resource: the pack's own when a step changed it, else the stock one.
@@ -113,6 +128,39 @@ func (p *Pack) PutScript(name string, dll []byte) error {
 	return nil
 }
 
+// Rekey lists a copy of the stock script `stockSource` under the name `name`: it reads
+// `<game>\bin\win10\scripts\<stockSource>.dll`, hashes it (sha-256) and records the entry content.json carries as `rekeys`.
+// The copy is made on the player's machine from that stock file; no script byte goes into the pack, and the build writes no
+// file for it.
+func (p *Pack) Rekey(name, stockSource string) error {
+	if !scriptName.MatchString(name) {
+		return fmt.Errorf("%q is not a script name (16 lowercase hex)", name)
+	}
+	if !scriptName.MatchString(stockSource) {
+		return fmt.Errorf("%q is not a stock script name (16 lowercase hex)", stockSource)
+	}
+	if name == stockSource {
+		return fmt.Errorf("rekey %s names the stock script itself; a copy needs its own name", name)
+	}
+	if _, ok := p.scripts[name]; ok {
+		return fmt.Errorf("rekey %s: the pack already carries a script of that name", name)
+	}
+	for _, r := range p.rekeys {
+		if r.Name == name {
+			return fmt.Errorf("rekey %s is listed twice", name)
+		}
+	}
+	stock, err := os.ReadFile(filepath.Join(p.gameDir, "bin", "win10", "scripts", stockSource+".dll"))
+	if err != nil {
+		return fmt.Errorf("rekey %s: the stock script: %w", name, err)
+	}
+	if len(stock) == 0 {
+		return fmt.Errorf("rekey %s: stock script %s has no bytes", name, stockSource)
+	}
+	p.rekeys = append(p.rekeys, RekeyEntry{Name: name, Platform: RekeyPlatform, StockSource: stockSource, StockSha256: digest(stock)})
+	return nil
+}
+
 // Step is one change the build makes, from the stock files.
 type Step struct {
 	Name  string
@@ -166,6 +214,7 @@ type Result struct {
 	Manifests int    `json:"manifests"`
 	Resources int    `json:"resources"`
 	Scripts   int    `json:"scripts"`
+	Rekeys    int    `json:"rekeys,omitempty"`
 	Files     int    `json:"files"`
 }
 
@@ -184,6 +233,7 @@ type contentJSON struct {
 	DataDir   string            `json:"data_dir"`
 	Manifests []manifestEntry   `json:"manifests"`
 	Scripts   []string          `json:"scripts,omitempty"`
+	Rekeys    []RekeyEntry      `json:"rekeys,omitempty"`
 	Files     map[string]string `json:"files"`
 }
 
@@ -228,7 +278,7 @@ func Build(list []Step, gameDir, out, id, ver string, log *slog.Logger) (Result,
 		}
 		log.Info("step_applied", "step", st.Name)
 	}
-	if len(p.changes) == 0 && len(p.scripts) == 0 {
+	if len(p.changes) == 0 && len(p.scripts) == 0 && len(p.rekeys) == 0 {
 		return Result{}, errors.New("no step changes the stock data, so there is nothing to pack")
 	}
 
@@ -268,6 +318,9 @@ func Build(list []Step, gameDir, out, id, ver string, log *slog.Logger) (Result,
 		cj.Scripts = append(cj.Scripts, rel)
 	}
 	res.Scripts = len(names)
+	cj.Rekeys = append(cj.Rekeys, p.rekeys...)
+	sort.Slice(cj.Rekeys, func(i, j int) bool { return cj.Rekeys[i].Name < cj.Rekeys[j].Name })
+	res.Rekeys = len(cj.Rekeys)
 	for rel, b := range files {
 		cj.Files[rel] = digest(b)
 	}

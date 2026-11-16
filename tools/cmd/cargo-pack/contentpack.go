@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -28,6 +29,11 @@ const (
 	maxContentJSON    = 1 << 20 // a content.json is a few KiB; a bound on a file read whole
 )
 
+var (
+	scriptHex = regexp.MustCompile("^[0-9a-f]{16}$") // a script's name: the game's 16-hex file name
+	sha256Hex = regexp.MustCompile("^[0-9a-f]{64}$")
+)
+
 var packageID = regexp.MustCompile(fmt.Sprintf("^[0-9a-f]{%d}$", hexDigits))
 
 type contentManifest struct {
@@ -41,6 +47,7 @@ type contentDoc struct {
 	Format    int               `json:"format"`
 	ID        string            `json:"id"`
 	Manifests []contentManifest `json:"manifests"`
+	Rekeys    []scriptDoc       `json:"rekeys"`
 	Files     map[string]string `json:"files"`
 }
 
@@ -73,6 +80,65 @@ func packageNumber(p, set string) (uint32, bool) {
 	return uint32(n), err == nil && strconv.FormatUint(n, decimalBase) == digits
 }
 
+// readContentDoc reads and decodes the pack's content.json, and refuses one that is not a format 1 pack that serves manifests.
+func readContentDoc(dir string) (contentDoc, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, contentJSON))
+	if err != nil {
+		return contentDoc{}, err
+	}
+	if len(raw) > maxContentJSON {
+		return contentDoc{}, fmt.Errorf("%s is %d bytes, more than %d", contentJSON, len(raw), maxContentJSON)
+	}
+	var doc contentDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return contentDoc{}, fmt.Errorf("%s: %w", contentJSON, err)
+	}
+	if doc.Format != contentFormat || len(doc.Manifests) == 0 {
+		return contentDoc{}, fmt.Errorf("%s: format %d with %d manifests is not a format %d pack that serves manifests", contentJSON, doc.Format, len(doc.Manifests), contentFormat)
+	}
+	return doc, nil
+}
+
+// contentPackScripts is the label's `scripts` list: the pack's `rekeys` of the label's platform, each a copy the runtime makes
+// from a stock script on the player's machine (src/cdn/cdn_manifest.h). Only the entry is read; no script byte is in the pack
+// or in the set. An entry whose name or stock source is not 16 lowercase hex, whose stock_sha256 is not 64 lowercase hex, whose
+// copy is its own source, whose platform is unknown, or whose name is listed twice is refused. The list is sorted by name.
+func contentPackScripts(dir, label, platformName string, log *slog.Logger) ([]scriptDoc, error) {
+	if !labelRe.MatchString(label) {
+		return nil, fmt.Errorf("label %q is not 1 to 48 of [a-z0-9_]", label)
+	}
+	if !platform[platformName] {
+		return nil, fmt.Errorf("platform %q is not android-arm64 or windows-x86_64", platformName)
+	}
+	doc, err := readContentDoc(dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []scriptDoc
+	seen := map[string]bool{}
+	for _, r := range doc.Rekeys {
+		if !scriptHex.MatchString(r.Name) || !scriptHex.MatchString(r.StockSource) || !sha256Hex.MatchString(r.StockSha256) {
+			return nil, fmt.Errorf("%s: rekey %q from %q (sha-256 %q) is not a 16-hex name, a 16-hex stock source and a 64-hex sha-256", contentJSON, r.Name, r.StockSource, r.StockSha256)
+		}
+		if !platform[r.Platform] {
+			return nil, fmt.Errorf("%s: rekey %s names platform %q, not android-arm64 or windows-x86_64", contentJSON, r.Name, r.Platform)
+		}
+		if r.Name == r.StockSource {
+			return nil, fmt.Errorf("%s: rekey %s is a copy of itself", contentJSON, r.Name)
+		}
+		if seen[r.Name+r.Platform] {
+			return nil, fmt.Errorf("%s: rekey %s is listed twice for %s", contentJSON, r.Name, r.Platform)
+		}
+		seen[r.Name+r.Platform] = true
+		if r.Platform == platformName {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	log.Info("pack scripts read", "label", label, "platform", platformName, "rekeys", len(doc.Rekeys), "listed", len(out))
+	return out, nil
+}
+
 // contentPackRecords is the records a pack's own packages store: for each manifest of the pack, every resource whose chunk is
 // in a listed package numbered from stock_packages on (a pack's packages include every record it adds or replaces, and may include
 // others). Nothing of the pack is run; the scripts are not read.
@@ -83,19 +149,9 @@ func contentPackRecords(dir, label, platformName string, log *slog.Logger) ([]re
 	if !platform[platformName] {
 		return nil, fmt.Errorf("platform %q is not android-arm64 or windows-x86_64", platformName)
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, contentJSON))
+	doc, err := readContentDoc(dir)
 	if err != nil {
 		return nil, err
-	}
-	if len(raw) > maxContentJSON {
-		return nil, fmt.Errorf("%s is %d bytes, more than %d", contentJSON, len(raw), maxContentJSON)
-	}
-	var doc contentDoc
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil, fmt.Errorf("%s: %w", contentJSON, err)
-	}
-	if doc.Format != contentFormat || len(doc.Manifests) == 0 {
-		return nil, fmt.Errorf("%s: format %d with %d manifests is not a format %d pack that serves manifests", contentJSON, doc.Format, len(doc.Manifests), contentFormat)
 	}
 	chunks, err := radpack.NewChunks()
 	if err != nil {

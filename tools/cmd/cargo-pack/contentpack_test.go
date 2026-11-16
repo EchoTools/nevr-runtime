@@ -428,3 +428,108 @@ func TestRunWantsOneInputAndTheLabelAndPlatformOfAPack(t *testing.T) {
 		}
 	}
 }
+
+const (
+	copyName    = "00000000000000c1"
+	copySource  = "190ed14fe6c74dd3"
+	otherCopy   = "00000000000000c2"
+	otherSource = "94ba7ca39fc97e1a"
+)
+
+// withRekeys rewrites the pack's content.json with the given `rekeys` list, the way content-pack-build writes it.
+func withRekeys(t *testing.T, dir string, rekeys []scriptDoc) {
+	t.Helper()
+	path := filepath.Join(dir, contentJSON)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc contentDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc.Rekeys = rekeys
+	if raw, err = json.Marshal(doc); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, filePerm); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func fixtureRekey(name, source, platformName string) scriptDoc {
+	return scriptDoc{Name: name, Platform: platformName, StockSource: source, StockSha256: shaOf([]byte("stock " + source))}
+}
+
+// packedLabel runs cargo-pack over the pack and returns the manifest's label as written.
+func packedLabel(t *testing.T, dir, platformName string) (labelDoc, int) {
+	t.Helper()
+	out := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"-content-pack", dir, "-label", "combat_content", "-platform", platformName, "-out", out, "-max-window", fmt.Sprint(testWindow)}, &stdout, &stderr, quiet()); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	mframe, err := os.ReadFile(filepath.Join(out, manifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var top struct {
+		Labels map[string]labelDoc `json:"labels"`
+	}
+	if err := json.Unmarshal(decode(t, mframe), &top); err != nil {
+		t.Fatal(err)
+	}
+	blobs, err := os.ReadDir(filepath.Join(out, "blobs", "sha256"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return top.Labels["combat_content"], len(blobs)
+}
+
+func TestARekeyOfThePackIsTheLabelsScriptsListWithItsSha256AndNoScriptByte(t *testing.T) {
+	dir := makePack(t, nil)
+	withRekeys(t, dir, []scriptDoc{fixtureRekey(otherCopy, otherSource, "windows-x86_64"), fixtureRekey(copyName, copySource, "windows-x86_64")})
+	label, blobs := packedLabel(t, dir, "windows-x86_64")
+	want := []scriptDoc{fixtureRekey(copyName, copySource, "windows-x86_64"), fixtureRekey(otherCopy, otherSource, "windows-x86_64")}
+	if len(label.Scripts) != len(want) || label.Scripts[0] != want[0] || label.Scripts[1] != want[1] {
+		t.Fatalf("label scripts = %+v, want %+v (sorted by name, each with the sha-256 of its stock source)", label.Scripts, want)
+	}
+	if blobs != recordsOfThePack {
+		t.Errorf("%d objects for a pack of %d records: a script went into the set", blobs, recordsOfThePack)
+	}
+}
+
+func TestAPackWithNoRekeyWritesNoScriptsList(t *testing.T) {
+	label, _ := packedLabel(t, makePack(t, nil), "windows-x86_64")
+	if label.Scripts != nil {
+		t.Errorf("label scripts = %+v, want none", label.Scripts)
+	}
+}
+
+func TestOnlyTheRekeysOfThePlatformAreListed(t *testing.T) {
+	dir := makePack(t, nil)
+	withRekeys(t, dir, []scriptDoc{fixtureRekey(copyName, copySource, "windows-x86_64")})
+	if label, _ := packedLabel(t, dir, "android-arm64"); label.Scripts != nil {
+		t.Errorf("an android-arm64 label lists %+v", label.Scripts)
+	}
+}
+
+func TestAMalformedRekeyIsRefused(t *testing.T) {
+	good := fixtureRekey(copyName, copySource, "windows-x86_64")
+	cases := map[string][]scriptDoc{
+		"short name":       {{Name: "c1", Platform: good.Platform, StockSource: good.StockSource, StockSha256: good.StockSha256}},
+		"upper-case name":  {{Name: "00000000000000C1", Platform: good.Platform, StockSource: good.StockSource, StockSha256: good.StockSha256}},
+		"bad source":       {{Name: good.Name, Platform: good.Platform, StockSource: "xyz", StockSha256: good.StockSha256}},
+		"bad sha":          {{Name: good.Name, Platform: good.Platform, StockSource: good.StockSource, StockSha256: "abc"}},
+		"unknown platform": {{Name: good.Name, Platform: "plan9", StockSource: good.StockSource, StockSha256: good.StockSha256}},
+		"copy of itself":   {{Name: good.StockSource, Platform: good.Platform, StockSource: good.StockSource, StockSha256: good.StockSha256}},
+		"listed twice":     {good, good},
+	}
+	for what, list := range cases {
+		dir := makePack(t, nil)
+		withRekeys(t, dir, list)
+		if _, err := contentPackScripts(dir, "combat_content", "windows-x86_64", quiet()); err == nil {
+			t.Errorf("%s: the rekey was read", what)
+		}
+	}
+}
