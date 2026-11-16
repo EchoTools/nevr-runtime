@@ -1,0 +1,5 @@
+{"component":"tools/internal/gearicons","dir":"tools/internal/gearicons"}
+{"file":"tools/internal/gearicons/art.go","tests":["go:internal/gearicons","go:internal/questwiring"]}
+{"file":"tools/internal/gearicons/art_test.go","tests":["go:internal/gearicons","go:internal/questwiring"]}
+{"file":"tools/internal/gearicons/gearicons.go","tests":["go:internal/gearicons","go:internal/questwiring"]}
+{"file":"tools/internal/gearicons/gearicons_test.go","tests":["go:internal/gearicons","go:internal/questwiring"]}
