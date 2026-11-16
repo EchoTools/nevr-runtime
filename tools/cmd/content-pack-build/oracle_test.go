@@ -225,8 +225,8 @@ func TestAPlantedDifferenceInADeclaredFieldIsNamed(t *testing.T) {
 }
 
 // shippedFields: the three drone steps, the drone health step, the DOT stick step and the two DOT constraint steps
-// declare one field each, the equipment step one per list.
-const shippedFields = 9
+// declare one field each, the equipment step one per list, and the DOT preset step one per activation key (3).
+const shippedFields = 12
 
 func TestTheDeclaredFieldsOfTheShippedStepsAreWellFormed(t *testing.T) {
 	t.Parallel()

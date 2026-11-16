@@ -224,6 +224,7 @@ func TestTheProductionStepsAreTheEchoCombatOnesInOrder(t *testing.T) {
 	want := []string{
 		"DOT FIELD magazine drops its leftover rigid-attach rows",
 		"DOT FIELD magazine drops its leftover parented-constraint rows",
+		"DOT FIELD arms by remote trigger, not on impact",
 		"drone bullet takes the assault bullet's effects",
 		"drone bullet gets the assault bullet's particle rows",
 		"drone actor runs script 190ed14fe6c74dd3",
