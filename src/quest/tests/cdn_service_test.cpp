@@ -281,7 +281,7 @@ void EventsAreOneParsableSentinelLineEachWithTypedFields() {
 void TheSettingsAreTheCodesDefaultsChangedByTheFile() {
   nevr_quest::AssetsChoice none;
   nc::RunConfig c = qc::MakeRunConfig(none, "/c");
-  QCHECK(c.dir == "/c" && c.base_url == "https://cargo.echo.taxi/" && c.manifest_path == "v1/manifest.json.zst");
+  QCHECK(c.dir == "/c" && c.base_url == "https://cargo.echo.taxi/" && c.manifest_path == "v2/manifest.json.zst");
   QCHECK(c.platform.name == std::string("android-arm64") && c.source == "default" && !c.policy.required_only && c.policy.overrides.empty());
   QCHECK(nc::StateOf("lobby_posters", c.policy) == nc::LabelState::kOn && nc::StateOf("anything_else", c.policy) == nc::LabelState::kOff);
   QCHECK(nc::StateOf("game", c.policy) == nc::LabelState::kRequired);
@@ -382,6 +382,88 @@ void TheSecondLaunchMountsFromTheStoreAndMakesNoBlobRequest() {
   QCHECK(mounted.size() == 1 && mounted[0]["source"] == "boot" && mounted[0]["records"] == 2 && mounted[0]["chunk_base"] == "0x01000000");
 }
 
+// The default manifest is v2; the CDN holds v1 alone until v2 is published (PLAN-v5 5.1, X9). The rig's manifest is moved to the key a
+// case names, and the run uses the code's default path.
+constexpr const char* kV1Url = "https://cargo.echo.taxi/v1/manifest.json.zst";
+constexpr const char* kV2Url = "https://cargo.echo.taxi/v2/manifest.json.zst";
+constexpr long kUnavailable = 503;
+
+void UseDefaultManifestPathWithKeys(Rig& rig, bool v1, bool v2) {
+  const Response manifest = rig.transport.server["https://cargo.echo.taxi/v1/test/manifest.json.zst"];
+  rig.transport.server.erase("https://cargo.echo.taxi/v1/test/manifest.json.zst");
+  if (v1) rig.transport.server[kV1Url] = manifest;
+  if (v2) rig.transport.server[kV2Url] = manifest;
+  rig.config.manifest_path = nc::kDefaultManifestPath;
+}
+
+bool Requested(const Rig& rig, const char* url) {
+  for (const std::string& r : rig.transport.requests) {
+    if (r == url) return true;
+  }
+  return false;
+}
+
+void ACdnWithNoV2KeyServesV1sLabelsAndLogsTheFallbackOnce() {
+  ClearLog();
+  g_published.clear();
+  Rig rig;
+  UseDefaultManifestPathWithKeys(rig, /*v1=*/true, /*v2=*/false);
+  nc::PosixEnv env(&rig.transport);
+  const nc::RunResult r = nc::RunOnce(env, rig.config, &Publish, [] { return true; });
+  QCHECK(r.manifest_loaded && r.fetched == 2 && r.failed == 0 && r.published);  // v1's lobby_posters mounted
+  QCHECK(Requested(rig, kV2Url) && Requested(rig, kV1Url));
+  const std::vector<json> manifest = Events("cdn_manifest");
+  int fallbacks = 0;
+  for (const json& m : manifest) {
+    if (m.value("result", "") != "fallback") continue;
+    ++fallbacks;
+    QCHECK(m["level"] == "info" && m["from"] == "v2" && m["to"] == "v1" && m["status"] == 404);
+    QCHECK(m.value("consequence", "") == "labels with scripts are not offered; v1's labels mount as before");
+  }
+  QCHECK(fallbacks == 1);
+  QCHECK(!manifest.empty() && manifest.back()["result"] == "loaded" && manifest.back()["url"] == kV1Url);
+}
+
+void TheWholeGameLaunchFallsBackToV1TooWhenTheCdnHasNoV2Key() {
+  ClearLog();
+  g_published.clear();
+  Rig rig;
+  UseDefaultManifestPathWithKeys(rig, /*v1=*/true, /*v2=*/false);
+  nc::PosixEnv env(&rig.transport);
+  const nc::FirstRunResult r = nc::FirstRun(env, rig.config, &Publish, [] { return true; });
+  QCHECK(r.ok && Requested(rig, kV1Url));
+  QCHECK(Events("cdn_manifest").size() == 2);  // the fallback, then v1's manifest loaded
+}
+
+void WithBothKeysV2IsReadAndV1IsNeverAsked() {
+  ClearLog();
+  g_published.clear();
+  Rig rig;
+  UseDefaultManifestPathWithKeys(rig, /*v1=*/true, /*v2=*/true);
+  nc::PosixEnv env(&rig.transport);
+  const nc::RunResult r = nc::RunOnce(env, rig.config, &Publish, [] { return true; });
+  QCHECK(r.manifest_loaded && r.fetched == 2 && r.failed == 0);
+  QCHECK(Requested(rig, kV2Url) && !Requested(rig, kV1Url));
+  for (const json& m : Events("cdn_manifest")) QCHECK(m.value("result", "") != "fallback");
+  const std::vector<json> loaded = Events("cdn_manifest");
+  QCHECK(!loaded.empty() && loaded.back()["url"] == kV2Url);
+}
+
+void AnOutageOnV2IsTheFailedFetchAndNeverFallsBack() {
+  ClearLog();
+  g_published.clear();
+  Rig rig;
+  UseDefaultManifestPathWithKeys(rig, /*v1=*/true, /*v2=*/false);
+  rig.transport.server[kV2Url] = Response{kUnavailable, ""};
+  nc::PosixEnv env(&rig.transport);
+  const nc::RunResult r = nc::RunOnce(env, rig.config, &Publish, [] { return true; });
+  QCHECK(!r.manifest_loaded && std::string(r.stopped) == nc::kStoppedManifestFailed && r.fetched == 0);
+  QCHECK(!Requested(rig, kV1Url));
+  const std::vector<json> manifest = Events("cdn_manifest");
+  QCHECK(manifest.size() == 1 && manifest[0]["result"] == "failed" && manifest[0]["http_status"] == kUnavailable &&
+         manifest[0]["url"] == kV2Url);
+}
+
 }  // namespace
 
 int main() {
@@ -396,6 +478,10 @@ int main() {
   StartIsOneShotAndOffWithoutACacheDirectory();
   TheFirstLaunchOnRealFilesPublishesAShadowWhoseHandleReadsTheStoredBytes();
   TheSecondLaunchMountsFromTheStoreAndMakesNoBlobRequest();
+  ACdnWithNoV2KeyServesV1sLabelsAndLogsTheFallbackOnce();
+  TheWholeGameLaunchFallsBackToV1TooWhenTheCdnHasNoV2Key();
+  WithBothKeysV2IsReadAndV1IsNeverAsked();
+  AnOutageOnV2IsTheFailedFetchAndNeverFallsBack();
   if (std::getenv("NEVR_CDN_PRINT_LOG") != nullptr) {  // the sentinel's own JSON lines of the last run, for a commit message or a person
     for (const std::string& line : g_lines) std::printf("%s\n", line.c_str());
   }

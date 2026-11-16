@@ -27,12 +27,33 @@ RunConfig MakeRunConfig(const Settings& settings, const std::string& cache_dir, 
   return c;
 }
 
+RunConfig ResolveManifestPath(Env& env, const RunConfig& config, const std::function<bool()>& keep_going) {
+  if (config.manifest_path != kDefaultManifestPath) return config;
+  long status = 0;
+  const HttpResult http = env.Get(config.base_url + config.manifest_path,
+                                  [&status](long st, const void*, std::size_t) {
+                                    status = st;
+                                    return false;  // the status is the answer; the fetch itself reads the body
+                                  },
+                                  keep_going);
+  if ((status != 0 ? status : http.status) != kManifestMissingStatus) return config;
+  env.Event(EventLevel::kInfo, "cdn_manifest",
+            {{"result", "fallback"},
+             {"from", "v2"},
+             {"to", "v1"},
+             {"status", kManifestMissingStatus},
+             {"consequence", "labels with scripts are not offered; v1's labels mount as before"}});
+  RunConfig legacy = config;
+  legacy.manifest_path = kLegacyManifestPath;
+  return legacy;
+}
+
 RunResult RunOnce(Env& env, const RunConfig& config, PublishFn publish, const std::function<bool()>& keep_going) {
   // The publisher keeps the set for the life of the process: the engine may be filling a request from its shadow.
   const Publish give = [publish](std::unique_ptr<Mounted> set) { publish(set.release()); };
   env.MakeDirs(config.dir);  // as Start does: the device's free space is asked of a directory that exists
   MountFromCache(env, config, give);
-  return FetchAndMount(env, config, give, keep_going);
+  return FetchAndMount(env, ResolveManifestPath(env, config, keep_going), give, keep_going);
 }
 
 FirstRunResult FirstRun(Env& env, const RunConfig& config, PublishFn publish, const std::function<bool()>& keep_going) {
@@ -51,7 +72,7 @@ FirstRunResult FirstRun(Env& env, const RunConfig& config, PublishFn publish, co
   };
   env.MakeDirs(held.dir);  // as Start does: the device's free space is asked of a directory that exists
   MountFromCache(env, held, give);
-  const RunResult r = FetchAndMount(env, held, give, keep_going);
+  const RunResult r = FetchAndMount(env, ResolveManifestPath(env, held, keep_going), give, keep_going);
   FirstRunResult out;
   out.ok = r.manifest_loaded && r.failed == 0 && std::string(r.stopped).empty() && published != 0;
   // Offline (or the CDN unreachable): the manifest could not be refreshed, but the boot mount handed the engine a complete set from the
@@ -95,7 +116,10 @@ bool Start(Env* env, const RunConfig& config, PublishFn publish) noexcept {
   MountFromCache(*env, config, give);
   // Never freed: the detached thread reads it for the life of the process.
   const RunConfig* const held = new RunConfig(config);
-  std::thread([env, held, give]() { FetchAndMount(*env, *held, give, [] { return true; }); }).detach();
+  std::thread([env, held, give]() {
+    const auto keepGoing = [] { return true; };
+    FetchAndMount(*env, ResolveManifestPath(*env, *held, keepGoing), give, keepGoing);
+  }).detach();
   return true;
 }
 

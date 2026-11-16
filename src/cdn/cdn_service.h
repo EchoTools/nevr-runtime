@@ -25,7 +25,13 @@ namespace nevr_cdn {
 inline constexpr const char* kDefaultBaseUrl = "https://cargo.echo.taxi/";
 // The path the CDN publishes its manifest at. The CDN publishes it as one zstd frame; the client reads any manifest by its bytes
 // (cdn_manifest.h ParseManifestBody), so the name sets no format.
-inline constexpr const char* kDefaultManifestPath = "v1/manifest.json.zst";
+inline constexpr const char* kDefaultManifestPath = "v2/manifest.json.zst";
+// The manifest an older client reads, and the one a run falls back to when the CDN has no key at kDefaultManifestPath: it carries the
+// labels without the label-level `scripts` list.
+inline constexpr const char* kLegacyManifestPath = "v1/manifest.json.zst";
+// The HTTP status of a key the CDN does not hold. Only this status moves a run from the default manifest to the legacy one; an outage
+// (5xx, a timeout) is the ordinary failed manifest fetch.
+inline constexpr long kManifestMissingStatus = 404;
 
 // What the config file said about the CDN (`assets.*`); an empty field means the code's default. Each runtime fills it from its own
 // config reader.
@@ -42,6 +48,12 @@ RunConfig MakeRunConfig(const Settings& settings, const std::string& cache_dir, 
 
 // Receives each mounted set. The set is never freed (a request being filled from its shadow must stay valid).
 using PublishFn = void (*)(const Mounted*);
+
+// The config a fetch runs with. A config that names its own manifest is returned as it is. A config on kDefaultManifestPath asks the CDN
+// for that key first (one request that ends at its status line); on kManifestMissingStatus alone it returns the config with
+// kLegacyManifestPath and writes one Info `cdn_manifest result=fallback from=v2 to=v1 status=404`. Any other answer returns the config
+// as it is, so the fetch makes the request again and reports a failure as it does for any manifest.
+RunConfig ResolveManifestPath(Env& env, const RunConfig& config, const std::function<bool()>& keep_going);
 
 // The boot half and then the fetch, on the calling thread: the whole of what the background thread does. For the tests.
 RunResult RunOnce(Env& env, const RunConfig& config, PublishFn publish, const std::function<bool()>& keep_going);

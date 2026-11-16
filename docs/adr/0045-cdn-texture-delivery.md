@@ -55,9 +55,12 @@ process.
    The runtime never decompresses a blob; the SHA-256 of the stored frame proves it is the published one. The manifest is unsigned in
    this decision (see Not claimed).
    A label may list `scripts`: entries `{name, platform, stock_source, stock_sha256}`, each a script served from a copy of the player's own stock file made on the device under the new name. A `scripts` entry that carries `edits` (`rekey_edits`), a frame's fields (`image_entry`), its own stock source as its name (`stock_hash`), anything but the four fields in their forms (`bad_script`), or a platform and name another entry of the label has (`duplicate`) refuses its label whole (`ParseManifest`, `cdn_refused`).
-5. **The host is `cargo.echo.taxi`, bucket `nevr-cargo`.** `blobs/sha256/<hex>` (immutable), `v1/manifests/<sha256>.json.zst` (kept by
-   hash), `v1/manifest.json.zst` (the current copy, short cache). A test device names `v1/test/manifest.json.zst` through `assets.cdn_url`;
-   `v1/manifest.json.zst` is the manifest every client reads by default and holds the `lobby_posters` label. `cargo-publish` (prefix `v1/`) writes the three kinds of key in that order and never replaces a key that exists, so a manifest that is already there is replaced by a deliberate step outside that tool. The manifest-publish token is held by the project owner's delegate;
+5. **The host is `cargo.echo.taxi`, bucket `nevr-cargo`.** `blobs/sha256/<hex>` (immutable), `v2/manifests/<sha256>.json.zst` (kept by
+   hash), `v2/manifest.json.zst` (the current copy, short cache), the manifest every client of this schema reads by default. `v1/` stays
+   for clients built before labels carried `scripts`. A client whose CDN answers HTTP 404 for `v2/manifest.json.zst` reads
+   `v1/manifest.json.zst` and holds its labels (`lobby_posters`) as before, and logs one Info `cdn_manifest result=fallback`; a 5xx or a
+   timeout is a failed manifest fetch, never a fallback, and a config that names its own manifest never falls back. A test device names
+   `v1/test/manifest.json.zst` through `assets.cdn_url`. `cargo-publish` (prefix `v1/` or `v2/`) writes every blob at `blobs/sha256/<hex>` in the bucket root (the same shared set for both prefixes), then the by-hash manifest (`v1/manifests/<sha256>.json.zst` under `v1/`, `v2/manifests/<sha256>.json.zst` under `v2/`), then `<prefix>manifest.json.zst`, in that order; under `v2/` it writes no `v1/` key; it never replaces a key that exists, so a manifest already there is replaced by a deliberate step outside that tool (`-replace-live` is for `v1/` only). The manifest-publish token is held by the project owner's delegate;
    whether an R2 token can be limited to a key prefix is open and not needed here.
 6. **Objects are appended to a few store files and hashed once.** A blob is streamed into `store-<n>.pack` (at most 4 GiB: the engine's
    chunk offset is 32 bits) while it is hashed; its frame header is checked against the record (`cdn_validate.h`); when size, header

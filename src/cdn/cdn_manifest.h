@@ -1,5 +1,5 @@
 /* The CDN manifest: the JSON document, published as one zstd frame, that is on the CDN that lists the game's objects a client may fetch
- * (docs/adr/0045-cdn-texture-delivery.md). One document, `v1/manifest.json.zst` (or the manifest a config names, whatever its name:
+ * (docs/adr/0045-cdn-texture-delivery.md). One document, `v2/manifest.json.zst`, or `v1/manifest.json.zst` when the CDN has no v2 key (or the manifest a config names, whatever its name:
  * ParseManifestBody reads a zstd frame or plain JSON by its bytes), keyed by label; every
  * entry is one on-disk record of one resource, of any on-disk type, named the way the game names it.
  *

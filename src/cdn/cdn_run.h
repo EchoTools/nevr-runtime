@@ -32,7 +32,7 @@ using ProgressFn = std::function<void(const FetchProgress&)>;
 struct RunConfig {
   std::string dir;            // the store directory (absolute)
   std::string base_url;       // e.g. "https://cargo.echo.taxi/", ending in '/'
-  std::string manifest_path;  // relative to base_url, e.g. "v1/manifest.json"
+  std::string manifest_path;  // relative to base_url, e.g. "v2/manifest.json.zst"
   Platform platform = kAndroidArm64;
   Policy policy;
   // "default" or "config": whether the policy or the URL came from config. cdn_start logs it and the host, not the configured values;
