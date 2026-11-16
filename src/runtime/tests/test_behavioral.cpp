@@ -2524,6 +2524,30 @@ TEST_F(BlockedRefusal, NvrAssetPatches) { ExpectRefused("NvrAssetPatches", "NvrA
 TEST_F(BlockedRefusal, NvrXmlHttpFix) { ExpectRefused("NvrXmlHttpFix", "nvrxmlhttpfix.dll"); }
 TEST_F(BlockedRefusal, NvrGpuRating) { ExpectRefused("NvrGpuRating", "NvrGpuRating.dll"); }
 
+// The two overlay DLLs whose content the built-in content pack (#1424) and the cargo labels replace are refused by
+// name with the reason `superseded`: the record names the entry, the file and the reason and carries no replaced_by
+// (neither is replaced by a combat.* key); the next plugin still loads.
+class SupersededOverlayRefusal : public PluginLoaderDiagnosticTest {
+ protected:
+  void ExpectRefused(const char* plugin, const char* file) {
+    g_testPluginLoadPlan.push_back({"entry-name", file, true, "", "{}"});
+    g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+    LoadPlugins();
+    ASSERT_EQ(GetLoadedPluginCount(), 1);
+    EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                       std::string("plugin_load plugin=") + plugin + " entry=entry-name file=" + file +
+                                           " outcome=refused reason=superseded required=true"));
+    EXPECT_FALSE(TestLogContains("replaced_by"));
+    const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+    ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+    EXPECT_EQ(manifest[0].at("loaded"), false);
+    EXPECT_EQ(manifest[0].at("error"), "superseded");
+    EXPECT_EQ(manifest[1].at("loaded"), true);
+  }
+};
+TEST_F(SupersededOverlayRefusal, EchoCombatContent) { ExpectRefused("EchoCombatContent", "EchoCombatContent.dll"); }
+TEST_F(SupersededOverlayRefusal, NvrContentOverlay) { ExpectRefused("NvrContentOverlay", "NvrContentOverlay.dll"); }
+
 // The spellings Win32 resolves to DroneFix.dll are refused too: no extension (LoadLibrary appends .dll), and
 // trailing dots or spaces (the path is normalized before the lookup). One test each.
 class RefusedSpelling : public PluginLoaderDiagnosticTest {

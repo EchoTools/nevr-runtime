@@ -40,7 +40,7 @@ struct Entry {
   std::string_view manifest_error;  // non-empty: the login report's error for the entry; empty: reason[: replaced by ..]
 };
 
-inline constexpr std::size_t kCount = 8;
+inline constexpr std::size_t kCount = 10;
 
 // Group keys are combat_settings.h's kGroups (config.yaml `combat.<key>`).
 inline constexpr std::array<Entry, kCount> kTable = {{
@@ -51,6 +51,10 @@ inline constexpr std::array<Entry, kCount> kTable = {{
     {"NvrAssetPatches.dll", "NvrAssetPatches", kReasonBlocked, "", "", ""},
     {"NvrXmlHttpFix.dll", "NvrXmlHttpFix", kReasonBlocked, "", "", ""},
     {"NvrGpuRating.dll", "NvrGpuRating", kReasonBlocked, "", "", ""},
+    // Overlays whose content the built-in content pack and the cargo labels replace. Neither is replaced by a
+    // combat.* key, so no replaced_by; loading them too would fight that code (the table's meaning of superseded).
+    {"EchoCombatContent.dll", "EchoCombatContent", kReasonSuperseded, "", "", ""},
+    {"NvrContentOverlay.dll", "NvrContentOverlay", kReasonSuperseded, "", "", ""},
     // N89: the log filter plugin duplicates the built-in filter.
     {"log_filter.dll", "log_filter", kReasonSuperseded, "", kLogFilterSkipped, kLogFilterError},
     {"log-filter.dll", "log-filter", kReasonSuperseded, "", kLogFilterSkipped, kLogFilterError},
