@@ -3,5 +3,11 @@
 {"file":"tools/internal/wwisebank/bank_test.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
 {"file":"tools/internal/wwisebank/children.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
 {"file":"tools/internal/wwisebank/children_test.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
+{"file":"tools/internal/wwisebank/collide.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
+{"file":"tools/internal/wwisebank/collide_test.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
 {"file":"tools/internal/wwisebank/encode.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
 {"file":"tools/internal/wwisebank/encode_test.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
+{"file":"tools/internal/wwisebank/media.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
+{"file":"tools/internal/wwisebank/media_test.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
+{"file":"tools/internal/wwisebank/resource.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
+{"file":"tools/internal/wwisebank/resource_test.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
