@@ -6,6 +6,8 @@
 //
 // This is not the scanner of tools/cmd/wwise-events: that one searches a byte stream for banks and records only ids,
 // so it keeps no bytes to write back. This package takes one bank that starts at its BKHD chunk.
+//
+// encode.go writes the typed bodies of the objects a build creates (Sound source fields, Play, Event) and the PCM WEM.
 package wwisebank
 
 import (
