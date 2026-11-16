@@ -126,6 +126,8 @@ enum class SessionEndCause : uint8_t {
   kReconnect,     ///< The ServerDB socket reconnected: the runtime drops its record of the session and registers again.
                   ///< The game's match, if one runs, goes on (the socket drops during level loads, gameserver_callbacks.cpp).
   kShutdown,      ///< The process is exiting.
+  kContentFailed, ///< The session's content could not be had (PLAN-v5 R6-a-2b, session_demand.h): the server stays up and
+                  ///< goes back to the idle step; the session ends with it.
 };
 
 inline const char* SessionEndCauseName(SessionEndCause c) {
@@ -134,6 +136,7 @@ inline const char* SessionEndCauseName(SessionEndCause c) {
     case SessionEndCause::kServiceEnded: return "service_ended";
     case SessionEndCause::kReconnect: return "reconnect";
     case SessionEndCause::kShutdown: return "shutdown";
+    case SessionEndCause::kContentFailed: return "content_failed";
   }
   return "unknown";
 }
@@ -147,6 +150,7 @@ inline bool IdlesAfterSessionEnd(SessionEndCause cause, std::string_view endedSe
   switch (cause) {
     case SessionEndCause::kGameEnded: return true;
     case SessionEndCause::kServiceEnded: return !endedSessionId.empty() && endedSessionId == currentSessionId;
+    case SessionEndCause::kContentFailed: return true;
     case SessionEndCause::kReconnect:
     case SessionEndCause::kShutdown: return false;
   }

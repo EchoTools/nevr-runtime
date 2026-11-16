@@ -111,6 +111,9 @@ class GameServerLib : public EchoVR::IServerLib {
   // EndSession() body. #2109: `cause` decides whether the server goes back to the idle step
   // (nevr_server_timestep::IdlesAfterSessionEnd): the game's own call does, the shutdown paths do not.
   void EndServerSession(nevr_server_timestep::SessionEndCause cause);
+  // Once per tick: forwards a session start the server held for its content, or ends the session when its content failed
+  // (PLAN-v5 R6-a-2b, session_demand.h). Game thread only.
+  void PollSessionDemand();
 };
 
 // Logging helper (uses game's logging system)

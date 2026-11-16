@@ -20,7 +20,9 @@
 #include "runtime/lifecycle/return_to_lobby_queue.h"
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
+#include "runtime/server/gameserver_internal.h"
 #include "runtime/server/join_hold.h"
+#include "runtime/server/session_demand.h"
 #include "runtime/server/protobuf_transport.h"
 #include "runtime/server/registration_envelope.h"
 #include "runtime/server/serialized_mint.h"
@@ -315,6 +317,9 @@ VOID GameServerLib::Update() {
   // Dispatch incoming ServerDB messages on the main thread
   if (m_wsClient) m_wsClient->ProcessReceivedMessages();
 
+  // N152: PLAN-v5 R6-a-2b: a session start held for its content is forwarded here, after this frame's service messages, or the session ends.
+  PollSessionDemand();
+
   // #1737 (101f): accepts the join hold queued go to the game here, on the game thread and after this frame's service
   // messages (so a held accept is never overtaken); one atomic read when nothing is held.
   nevr_join_hold::ReleaseDue(m_context->GetBroadcaster(), m_context->GetSessionState().lobbySessionId.c_str());
@@ -444,6 +449,8 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
         break;
     }
 
+    // PLAN-v5 R6-a-2b: the content worker stops at its next check; it is not joined (session_demand.h).
+    nevr_session_demand::Shutdown();
     self->m_shutdownComplete.store(true);
 
     Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Graceful shutdown complete — exiting");
@@ -464,6 +471,16 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
   });
 }
 
+void GameServerLib::PollSessionDemand() {
+  nevr_session_demand::Due due = nevr_session_demand::Poll();
+  if (due.action == nevr_session_demand::DueAction::kRelease) {
+    ReleaseHeldSessionStart(this, std::move(due));
+  } else if (due.action == nevr_session_demand::DueAction::kFail) {
+    // A failed or late content resolve ends this session; the process stays up (N152).
+    EndServerSession(nevr_server_timestep::SessionEndCause::kContentFailed);
+  }
+}
+
 VOID GameServerLib::EndSession() {
   // IServerLib::EndSession: the game calls it from CNSLobby::EndSession (echovr.exe 0x140607e00), after LeaveSession
   // has disconnected every peer, so no match is left to simulate (#2109).
@@ -475,6 +492,13 @@ void GameServerLib::EndServerSession(nevr_server_timestep::SessionEndCause cause
   // #1737 (101f): the session is over (the game ended it, or the service did and this is the second call): held accepts are
   // dropped, never forwarded to the next session. A reconnect's EndSession (below) does not come through here.
   nevr_join_hold::OnSessionEnd(nevr_server_timestep::SessionEndCauseName(cause), endingSessionId.c_str());
+  // PLAN-v5 R6-a-2b review F1: the game's own end (kGameEnded) does not drop a held start. A start that is held has not been forwarded,
+  // so the game knows no session of it: a game-side end while it is held is the teardown of an EARLIER session, and the context's id
+  // already names the held one. kContentFailed needs no call: Poll released the hold. The service's end is the CODE_ENDED path
+  // (gameserver_callbacks.cpp), which passes the id the service named.
+  if (cause == nevr_server_timestep::SessionEndCause::kShutdown) {
+    nevr_session_demand::OnSessionEnd(nevr_server_timestep::SessionEndCauseName(cause), endingSessionId.c_str());
+  }
   const auto sendEnvelope = [this](const gameservice::v1::Envelope& envelope) {
     return nevr_game_server::SendProtobufEnvelope(*m_wsClient, envelope);
   };

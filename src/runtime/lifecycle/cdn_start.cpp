@@ -4,8 +4,11 @@
 #include <windows.h>
 
 #include <atomic>
+#include <memory>
 #include <string>
+#include <string_view>
 
+#include "cdn/cdn_demand.h"
 #include "cdn/cdn_manifest.h"
 #include "cdn/cdn_service.h"
 #include "cdn/env_windows.h"
@@ -54,6 +57,15 @@ void PublishSet(const nevr_cdn::Mounted* set) {
   if (set != nullptr) nevr_combat::announcer::OnPublished(set->shadow.get(), set->labels, t_boot_mount);
 }
 
+// A server's demand set (PLAN-v5 R6-a-2b): kept for the read hook, which serves it, and never fed to the announcer (announcer_callouts.h).
+// Sets are not freed: the read hook keeps the shadow for the life of the process, so the set is leaked on purpose, once per session.
+void PublishServerSet(std::unique_ptr<nevr_cdn::Mounted> set) {
+  if (!set || !set->shadow) return;
+  const nevr_cdn::Mounted* kept = set.release();
+  g_published.store(kept, std::memory_order_release);
+  nevr::assets::PublishCdnShadow(kept->shadow.get());
+}
+
 }  // namespace
 
 bool Start() noexcept {
@@ -79,5 +91,30 @@ bool Start() noexcept {
 }
 
 const nevr_cdn::Mounted* Published() noexcept { return g_published.load(std::memory_order_acquire); }
+
+SessionDemandOutcome ResolveDemandForSession(std::uint64_t level, std::string_view game_type, const std::function<bool()>& keep_going) {
+  SessionDemandOutcome out;
+  const std::string root = nevr_root::RootA();
+  if (root.empty()) {
+    out.reason = "no_nevr_root";
+    return out;
+  }
+  const std::string dir = nevr_root::Join(nevr_root::CacheDir(root), kCdnCacheName);
+  const nevr_cdn::Settings settings{};
+  nevr_cdn::RunConfig config = nevr_cdn::MakeRunConfig(settings, dir, nevr_cdn::kWindowsX64);
+  config.policy.role = nevr_cdn::Role::kServer;
+  config.script_dir = GameScriptDir();
+  // A server has no boot mount, so no label is fixed at boot (ADR 0045 decision 7).
+  config.boot_only.clear();
+  // The manifest's v2 to v1 fallback on a 404 is the client's too: a decision, two-way door (PLAN-v5 R6-a-2b 3.6).
+  static nevr_cdn::WindowsEnv env;
+  config = nevr_cdn::ResolveManifestPath(env, config, keep_going);
+  const nevr_cdn::DemandInput input{level, std::string(game_type)};
+  const nevr_cdn::DemandResult result =
+      nevr_cdn::ResolveDemand(env, config, input, nullptr, PublishServerSet, keep_going);
+  out.ok = result.ok;
+  if (!result.ok) out.reason = result.reason;
+  return out;
+}
 
 }  // namespace nevr_cdn_start

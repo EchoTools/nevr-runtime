@@ -11,6 +11,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include <nlohmann/json.hpp>
 
@@ -84,6 +85,54 @@ inline std::optional<std::string> GameTypeOfSessionStart(const uint8_t* frame, s
   const SessionGameType type = ReadGameType(doc);
   if (type.name == "none" || type.name == "unknown") return std::nullopt;
   return type.name;
+}
+
+/// The `level` of a settings document, as the archive's symbol: an unsigned or signed integer (a negative one keeps its bits), or a name
+/// hashed as the engine hashes a symbol (PLAN-v5 R6-a-2b). nullopt when the key is absent, 0, an empty name, or any other JSON type.
+inline std::optional<uint64_t> LevelOfSettings(std::string_view json) {
+  const nlohmann::ordered_json doc = nlohmann::ordered_json::parse(std::string(json), nullptr, false);
+  if (!doc.is_object()) return std::nullopt;
+  const auto it = doc.find("level");
+  if (it == doc.end()) return std::nullopt;
+  uint64_t level = 0;
+  if (it->is_number_unsigned()) {
+    level = it->get<uint64_t>();
+  } else if (it->is_number_integer()) {
+    level = static_cast<uint64_t>(it->get<int64_t>());
+  } else if (it->is_string()) {
+    const std::string name = it->get<std::string>();
+    if (name.empty()) return std::nullopt;
+    level = EchoVR::CSymbol64Hash(name.c_str());
+  } else {
+    return std::nullopt;
+  }
+  if (level == 0) return std::nullopt;
+  return level;
+}
+
+/// What a session start needs from its frame to check its content: the level (0 when the settings name none) and the game type's name
+/// ("" when the settings name none of kGameTypes).
+struct DemandSettings {
+  uint64_t level = 0;
+  std::string gameType;
+};
+
+/// The demand settings of a GameServerSessionStart frame (the same layout as GameTypeOfSessionStart). nullopt when the frame is too
+/// short, has no NUL-ended settings string, or the settings are not a JSON object: the caller forwards such a frame as it is.
+inline std::optional<DemandSettings> DemandSettingsOfSessionStart(const uint8_t* frame, size_t size) {
+  if (frame == nullptr || size <= kSessionStartHeaderSize) return std::nullopt;
+  const uint8_t* settings = frame + kSessionStartHeaderSize;
+  const void* nul = std::memchr(settings, 0, size - kSessionStartHeaderSize);
+  if (nul == nullptr) return std::nullopt;
+  const size_t settingsBytes = static_cast<size_t>(static_cast<const uint8_t*>(nul) - settings);
+  const std::string_view json(reinterpret_cast<const char*>(settings), settingsBytes);
+  const nlohmann::ordered_json doc = nlohmann::ordered_json::parse(std::string(json), nullptr, false);
+  if (!doc.is_object()) return std::nullopt;
+  DemandSettings out;
+  out.level = LevelOfSettings(json).value_or(0);
+  const SessionGameType type = ReadGameType(doc);
+  if (type.name != "none" && type.name != "unknown") out.gameType = type.name;
+  return out;
 }
 
 }  // namespace nevr_game_type_table

@@ -276,6 +276,7 @@ set(PATCHES_SOURCES
     # #1737: the join hold on a dedicated server (pure logic in server/join_hold_rules.h).
     "server/join_hold.cpp"
     "server/map_hold.cpp"
+    "server/session_demand.cpp"
     # Level-load and boot timing records (runtime/hook/load_timing_rules.h).
     "hook/load_timing.cpp"
 )
@@ -1253,6 +1254,13 @@ if(BUILD_TESTING)
     target_include_directories(test_join_hold PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_join_hold PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_join_hold DISCOVERY_MODE PRE_TEST)
+    # PLAN-v5 R6-a-2b: the session-start hold's rules (server/session_demand_rules.h) and the frame reader they read (game_type_table.h).
+    add_executable(test_session_demand_rules tests/test_session_demand_rules.cpp)
+    set_source_files_properties(tests/test_session_demand_rules.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_session_demand_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_session_demand_rules PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk
+      nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_session_demand_rules DISCOVERY_MODE PRE_TEST)
     add_executable(test_server_bots tests/test_server_bots.cpp)
     set_source_files_properties(tests/test_server_bots.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_server_bots PRIVATE ${CMAKE_SOURCE_DIR}/src)

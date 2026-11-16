@@ -31,7 +31,9 @@ class TheSessionTypeIsStoredBeforeTheGameStartsTheSession(unittest.TestCase):
     def test_the_legacy_branch_stores_the_frames_type_before_the_forward(self):
         branch = self.callbacks.index("msgId == SYM_LEGACY_SESSION_START")
         store = self.callbacks.index("GameTypeOfSessionStart(", branch)
-        forward = self.callbacks.index("Sym::LobbyStartSessionV4", branch)
+        # The game sees the frame only through ForwardLegacySessionStart, called in the branch (the held path forwards
+        # later, still after the store).
+        forward = self.callbacks.index("ForwardLegacySessionStart(", branch)
         self.assertLess(store, forward, "the type is stored after the frame reached the game")
         self.assertIn('"legacy_session_start"', self.callbacks[store:forward])
 

@@ -102,31 +102,41 @@ def update_problems(gameserver: str, tick: str) -> list[str]:
 
 
 def callbacks_problems(callbacks: str) -> list[str]:
-    """One rewrite, in the legacy session-start branch, before the frame is forwarded to the game."""
+    """One rewrite, in ForwardLegacySessionStart, in the block that forwards the frame, with no brace between the rewrite and
+    the forward; and the forward is the one the game gets. The helper is called from the session-start branch (a frame that
+    is not held) and from ReleaseHeldSessionStart (a held frame, N152), so the rewrite runs before every forward."""
     code = strip_comments(callbacks)
     if code.count(SETTINGS_CALL) != 1:
         return [f"expected exactly one `{SETTINGS_CALL}`, found {code.count(SETTINGS_CALL)}"]
     at = code.index(SETTINGS_CALL)
-    branch = code.rfind("else if (msgId == SYM_LEGACY_SESSION_START)", 0, at)
-    nxt = code.find("else if (msgId ==", branch + 1)
-    if branch < 0 or (0 <= nxt < at):
-        return ["the rewrite is not in the SYM_LEGACY_SESSION_START branch"]
+    if depth_in(code, FORWARD_HELPER_HEAD, at) != 2:
+        return ["the rewrite is not in the block of ForwardLegacySessionStart that forwards the frame"]
+    if code.count(FORWARD) != 1:
+        return [f"expected exactly one `{FORWARD}`, found {code.count(FORWARD)}"]
     fwd = code.find(FORWARD, at)
-    if fwd < 0 or (0 <= nxt < fwd):
+    if fwd < 0:
         return ["the rewritten frame is not the one forwarded to the game"]
     if not code[:at].rstrip().endswith((";", "{", "}")) or re.search(r"[{}]", code[at + len(SETTINGS_CALL):fwd]):
         return ["the rewrite is the body of an `if`, a loop or a block of its own: a frame can reach the game without it"]
+    branch = code.find("else if (msgId == SYM_LEGACY_SESSION_START)")
+    nxt = code.find("else if (msgId ==", branch + 1)
+    call = code.find(FORWARD_HELPER_CALL, branch)
+    if branch < 0 or call < 0 or (0 <= nxt < call):
+        return ["the session start's branch does not forward through ForwardLegacySessionStart"]
     return []
 
 
 FORGET_CALL = "nevr_server_bots::ForgetSession();"
-BROADCASTER_GATE = "if (broadcaster) {"
+HOLD_OR_FORWARD = "if (!g_isServer || !nevr_session_demand::HoldSessionStart("
+FORWARD_HELPER_CALL = "ForwardLegacySessionStart(this, data, size);"
+FORWARD_HELPER_HEAD = "static void ForwardLegacySessionStart("
 
 
 def forget_problems(callbacks: str) -> list[str]:
-    """ForgetSession runs in the legacy session-start branch, after the broadcaster is read and before the
-    `if (broadcaster)` that the forward sits in, at the branch's own block level: a session start with no broadcaster
-    must not leave the previous session's bots flag in place."""
+    """ForgetSession runs in the legacy session-start branch, at the branch's own block level, before the frame is held
+    or forwarded: a session start that is not forwarded (no broadcaster, or held for its content, N152) must not keep the
+    last one's bots flag. The broadcaster is read in ForwardLegacySessionStart, so the anchor is the hold-or-forward
+    decision of the branch."""
     code = strip_comments(callbacks)
     if code.count(FORGET_CALL) != 1:
         return [f"expected exactly one `{FORGET_CALL}`, found {code.count(FORGET_CALL)}"]
@@ -135,11 +145,9 @@ def forget_problems(callbacks: str) -> list[str]:
     nxt = code.find("else if (msgId ==", branch + 1)
     if branch < 0 or (0 <= nxt < at):
         return ["ForgetSession is not in the SYM_LEGACY_SESSION_START branch"]
-    gate = code.find(BROADCASTER_GATE, branch)
-    if gate < 0 or gate < at:
-        return ["ForgetSession is not before the `if (broadcaster)` gate of the session start"]
-    if code.find("GetBroadcaster();", branch, at) < 0:
-        return ["ForgetSession is not after the broadcaster is read"]
+    gate = code.find(HOLD_OR_FORWARD, branch)
+    if gate < 0 or gate < at or (0 <= nxt < gate):
+        return ["ForgetSession is not before the hold-or-forward decision of the session start"]
     if depth_in(code, "else if (msgId == SYM_LEGACY_SESSION_START)", at) != 1:
         return ["ForgetSession is inside an `if`, a loop or a block of its own"]
     if not code[:at].rstrip().endswith((";", "{", "}")):
@@ -419,8 +427,8 @@ class ServerBotsWiring(unittest.TestCase):
         gated = callbacks.replace(FORGET_CALL, "if (size == 0) " + FORGET_CALL, 1)
         self.assertTrue(forget_problems(gated))
         after = callbacks.replace(FORGET_CALL, "", 1).replace(
-            "        auto* broadcaster = GetContext().GetBroadcaster();\n      if (broadcaster) {\n        // #1423: with bots",
-            "        auto* broadcaster = GetContext().GetBroadcaster();\n      if (broadcaster) {\n        " + FORGET_CALL + "\n        // #1423: with bots", 1)
+            FORWARD_HELPER_CALL + "\n      }\n", FORWARD_HELPER_CALL + "\n      }\n      " + FORGET_CALL + "\n", 1)
+        self.assertNotEqual(after, callbacks)
         self.assertTrue(forget_problems(after))
         self.assertTrue(forget_problems(callbacks.replace(FORGET_CALL, "", 1)))
 

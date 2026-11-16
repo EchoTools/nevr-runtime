@@ -15,6 +15,7 @@
 #include "runtime/server/gameserver.h"
 #include "runtime/hook/patching.h"  // NevrUPnPConfig
 #include "runtime/server/upnp.h"
+#include "runtime/server/session_demand.h"
 #include "gameservice/v1/gameservice.pb.h"
 
 // Symbol ID for NEVRProtobufMessageV1 (binary protobuf)
@@ -36,6 +37,8 @@ std::string AcquireServerDbToken(std::string& reason);
 bool ReadUPnPConfig(NevrUPnPConfig& out);
 /// Ask the game to return to the lobby (no-op without a game object).
 void CallScheduleReturnToLobby();
+/// Forwards a session start the server held for its content, then its held accepts, in arrival order (PLAN-v5 R6-a-2b).
+void ReleaseHeldSessionStart(GameServerLib* self, nevr_session_demand::Due due);
 
 // Helper to convert GUID to UUID string format
 inline std::string GuidToUuidString(const GUID& guid) {

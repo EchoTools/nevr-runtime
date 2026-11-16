@@ -47,10 +47,17 @@ class TheHoldSitsBeforeTheSend(unittest.TestCase):
     def test_admit_precedes_the_broadcaster_send_of_the_accept(self):
         body = accept_case()
         self.assertIn("nevr_join_hold::Admit(", body)
-        self.assertLess(body.index("nevr_join_hold::Admit("), body.index("Sym::LobbyAcceptPlayersSuccessV2"))
+        self.assertLess(body.index("nevr_join_hold::Admit("), body.index("SendEntrantsAcceptToGame("))
 
     def test_the_accept_is_sent_in_one_place_only(self):
         self.assertEqual(callbacks().count("Sym::LobbyAcceptPlayersSuccessV2"), 1)
+
+    def test_a_held_start_releases_its_accepts_through_admit(self):
+        # ReleaseHeldSessionStart forwards the accepts that arrived while a session start was held (N152). Each one passes
+        # the join hold's gate before the one send; a release that sent without Admit would bypass the levels' gate.
+        body = extract_braced_function(callbacks(), "void ReleaseHeldSessionStart(")
+        self.assertIn("nevr_join_hold::Admit(", body)
+        self.assertLess(body.index("nevr_join_hold::Admit("), body.index("SendEntrantsAcceptToGame("))
 
     def test_a_held_accept_is_not_sent_now(self):
         body = accept_case()

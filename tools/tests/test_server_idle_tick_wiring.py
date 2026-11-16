@@ -164,9 +164,11 @@ class ServerIdleTickWiring(unittest.TestCase):
         self.assertTrue(session_end_problems(broken, GAMESERVER.read_text(), SERVERDB.read_text()))
 
     def test_a_reconnect_that_idles_is_caught(self):
+        anchor = "  m_context->EndSession();\n\n  Log(EchoVR::LogLevel::Info,\n      \"[NEVR.GAMESERVER] websocket reconnected"
+        self.assertEqual(CALLBACKS.read_text().count(anchor), 1)
         broken = CALLBACKS.read_text().replace(
-            "(IdlesAfterSessionEnd: kReconnect).\n  m_context->EndSession();\n",
-            "(IdlesAfterSessionEnd: kReconnect).\n  m_context->EndSession();\n  ApplyServerIdleTimestep(\"reconnect\", \"\");\n")
+            anchor, "  m_context->EndSession();\n  ApplyServerIdleTimestep(\"reconnect\", \"\");\n\n"
+            "  Log(EchoVR::LogLevel::Info,\n      \"[NEVR.GAMESERVER] websocket reconnected")
         self.assertNotEqual(broken, CALLBACKS.read_text())
         self.assertTrue(session_end_problems(broken, GAMESERVER.read_text(), SERVERDB.read_text()))
 

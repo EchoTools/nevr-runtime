@@ -1,4 +1,5 @@
 #include "runtime/server/gameserver.h"
+#include "runtime/lifecycle/cli.h"  // g_isServer
 #include "runtime/server/registration_metadata.h"
 #include "runtime/server/telemetry_game_type.h"
 #include "core/hex_dump.h"
@@ -99,6 +100,13 @@ void OnTcpMsgRegistrationFailure(GameServerLib* self, VOID*, EchoVR::TcpPeer, VO
   // byte, decoded by failure_detail.h.
   const std::string rejection = nevr_failure_detail::DescribeRegistrationRejection(msg, msgSize);
   ServerFatal("GameServer registration rejected by ServerDB: %s", rejection.c_str());
+}
+
+// The one send of an entrants accept to the game (#1737, N152). Both paths that forward an accept call it, and each calls it only after
+// nevr_join_hold::Admit has let the accept through, so an accept reaches the game once and never before the join hold's gate.
+static void SendEntrantsAcceptToGame(EchoVR::Broadcaster* broadcaster, VOID* encoded, UINT64 size) {
+  EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersSuccessV2, "SNSLobbyAcceptPlayersSuccessv2", encoded,
+                                       size);
 }
 
 // Handle incoming protobuf messages from Nakama. Reads `msg` only (it is parsed,
@@ -216,6 +224,7 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
         CallScheduleReturnToLobby();
         // #1737 (101f): held accepts belong to the session that ended; they are dropped, not forwarded to the next.
         nevr_join_hold::OnSessionEnd("service_ended", event.lobby_session_id().c_str());
+        nevr_session_demand::OnSessionEnd("service_ended", event.lobby_session_id().c_str());
         self->GetContext().EndSession();
         if (idles) {
           ApplyServerIdleTimestep(nevr_server_timestep::SessionEndCauseName(
@@ -266,13 +275,17 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
         if (encoded.size() > 0) {
           // #1737 (101f): with network.join_hold_ms above 0 the accept waits for the session's levels; a held accept is
           // forwarded later by nevr_join_hold::ReleaseDue (GameServerLib::Update), in arrival order.
+          // N152: PLAN-v5 R6-a-2b: while the session's start is held for its content, the accept waits with it (session_demand.h).
+          if (nevr_session_demand::HoldAccept(encoded.ptr(), encoded.size(),
+                                              static_cast<std::size_t>(accept.entrant_ids_size()),
+                                              self->GetContext().GetSessionState().lobbySessionId.c_str())) {
+            break;
+          }
           if (nevr_join_hold::Admit(encoded.ptr(), encoded.size(), static_cast<std::size_t>(accept.entrant_ids_size()),
                                     self->GetContext().GetSessionState().lobbySessionId.c_str())) {
             break;
           }
-          EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersSuccessV2,
-                                               "SNSLobbyAcceptPlayersSuccessv2", encoded.ptr(),
-                                               encoded.size());
+          SendEntrantsAcceptToGame(broadcaster, encoded.ptr(), encoded.size());
         } else {
           Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] failed to encode entrants accept count=%d",
               accept.entrant_ids_size());
@@ -745,6 +758,36 @@ void OnMsgReliableTeamStatUpdate(GameServerLib*, VOID*, VOID*, UINT64 msgSize, E
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] team stat update received (no server-side action — observability only) size=%llu", msgSize);
 }
 
+// The legacy session start, forwarded to the game's broadcaster (the HACK of RegisterTcpCallbacks; PLAN-v5 R6-a-2b moved the body here
+// unchanged). `data` and `size` are the dispatcher's copy: SessionSettings rewrites the settings in place.
+static void ForwardLegacySessionStart(GameServerLib* self, VOID* data, UINT64 size) {
+  auto* broadcaster = self->GetContext().GetBroadcaster();
+  if (broadcaster) {
+    // #1423: with bots armed, the settings get numteams and players_per_team, which bot team placement reads.
+    nevr_server_bots::SessionSettings(&data, &size);
+    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4, "SNSLobbyStartSessionv4", data, size);
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.GAMESERVER] Forwarded legacy SessionStart to game (HACK — protobuf lacks entrants/level)");
+  }
+}
+
+// Forwards a held session start, then its accepts in arrival order (session_demand.h, PollSessionDemand).
+void ReleaseHeldSessionStart(GameServerLib* self, nevr_session_demand::Due due) {
+  if (!due.frame.empty()) {
+    VOID* data = due.frame.data();
+    UINT64 size = due.frame.size();
+    ForwardLegacySessionStart(self, data, size);
+  }
+  auto* broadcaster = self->GetContext().GetBroadcaster();
+  for (auto& accept : due.accepts) {
+    if (!broadcaster) break;
+    // The join hold's gate applies to a held accept as it does to any accept (#1737): with the hold standing it queues the accept
+    // for the levels, and ReleaseDue sends it later. Sending here without Admit would let it bypass that gate.
+    if (nevr_join_hold::Admit(accept.encoded.data(), accept.encoded.size(), accept.entrants, accept.sessionId.c_str())) continue;
+    SendEntrantsAcceptToGame(broadcaster, accept.encoded.data(), accept.encoded.size());
+  }
+}
+
 void GameServerLib::RegisterBroadcasterCallbacks() {
   m_registryThreadId.store(GetCurrentThreadId());
   auto& cb = m_context->GetCallbackRegistry();
@@ -947,7 +990,6 @@ void GameServerLib::RegisterTcpCallbacks() {
       // resolved level that the game needs to set up peer connections. The legacy
       // message does. Once we move to nevr-server-rs with a proper protobuf protocol,
       // this passthrough goes away — the protobuf should carry everything.
-      auto* broadcaster = GetContext().GetBroadcaster();
       // This frame is what the game starts the session from, so its game type is stored, and the session's step set
       // (#1785), before the game sees it. The protobuf session create normally arrives first and stores the same type;
       // a service that sends the frame alone, or in the other order, does not leave the session on the previous step.
@@ -965,13 +1007,11 @@ void GameServerLib::RegisterTcpCallbacks() {
       // both frames name is armed once (join_hold.cpp's MapsArm keeps a hold already standing for the same group).
       nevr_map_hold::OnSessionCreate(nevr_map_hold::GroupOfSessionStart(static_cast<const uint8_t*>(data), size),
                                      nevr_server_bots::SessionIdOf(static_cast<const uint8_t*>(data), size));
-      if (broadcaster) {
-        // #1423: with bots armed, the settings get numteams and players_per_team, which bot team placement reads.
-        nevr_server_bots::SessionSettings(&data, &size);
-        EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4,
-                                             "SNSLobbyStartSessionv4", data, size);
-        Log(EchoVR::LogLevel::Info,
-            "[NEVR.GAMESERVER] Forwarded legacy SessionStart to game (HACK — protobuf lacks entrants/level)");
+      // N152: PLAN-v5 R6-a-2b: a dedicated server holds the start until the session's content is mounted (session_demand.h). A frame it
+      // cannot read, and every frame of a client, is forwarded at once, as before.
+      if (!g_isServer || !nevr_session_demand::HoldSessionStart(static_cast<const uint8_t*>(data), size,
+                                                               nevr_server_bots::SessionIdOf(static_cast<const uint8_t*>(data), size))) {
+        ForwardLegacySessionStart(this, data, size);
       }
     } else if (msgId == SYM_LEGACY_PLAYERS_REJECTED) {
       // Skip legacy - handled by protobuf kLobbyEntrantReject
@@ -1010,6 +1050,9 @@ void GameServerLib::ProcessPendingReconnect() {
 
   // End any stale session state from before the disconnect. #2109: only the runtime's record; the game's match, if one
   // runs (the socket drops during level loads), goes on at its tick rate (IdlesAfterSessionEnd: kReconnect).
+  // PLAN-v5 R6-a-2b: a start held for its content is kept across the reconnect, as the join hold keeps its accepts (#1737): the
+  // forward does not depend on the socket, so the start the service sent before the drop is forwarded once its content is mounted
+  // (session_demand.h). Whether the service re-sends it is not established (N152).
   m_context->EndSession();
 
   Log(EchoVR::LogLevel::Info,

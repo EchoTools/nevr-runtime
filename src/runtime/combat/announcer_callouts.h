@@ -9,7 +9,7 @@
 // veil, overcharge and point. The seventh, blazar, is the stock chain listener (its event is listed by the game, its node
 // 0x9b7c22fb, busy count at +0x20, and it plays Wwise 0x5e486409, the id of vo_hra_gun_equip_blazar). This module routes
 // blazar to PULSAR instead, as fix_vo.py does: its handler returns before the stock listeners, "so chain's own listener
-// does not also run" (fix_vo.py, the handler's comment). The stock chain path is therefore not taken for a blazar event.
+// does not also run" (fix_vo.py, the handler's comment). The stock chain path is therefore not taken for a blazar event. A dedicated server's content sets are never fed to this module (PLAN-v5 R6-a-2b; cdn_start.cpp PublishServerSet).
 //
 // Pieces of the stock script these hooks use:
 //

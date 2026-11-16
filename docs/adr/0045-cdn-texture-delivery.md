@@ -87,10 +87,17 @@ process.
    label is planned whole or skipped whole, with the reason named. A payload whose size differs from its stock buffer's still needs
    its descriptor (the per-binary pair table, `Platform::pairs`).
 9. **Label states: defaults in code, config only changes them.** `lobby_posters` is on, `game` (the whole-game label) is required;
-   any label not listed is off. Config (`assets.labels.<label>: on|off|required`, `assets.required_only`) changes states; the
+   any label not listed is off. A dedicated server reads its own defaults (`kServerLabelDefaults`, `src/cdn/cdn_plan.h`): `combat_content` and `game` are on, every other label is off; what it fetches of them is only what its session's map and mode need (decision 10). Config (`assets.labels.<label>: on|off|required`, `assets.required_only`) changes states; the
    manifest never does. `required` never blocks a level load or a match, and a server cannot require labels of a client.
-10. **Client only.** A dedicated server fetches no texture cargo. The one exception is custom maps: a server fetches the maps of
-    the lobby group it hosts (`docs/adr/0048-custom-maps-channel.md`, decision 13).
+10. **Client textures; server game data on demand.** A dedicated server fetches no texture cargo. When it learns a session's game mode,
+    and its map when the session names one, it takes the objects they need across every level the mode can load from the manifest, in
+    every label its defaults turn on, `game` included, and resolves each in this order: the nEVR cache, then the game's installed files
+    when the manifest names the object's content hash, then the CDN. An object is accepted only when it is the manifest's, checked once
+    when it is stored, and only what the server lacks is fetched. The server holds the session's start until the set is mounted, with a
+    bounded wait; a needed object that cannot be had, or a wait that runs out, ends that session and not the server, and a partial set is
+    never run. The other exception is custom maps (`docs/adr/0048-custom-maps-channel.md`, decision 13).
+    The installed-files clause is true only after R6-c (7); until then the sentence is written with it and the edge passes no installed
+    source (the tracker is #2242).
 11. **Whole-game mode.** On Quest, `assets.whole_game: true` (needs `assets.manifest`) says the manifest holds every asset of the game, so
     the first-run data step (`docs/adr/0011-quest-game-data-first-run.md`) does not fetch the data zip and never ends the process for
     missing `_data`, in any build. The engine reads each boot package set's manifest file straight from disk, with no resolver hook in the

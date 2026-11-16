@@ -239,6 +239,7 @@ tools/tests/test_server_idle_tick_wiring.py	source-wiring check of the server fr
 tools/tests/test_server_social_wiring.py	ported by its unit of #2132
 tools/tests/test_server_team_size_wiring.py	ported by its unit of #2132
 tools/tests/test_serverdb_route_wiring.py	ported by its unit of #2132
+tools/tests/test_session_demand_wiring.py	ported by its unit of #2132
 tools/tests/test_session_router_pc_wiring.py	ported by its unit of #2132
 tools/tests/test_signing_workflow.py	ported by its unit of #2132
 tools/tests/test_smoke_sync.py	ported by its unit of #2132

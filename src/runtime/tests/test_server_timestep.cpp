@@ -577,4 +577,10 @@ TEST(UntypedSessionStart, WritesASessionRateOnlyOverTheIdleStep) {
   EXPECT_FALSE(nevr_server_timestep::UntypedSessionStartWrites(failedBoot));
 }
 
+// PLAN-v5 R6-a-2b (B10): a session whose content failed ends, and the server goes back to the idle step, as a game's end does.
+TEST(ServerTimestepSessionEnd, ContentFailedEndsTheSessionAndIdles) {
+  EXPECT_STREQ(nevr_server_timestep::SessionEndCauseName(SessionEndCause::kContentFailed), "content_failed");
+  EXPECT_TRUE(IdlesAfterSessionEnd(SessionEndCause::kContentFailed, "sess-1", "sess-1"));
+}
+
 }  // namespace

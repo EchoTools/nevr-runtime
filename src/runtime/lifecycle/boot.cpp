@@ -739,6 +739,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
             "[NEVR.CDN] cdn_start result=no_read_hook consequence=\"the CDN's mounted set is not served this run\"");
       }
     }
+  } else if (!nevr::assets::EnsureResolverHook()) {
+    // PLAN-v5 R6-a-2b: a server serves each session's content through the read hook (N152). Without it the session's
+    // content cannot load, so the server stops with the cause (N120), not a degraded run.
+    ServerFatal("the CDN read hook did not install; this server cannot serve a session's content (N152)");
   }
 
   // #960: the game data check, every run. Before the client-only patches so a missing folder is logged even when they
