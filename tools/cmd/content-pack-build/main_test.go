@@ -241,7 +241,9 @@ func TestTheProductionStepsAreTheEchoCombatOnesInOrder(t *testing.T) {
 		"drone actor runs script 190ed14fe6c74dd3",
 		"damageable health of actor 10e40287a9bf5a13 9999 to 70",
 		"equipment lists offer magnum, smg, chain, rifle, loc, dot and drone",
-		// steps_medigun.go after steps_equipment.go, before steps_point.go, by file name
+		// steps_mapterm.go after steps_equipment.go, before steps_medigun.go, by file name
+		"post-match terminal gets three map buttons",
+		// steps_medigun.go after steps_mapterm.go, before steps_point.go, by file name
 		"weapon settings get ability_properties.medigun",
 		"heal-bubble table gets a MEDIGUN bubble per player actor",
 		// steps_point.go after steps_equipment.go, before steps_rules_terminal.go, by file name

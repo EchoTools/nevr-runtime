@@ -424,38 +424,6 @@ func TestTheDOTFieldStepsChangeTheFiveCombatLevelsAndNoOther(t *testing.T) {
 
 // --- the constants ----------------------------------------------------------------------------------------------
 
-// csymbol64 is sdk/include/nevr/symbol_hash.h's hash, written again here to check the ids this file keeps.
-func csymbol64(name string) uint64 {
-	const poly = 0x95ac9329ac4bc9b5
-	var table [256]uint64
-	for i := range table {
-		var crc uint64
-		if i&0x80 != 0 {
-			crc = 0x2b5926535897936a
-		}
-		if i&0x40 != 0 && i&0x80 == 0 {
-			crc = poly
-		} else if i&0x40 != 0 {
-			crc = 0xbef5b57af4dc5adf
-		}
-		for _, bit := range []int{0x20, 0x10, 0x08, 0x04, 0x02, 0x01} {
-			crc *= 2
-			if i&bit != 0 {
-				crc ^= poly
-			}
-		}
-		table[i] = crc * 2
-	}
-	seed := ^uint64(0)
-	for _, c := range []byte(name) {
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		seed = uint64(int64(int8(c))) ^ table[seed>>56] ^ seed<<8
-	}
-	return seed
-}
-
 func TestTheIdsAreTheNamesHashes(t *testing.T) {
 	if got := csymbol64("serverdb"); got != 0x25e886012ced8064 {
 		t.Fatalf("the test's hash of serverdb is %x, the header's vector is 25e886012ced8064", got)

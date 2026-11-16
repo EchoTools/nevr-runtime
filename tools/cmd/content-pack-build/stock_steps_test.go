@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,8 +55,13 @@ var gunPatchTables = map[uint64]map[uint64]string{
 // steps_veil.go changes only mp_equipment, which equipmentResources counts, so it adds no term, and steps_medigun.go
 // changes mp_weapon_settings (weaponSettingsResources) and the global level's heal bubble table, the same resource
 // (Sets[0], healBubbleTable, globalLevel) as steps_buff.go's (healBubbleTableResources): each is counted once, so it adds
-// no term either.
-// (5 + 2 + 2 + 2 - 1 + 1 + 1) x 5 + 1 + 1 + 2 + 1 + 1 = 66, over both client sets.
+// no term either, and steps_mapterm.go changes, per map level (mapTermLevels, 4: mpl_lobby_b_combat has no map buttons),
+// the level's actor table and each component table that owns a row of the REMATCH subtree; its script and transform
+// tables are levelTableSteps' and dotDampTables' resources, counted already. Which component tables those are is the
+// shipped data's and is not established without it, so they are counted as they come (mapTermComponentTables), each
+// one of actor_copy.py's TYPE_NAMES (mapTermResourcesNamed), and any other resource the step changes fails here.
+// (5 + 2 + 2 + 2 - 1 + 1 + 1) x 5 + 1 + 1 + 2 + 1 + 1 + 1 x 4 = 70, plus the map buttons' component tables, over both
+// client sets.
 // The count covers every step, so a step that changes a resource it does not name fails here; what each data step
 // writes into its own tables is checked by that step's own test, and the gun patch's files by gunPatchTables above.
 const (
@@ -81,11 +87,48 @@ const (
 	// steps_buff.go: the global level's heal bubble table, one resource; its tac-mod step's mp_equipment is equipmentResources.
 	// steps_medigun.go's MEDIGUN bubble rows are in the same table
 	healBubbleTableResources = 1
+	// steps_mapterm.go: each map level's actor table 347869ce492dc7da, which gets the three copies of the REMATCH subtree
+	mapTermActorTables = 1
 )
 
 // afterGunPatchCompare are the steps that change mp_equipment past the gun patch's (it has none of OVERCHARGE, NEUTRON and UMBRAL VEIL),
+// and the map terminal step, which rewrites the four map levels' script tables past the gun patch's (it has no map buttons),
 // so the gun patch's sha-256 values are compared before them.
-var afterGunPatchCompare = map[string]bool{buffTacmodStep: true, pointTacmodStep: true, veilStepName: true}
+var afterGunPatchCompare = map[string]bool{buffTacmodStep: true, pointTacmodStep: true, veilStepName: true, mapTermStepName: true}
+
+// mapTermResourcesNamed checks the resources the map terminal step added: each is one of the four map levels' actor table
+// (exactly one per level) or one of its component tables that no other term counts (actor_copy.py's TYPE_NAMES without
+// CScriptCR, counted by levelTableSteps, and CTransformCR, counted by dotDampTables). It returns how many component
+// tables there are, and an error naming each resource no term names.
+func mapTermResourcesNamed(added []radpack.Key) (int, error) {
+	levels := map[int64]bool{}
+	for _, l := range mapTermLevels {
+		levels[int64(l.level)] = true
+	}
+	actors := map[int64]int{}
+	components := 0
+	var errs []error
+	for _, k := range added {
+		typ := mtTypeKey(uint64(k.Type))
+		_, named := mtTypeNames[typ]
+		switch {
+		case !levels[k.Name]:
+			errs = append(errs, fmt.Errorf("the map terminal changed %016x.%016x, which is not a map level's", uint64(k.Type), uint64(k.Name)))
+		case typ == mtActorsType:
+			actors[k.Name]++
+		case named && uint64(k.Type) != scriptTable && uint64(k.Type) != transformType:
+			components++
+		default:
+			errs = append(errs, fmt.Errorf("the map terminal changed %016x.%016x, a resource no term names", uint64(k.Type), uint64(k.Name)))
+		}
+	}
+	for _, l := range mapTermLevels {
+		if n := actors[int64(l.level)]; n != mapTermActorTables {
+			errs = append(errs, fmt.Errorf("the map terminal changed level %016x's actor table %d times, want %d", l.level, n, mapTermActorTables))
+		}
+	}
+	return components, errors.Join(errs...)
+}
 
 func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testing.T) {
 	data := os.Getenv("NEVR_STOCK_DATA")
@@ -102,7 +145,8 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 		p.sets[setID] = s
 	}
 	// The gun patch's mp_equipment has no OVERCHARGE, NEUTRON or UMBRAL VEIL (steps_buff.go, steps_point.go, steps_veil.go
-	// add them), so its sha-256 is compared before those steps.
+	// add them), and its four map levels' script tables have no map buttons (steps_mapterm.go adds them), so its sha-256
+	// values are compared before those steps.
 	for _, st := range steps {
 		if afterGunPatchCompare[st.Name] {
 			continue
@@ -124,13 +168,32 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 			}
 		}
 	}
+	var mapTermAdded []radpack.Key
 	for _, st := range steps {
-		if afterGunPatchCompare[st.Name] {
-			if err := st.Apply(p); err != nil {
-				t.Fatalf("%s: %v", st.Name, err)
+		if !afterGunPatchCompare[st.Name] {
+			continue
+		}
+		before := map[radpack.Key]bool{}
+		for k := range p.changes[Sets[0]] {
+			before[k] = true
+		}
+		if err := st.Apply(p); err != nil {
+			t.Fatalf("%s: %v", st.Name, err)
+		}
+		if st.Name != mapTermStepName {
+			continue
+		}
+		for k := range p.changes[Sets[0]] {
+			if !before[k] {
+				mapTermAdded = append(mapTermAdded, k)
 			}
 		}
 	}
+	mapTermComponentTables, err := mapTermResourcesNamed(mapTermAdded)
+	if err != nil {
+		t.Error(err)
+	}
+	t.Logf("the map terminal changed %d component tables over %d levels", mapTermComponentTables, len(mapTermLevels))
 	// The RULES canvas (steps_rules_terminal.go) is not a gun patch file, and the step changes it in whichever client set
 	// lists it: it is counted as its own term, and taken out of that set's changes so the per-set count below is the
 	// other steps' resources.
@@ -151,9 +214,11 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 		changed += len(p.changes[setID])
 	}
 	levelTables := levelTableSteps + dotConstraintTables + dotDampTables + dotFieldTables - dotFieldTablesSharedWithDamp + dotFieldTexStreamTables + pointExplosionTables
-	if want := levelTables*len(droneLevels) + equipmentResources + weaponSettingsResources + dotFieldMaterialResources + rulesCanvasResources + healBubbleTableResources; changed != want {
-		t.Errorf("%d resources changed, want %d (%d level tables + %d DOT constraint tables + %d DOT dampener tables + %d DOT FIELD tables - %d shared + %d DOT FIELD texture streaming table + %d explosion table, x %d levels, mp_equipment, mp_weapon_settings, %d red materials, the RULES canvas and the global level's heal bubble table)", changed,
-			want, levelTableSteps, dotConstraintTables, dotDampTables, dotFieldTables, dotFieldTablesSharedWithDamp, dotFieldTexStreamTables, pointExplosionTables, len(droneLevels), dotFieldMaterialResources)
+	if want := levelTables*len(droneLevels) + equipmentResources + weaponSettingsResources + dotFieldMaterialResources + rulesCanvasResources + healBubbleTableResources +
+		mapTermActorTables*len(mapTermLevels) + mapTermComponentTables; changed != want {
+		t.Errorf("%d resources changed, want %d (%d level tables + %d DOT constraint tables + %d DOT dampener tables + %d DOT FIELD tables - %d shared + %d DOT FIELD texture streaming table + %d explosion table, x %d levels, mp_equipment, mp_weapon_settings, %d red materials, the RULES canvas, the global level's heal bubble table, %d actor table x %d map levels and %d map-button component tables)", changed,
+			want, levelTableSteps, dotConstraintTables, dotDampTables, dotFieldTables, dotFieldTablesSharedWithDamp, dotFieldTexStreamTables, pointExplosionTables, len(droneLevels), dotFieldMaterialResources,
+			mapTermActorTables, len(mapTermLevels), mapTermComponentTables)
 	}
 	t.Log(fmt.Sprintf("%d resources match the gun patch's", len(p.changes[Sets[0]])))
 }
