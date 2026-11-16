@@ -48,9 +48,10 @@ var gunPatchTables = map[uint64]map[uint64]string{
 // steps_dot_field_texmat.go: the texture-streaming table), steps_equipment.go changes the one mp_equipment resource,
 // steps_dot_preset.go the one mp_weapon_settings resource, steps_dot_field_texmat.go adds the two red materials, and
 // steps_rules_terminal.go changes the one RULES canvas, in whichever client set lists it, and steps_buff.go changes the
-// global level's heal bubble table (its tac-mod step changes mp_equipment, which equipmentResources already counts), and
+// global level's heal bubble table (its tac-mod step changes mp_equipment, which equipmentResources already counts),
 // steps_point.go changes the explosion table, one per drone level (its tac-mod step's mp_equipment is equipmentResources,
-// its required_charge step's mp_weapon_settings is weaponSettingsResources: each resource is counted once).
+// its required_charge step's mp_weapon_settings is weaponSettingsResources: each resource is counted once), and
+// steps_veil.go changes only mp_equipment, which equipmentResources counts, so it adds no term.
 // (5 + 2 + 2 + 2 - 1 + 1 + 1) x 5 + 1 + 1 + 2 + 1 + 1 = 66, over both client sets.
 // The count covers every step, so a step that changes a resource it does not name fails here; what each data step
 // writes into its own tables is checked by that step's own test, and the gun patch's files by gunPatchTables above.
@@ -78,9 +79,9 @@ const (
 	healBubbleTableResources = 1
 )
 
-// afterGunPatchCompare are the steps that change mp_equipment past the gun patch's (it has neither OVERCHARGE nor NEUTRON),
+// afterGunPatchCompare are the steps that change mp_equipment past the gun patch's (it has none of OVERCHARGE, NEUTRON and UMBRAL VEIL),
 // so the gun patch's sha-256 values are compared before them.
-var afterGunPatchCompare = map[string]bool{buffTacmodStep: true, pointTacmodStep: true}
+var afterGunPatchCompare = map[string]bool{buffTacmodStep: true, pointTacmodStep: true, veilStepName: true}
 
 func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testing.T) {
 	data := os.Getenv("NEVR_STOCK_DATA")
@@ -96,8 +97,8 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 		}
 		p.sets[setID] = s
 	}
-	// The gun patch's mp_equipment has no OVERCHARGE or NEUTRON (steps_buff.go, steps_point.go add them), so its sha-256 is
-	// compared before those steps.
+	// The gun patch's mp_equipment has no OVERCHARGE, NEUTRON or UMBRAL VEIL (steps_buff.go, steps_point.go, steps_veil.go
+	// add them), so its sha-256 is compared before those steps.
 	for _, st := range steps {
 		if afterGunPatchCompare[st.Name] {
 			continue

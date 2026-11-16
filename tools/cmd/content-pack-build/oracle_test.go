@@ -228,9 +228,9 @@ func TestAPlantedDifferenceInADeclaredFieldIsNamed(t *testing.T) {
 // DOT FIELD red bubble model and transform steps, its texture-streaming step and the RULES label step declare one field
 // each, the equipment step one per list, the DOT preset step one per activation key (3), the DOT dampener step one per
 // table (2), the DOT FIELD red materials step one per material (2), the two OVERCHARGE steps one each (the buff
-// tac-mod entry, the OVERCHARGE bubble rows), and the three NEUTRON steps one each (the point tac-mod entry,
-// required_charge, the barrier wall's explosion rows).
-const shippedFields = 25
+// tac-mod entry, the OVERCHARGE bubble rows), the three NEUTRON steps one each (the point tac-mod entry,
+// required_charge, the barrier wall's explosion rows), and the UMBRAL VEIL step one (the smoke tac-mod entry).
+const shippedFields = 26
 
 func TestTheDeclaredFieldsOfTheShippedStepsAreWellFormed(t *testing.T) {
 	t.Parallel()

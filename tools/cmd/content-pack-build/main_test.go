@@ -246,6 +246,8 @@ func TestTheProductionStepsAreTheEchoCombatOnesInOrder(t *testing.T) {
 		"point settings get required_charge",
 		"barrier wall gets the stun mine's explosion row",
 		"RULES page labels the capture point's two times",
+		// steps_veil.go after steps_tacmods.go, last by file name
+		"equipment tacmods offer UMBRAL VEIL",
 	}
 	// Steps of the other data pieces (steps_<feature>.go, each registered from its own init) may sit between these and
 	// are checked by their own tests; these must keep their relative order and each must be present once.
