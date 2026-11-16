@@ -104,6 +104,7 @@ set(PATCHES_SOURCES
     "combat/clock_pause.cpp"
     "combat/combat.cpp"
     "combat/dot_script.cpp"
+    "combat/dot_trigger.cpp"
     "combat/drone_script.cpp"
     "combat/orb_pause.cpp"
     "combat/point_rate.cpp"
@@ -1355,6 +1356,16 @@ if(BUILD_TESTING)
     target_include_directories(test_dot_script PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_dot_script PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_dot_script DISCOVERY_MODE PRE_TEST)
+
+    # #2242 (H-DOTT): the DOT FIELD remote trigger script's dispatch and next-node hooks (runtime/combat/dot_trigger.h),
+    # on a fake copy of the detonator script.
+    add_executable(test_dot_trigger tests/test_dot_trigger.cpp combat/dot_trigger.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_dot_trigger.cpp combat/dot_trigger.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_dot_trigger PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_dot_trigger PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_dot_trigger PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_dot_trigger DISCOVERY_MODE PRE_TEST)
 
     # #600: the shared magazine's frisbee condition (runtime/combat/shared_magazine.h), on a fake shared magazine script.
     add_executable(test_shared_magazine tests/test_shared_magazine.cpp combat/shared_magazine.cpp hook/script_hooks.cpp
