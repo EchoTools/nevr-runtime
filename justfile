@@ -13,6 +13,11 @@ preset := env("PRESET", default_preset)
 # writes the checkout's build directory (repackfixture.ToolsSetup).
 go_tools := "build/go-tools"
 
+# The longest any test may run, in seconds: the ceiling of tools/test_shelf.json (AGENTS.md, "Builds"), which tools/tests/test_test_shelf.py
+# holds equal to this value (a recipe that reads the file would fail every test that runs a copy of this justfile on its own). Every
+# recipe that runs a test passes it on. A test over it is shelved in that file, never given a longer limit.
+test_ceiling_s := "30"
+
 # The BSR commit gen/ is generated from (tools/proto_stamp.py reads this line). Bump it only with the schema:
 # `buf registry commit list buf.build/echotools/nevr-api --page-size 1`. It matches nevr-stream's Go module revision (N132).
 proto_pin := "259a506a3e1b490ba3482e24e92ba4db"
@@ -187,7 +192,7 @@ _check-quest-runtime-library build_dir:
     # The export list is the Go test's, read from the path given here: it fails on any export but NEVR_GetRuntimeApi and
     # re33_ec_page, and on a library without NEVR_GetRuntimeApi.
     so_abs=$(realpath "$so")
-    (cd tests/quest && NEVR_QUEST_RUNTIME_SO="$so_abs" go test -count=1 -run '^TestRuntimeExportAllowlist$' ./...)
+    (cd tests/quest && NEVR_QUEST_RUNTIME_SO="$so_abs" go test -timeout {{ test_ceiling_s }}s -count=1 -run '^TestRuntimeExportAllowlist$' ./...)
     echo "check-quest-runtime-library: OK ($so: no initializer beyond compiler-rt, no TEXTREL, exports as TestRuntimeExportAllowlist requires)"
 
 # Fail when the Quest sentinel gains a load-time initializer beyond its one ELF constructor
@@ -212,16 +217,16 @@ test-android: check-android-static-init
     # (src/quest/CMakeLists.txt) is that compile. The NDK's static bionic binary does not start under qemu-user
     # (TLS segment alignment), so nothing is run here.
     cd src/quest && cmake --build --preset android-arm64 --target nevr_quest_symbol_hash_check
-    cd tests/quest && go test -count=1 -v ./...
+    cd tests/quest && go test -timeout {{ test_ceiling_s }}s -count=1 -v ./...
 
 # Black-box crash-ingest contract gate. Requires a non-production staging sink;
 # see docs/adr/0002-crash-report-ingest.md.
 test-crash-ingest-contract:
-    cd tests/crash-ingest && go test -v ./...
+    cd tests/crash-ingest && go test -timeout {{ test_ceiling_s }}s -v ./...
 
 # Wire contracts with the game service and sites that have no runtime code yet (docs/reference/service-contracts.md).
 test-service-contracts:
-    cd tests/contracts && go test -count=1 -v ./...
+    cd tests/contracts && go test -timeout {{ test_ceiling_s }}s -count=1 -v ./...
 
 # Repack: rename the real libovrplatformloader.so -> _orig.so (fixes soname).
 # Operates on a COPY under build/; never mutates the source-of-truth extract.
@@ -928,23 +933,25 @@ go-tools:
 # The core installer (installer/, ADR 0023): library, CLI and C ABI tests. The build is locked to the committed
 # Cargo.lock; set CARGO_TARGET_DIR to keep the regenerable build tree out of the checkout.
 test-installer *ARGS:
-    cargo test --locked --manifest-path installer/Cargo.toml {{ ARGS }}
+    cargo test --locked --manifest-path installer/Cargo.toml --no-run {{ ARGS }}
+    # libtest has no per-test timeout on stable Rust, so the ceiling bounds the run of all the built test programs together.
+    timeout -k 10 {{ test_ceiling_s }} cargo test --locked --manifest-path installer/Cargo.toml {{ ARGS }}
 
 # Run all system tests
 test-system:
-    cd tests/system && go test -v ./...
+    cd tests/system && go test -timeout {{ test_ceiling_s }}s -v ./...
 
 # Run quick system tests only
 test-system-short:
-    cd tests/system && go test -v -short ./...
+    cd tests/system && go test -timeout {{ test_ceiling_s }}s -v -short ./...
 
 # Run DLL loading tests only
 test-system-dll:
-    cd tests/system && go test -v -short -run ".*DLL.*" ./...
+    cd tests/system && go test -timeout {{ test_ceiling_s }}s -v -short -run ".*DLL.*" ./...
 
 # Run system tests with verbose output, no cache
 test-system-verbose:
-    cd tests/system && go test -v -count=1 ./...
+    cd tests/system && go test -timeout {{ test_ceiling_s }}s -v -count=1 ./...
 
 # Run the built runtime on a native Windows VM (libvirt) and judge the boot.
 # Needs WINVM_USER/WINVM_PASS and `just build` first; see
@@ -980,23 +987,23 @@ scenario-all *ARGS:
 
 # Run plugin ground truth tests (no game binary needed)
 test-plugins-groundtruth:
-    cd tests/plugins && go test -v -run "TestGroundTruth" ./...
+    cd tests/plugins && go test -timeout {{ test_ceiling_s }}s -v -run "TestGroundTruth" ./...
 
 # Run all plugin tests (needs game binary + MCP harness)
 test-plugins:
-    cd tests/plugins && go test -v -timeout 10m ./...
+    cd tests/plugins && go test -timeout {{ test_ceiling_s }}s -v ./...
 
 # Run plugin tests in short mode (skips integration, runs ground truth only)
 test-plugins-short:
-    cd tests/plugins && go test -v -short ./...
+    cd tests/plugins && go test -timeout {{ test_ceiling_s }}s -v -short ./...
 
 # Run plugin tests with verbose output, no cache
 test-plugins-verbose:
-    cd tests/plugins && go test -v -count=1 -timeout 10m ./...
+    cd tests/plugins && go test -timeout {{ test_ceiling_s }}s -v -count=1 ./...
 
 # Run auth ground truth tests (no game binary, no network)
 test-auth-groundtruth:
-    cd tests/plugins && go test -v -run "TestGroundTruth_No|TestGroundTruth_Auth" ./...
+    cd tests/plugins && go test -timeout {{ test_ceiling_s }}s -v -run "TestGroundTruth_No|TestGroundTruth_Auth" ./...
 
 # Run the C++ GTest suite under Wine (cross-compiled). Fail-close: exits nonzero if
 # the GTest binary cannot be built or found, or if any test fails. Builds the test
@@ -1016,8 +1023,9 @@ test-auth-unit *names: go-tools _build-guard generate-symcache _vcpkg-mingw _pro
         exec build/go-tools/suite-run -recipe test-auth-unit -- just preset={{ preset }} test-auth-unit
     fi
     unset VCPKG_ROOT
-    # A test binary that hangs or runs away must fail the gate, not block it or exhaust the machine:
-    # 124 is timeout's "timed out" status and 137 is a process killed by the memory cap. The cap
+    # A test binary that hangs or runs away must fail the gate, not block it or exhaust the machine: each test in it is held to
+    # the ceiling of tools/test_shelf.json by gtest-deadline (per test: it reads gtest's RUN and OK lines), which also leaves the
+    # shelf's tests of the binary out of the run. 124 is the "ran over the ceiling" status of gtest-deadline and of timeout(1) and 137 is a process killed by the memory cap. The cap
     # (systemd user scope, MemoryMax=4G, no swap) applies when a probe scope with the same properties
     # starts; when systemd-run is missing or cannot start a user scope (no user manager or session bus,
     # as in a container), the run keeps only the time limit and says so. The probe does not detect a
@@ -1026,20 +1034,23 @@ test-auth-unit *names: go-tools _build-guard generate-symcache _vcpkg-mingw _pro
     # does not bound the test processes: each test has its own 4G cap.
     # A failing binary is recorded and the loop goes on, so one failure does not hide the binaries after it
     # (#1228); the summary after the last binary names every failure and exits non-zero.
+    # The ceiling every test is held to (tools/test_shelf.json) and the program that holds each test of a binary to it.
+    ceiling_s={{ test_ceiling_s }}
+    gtest_deadline="{{ go_tools }}/gtest-deadline"
     test_failures=()
     # The exit code of the last binary run_test ran (0 when it passed), read by the named loop below.
     last_rc=0
     run_test() {
         local rc=0
         if command -v systemd-run >/dev/null && systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- true 2>/dev/null; then
-            systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- timeout -k 10 900 wine "$1" || rc=$?
+            systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- "$gtest_deadline" -binary "$(basename "$1" .exe)" -- wine "$1" || rc=$?
         else
             echo "test-auth-unit: systemd-run unavailable or cannot start a user scope: running $1 with the time limit only (no memory cap)" >&2
-            timeout -k 10 900 wine "$1" || rc=$?
+            "$gtest_deadline" -binary "$(basename "$1" .exe)" -- wine "$1" || rc=$?
         fi
         if [[ "$rc" -eq 124 ]]; then
-            echo "test-auth-unit: FAIL — $1 timed out after 900s" >&2
-            test_failures+=("$1 (timed out)")
+            echo "test-auth-unit: FAIL — a test in $1 ran longer than ${ceiling_s}s (named above); shelve it in tools/test_shelf.json or make it fast" >&2
+            test_failures+=("$1 (a test over ${ceiling_s}s)")
         elif [[ "$rc" -eq 137 ]]; then
             echo "test-auth-unit: FAIL — $1 killed: memory cap exceeded (MemoryMax=4G)" >&2
             test_failures+=("$1 (memory cap)")
@@ -1526,7 +1537,7 @@ test-auth-unit *names: go-tools _build-guard generate-symcache _vcpkg-mingw _pro
 
 # Run auth integration tests (needs game binary + MCP harness)
 test-auth-integration:
-    cd tests/system && go test -v -run "TestAuth" ./...
+    cd tests/system && go test -timeout {{ test_ceiling_s }}s -v -run "TestAuth" ./...
 
 # Run all auth tests
 test-auth: test-auth-groundtruth test-auth-unit
@@ -1685,12 +1696,12 @@ test-quest-data-net: _vcpkg-quest-host _run-root-tool
     # The host's OpenSSL may already refuse TLS 1.1 on its own; a permissive config leaves only the transport's own
     # floor (CURLOPT_SSLVERSION) between the client and the TLS 1.1 server.
     printf 'openssl_conf = nevr_lax\n[nevr_lax]\nssl_conf = nevr_ssl\n[nevr_ssl]\nsystem_default = nevr_sys\n[nevr_sys]\nMinProtocol = TLSv1\nCipherString = ALL:@SECLEVEL=0\n' > lax-openssl.cnf
-    OPENSSL_CONF="$PWD/lax-openssl.cnf" timeout -k 5 300 "$bin/curl_transport_test" "$(cat plain.port)" plain.log trust.pem "$PWD"
+    OPENSSL_CONF="$PWD/lax-openssl.cnf" timeout -k 5 {{ test_ceiling_s }} "$bin/curl_transport_test" "$(cat plain.port)" plain.log trust.pem "$PWD"
     # The step as the game reaches it: through the permission-wait handler's thunk entry (src/quest/sentinel/data_wiring.cpp).
     # The hooks it links call the pinned factories, which take the patched libr15's identity (sentinel::pinned::LibR15PatchedBuildId,
     # docs/adr/0021 section 7).
     cd "$root"
-    NEVR_TEST_TMP="$out" timeout -k 5 300 "$bin/data_wiring_test"
+    NEVR_TEST_TMP="$out" timeout -k 5 {{ test_ceiling_s }} "$bin/data_wiring_test"
     echo "test-quest-data-net: the fetch passes over real HTTP on the host"
 
 # The shared invite service for the Quest, on the host (docs/adr/0017, #966, S1): src/runtime/patch/invite_service.cpp and its libcurl
@@ -2261,7 +2272,7 @@ test-quest-patcher-pinned libr15 json_include="" signed_libr15="" reference_libr
     (cd src/quest && cmake --preset quest-host-patcher-pinned && cmake --build --preset quest-host-patcher-pinned)
     ninja -C build/quest-host-patcher-pinned -t targets all > build/quest-host-patcher-pinned/test-programs-targets.txt
     python3 tools/check_fresh_test_programs.py --build-dir build/quest-host-patcher-pinned --targets build/quest-host-patcher-pinned/test-programs-targets.txt patcher-pinned/libr15_patcher_pinned_test
-    timeout 600 build/quest-host-patcher-pinned/patcher-pinned/libr15_patcher_pinned_test "$out/quest_patch_libr15" "$libr15" "$scratch" ${signed_arg[@]+"${signed_arg[@]}"} ${ref_arg[@]+"${ref_arg[@]}"} | tee "$scratch/run.log"
+    timeout {{ test_ceiling_s }} build/quest-host-patcher-pinned/patcher-pinned/libr15_patcher_pinned_test "$out/quest_patch_libr15" "$libr15" "$scratch" ${signed_arg[@]+"${signed_arg[@]}"} ${ref_arg[@]+"${ref_arg[@]}"} | tee "$scratch/run.log"
     # With a signed file the test must have run and passed: a run that dropped it (SKIP) is not a pass of test 5.
     if [ -n "$signed_libr15" ]; then
         grep -qx 'PASS SignedApkLibr15IsThePatchersOutput' "$scratch/run.log" || { echo "test-quest-patcher-pinned: SignedApkLibr15IsThePatchersOutput did not run and pass" >&2; exit 1; }
@@ -2496,7 +2507,7 @@ test-scripting:
     # the floor, so a test that silently stops being registered fails the gate.
     run_suite() { # $1 executable, $2 minimum number of tests
         local log rc=0 summary n failed
-        log=$(WINEDEBUG=-all timeout -k 10 600 wine "$1" 2>&1) || rc=$?
+        log=$(WINEDEBUG=-all timeout -k 10 {{ test_ceiling_s }} wine "$1" 2>&1) || rc=$?
         log=${log//$'\r'/}  # wine's console writes CRLF
         if ! summary=$(grep -E '^[0-9]+ tests, [0-9]+ failed checks$' <<<"$log"); then
             printf '%s\n' "$log" >&2
@@ -2539,14 +2550,14 @@ test-scripting:
             run_suite "$out/nevr_luau_shared_test.exe" 10
         fi
         # The two runaway probes report instead of asserting; each must end with the script stopped.
-        dos=$(WINEDEBUG=-all timeout -k 10 120 wine "$out/nevr_script_conformance.exe" --pattern-dos 2>&1)
+        dos=$(WINEDEBUG=-all timeout -k 10 {{ test_ceiling_s }} wine "$out/nevr_script_conformance.exe" --pattern-dos 2>&1)
         dos=${dos//$'\r'/}
         if ! grep -qE '^T5d pattern_dos: returned after .* owner disabled$' <<<"$dos"; then
             printf '%s\n' "$dos" >&2
             echo "test-scripting: FAIL — [$mode] a runaway inside string.find was not stopped" >&2
             exit 1
         fi
-        dos=$(WINEDEBUG=-all timeout -k 10 120 wine "$out/nevr_script_conformance.exe" --gc-dos 2>&1)
+        dos=$(WINEDEBUG=-all timeout -k 10 {{ test_ceiling_s }} wine "$out/nevr_script_conformance.exe" --gc-dos 2>&1)
         dos=${dos//$'\r'/}
         if ! grep -qE '^T5e gc_dos: returned after ' <<<"$dos"; then
             printf '%s\n' "$dos" >&2
@@ -3667,7 +3678,7 @@ verify: go-tools
     # no user git configuration or signing key, a fixed identity, no display.
     # Both halves run, the Go one whatever the Python one did, and the last line names each half that failed.
     just go-tools
-    build/go-tools/test-go-tools -C tools -- timeout -k 10 1500 env -u DISPLAY -u WAYLAND_DISPLAY -u GNUPGHOME -u GIT_CONFIG_PARAMETERS -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=nevr-test GIT_CONFIG_KEY_1=user.email GIT_CONFIG_VALUE_1=test@example.invalid GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=tag.gpgsign GIT_CONFIG_VALUE_3=false GIT_CONFIG_KEY_4=init.defaultBranch GIT_CONFIG_VALUE_4=main python3 -m unittest discover -s tools/tests -p 'test_*.py'
+    build/go-tools/test-go-tools -C tools -- timeout -k 10 1500 env -u DISPLAY -u WAYLAND_DISPLAY -u GNUPGHOME -u GIT_CONFIG_PARAMETERS -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=nevr-test GIT_CONFIG_KEY_1=user.email GIT_CONFIG_VALUE_1=test@example.invalid GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=tag.gpgsign GIT_CONFIG_VALUE_3=false GIT_CONFIG_KEY_4=init.defaultBranch GIT_CONFIG_VALUE_4=main python3 tools/unittest_ceiling.py discover -s tools/tests -p 'test_*.py'
     python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.

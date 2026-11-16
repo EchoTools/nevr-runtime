@@ -19,6 +19,9 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 
 set(NEVR_HT_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# The ceiling every test here is held to and the tests that are shelved: tools/test_shelf.json, read once, here.
+include("${NEVR_REPO_ROOT}/cmake/TestShelf.cmake")
+
 # ── The host dependency tree ────────────────────────────────────────────────────────────────────────────────────────────
 # nlohmann-json, yaml-cpp and zlib come from the tools/quest-host-deps manifest, installed for the x64-linux triplet by
 # `just _vcpkg-quest-host` into build/quest-host-vcpkg; never a system package. libcurl, openssl and zstd are the host's
@@ -166,11 +169,16 @@ function(_nevr_ht_apply tgt kind)
 endfunction()
 
 function(_nevr_ht_register name)
-  if(NOT A_TIMEOUT)
-    set(A_TIMEOUT 600) # a hang is a failure, not a stuck gate
+  # Every test is held to the one ceiling of tools/test_shelf.json (cmake/TestShelf.cmake): a test takes no limit of its own,
+  # because the ceiling is never raised for a test. A ctest test here is one program, so the ceiling bounds the whole program.
+  if(DEFINED A_TIMEOUT)
+    message(FATAL_ERROR "${name}: TIMEOUT ${A_TIMEOUT}: a test takes its limit from tools/test_shelf.json (${NEVR_TEST_CEILING_S} s), never its own")
   endif()
   add_test(NAME ${name} COMMAND ${ARGN} ${A_ARGS} WORKING_DIRECTORY "${NEVR_REPO_ROOT}")
-  set_tests_properties(${name} PROPERTIES LABELS "${A_GROUP}" TIMEOUT ${A_TIMEOUT})
+  set_tests_properties(${name} PROPERTIES LABELS "${A_GROUP}" TIMEOUT ${NEVR_TEST_CEILING_S})
+  if(name IN_LIST NEVR_SHELVED_CTESTS)
+    set_tests_properties(${name} PROPERTIES DISABLED TRUE) # shelved: tools/test_shelf.json says why and since when
+  endif()
   if(A_ENV)
     set_tests_properties(${name} PROPERTIES ENVIRONMENT "${A_ENV}")
   endif()

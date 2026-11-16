@@ -1,0 +1,3 @@
+{"component":"tools/internal/gtestdeadline","dir":"tools/internal/gtestdeadline"}
+{"file":"tools/internal/gtestdeadline/gtestdeadline.go","tests":["go:cmd/gtest-deadline","go:internal/gtestdeadline","go:internal/questwiring"]}
+{"file":"tools/internal/gtestdeadline/gtestdeadline_test.go","tests":["go:cmd/gtest-deadline","go:internal/gtestdeadline","go:internal/questwiring"]}

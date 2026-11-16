@@ -545,6 +545,10 @@ func newHalves(t *testing.T) *halves {
 	if err := os.MkdirAll(filepath.Join(h.dir, "tools"), 0o755); err != nil { // the module directory, which -C names
 		t.Fatal(err)
 	}
+	// The module directory's shelf, which test-go-tools reads for the ceiling it passes to go test.
+	if err := os.WriteFile(filepath.Join(h.dir, "tools", "test_shelf.json"), []byte(`{"schema":1,"ceiling_s":30,"entries":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Symlink(bin, filepath.Join(h.dir, "build", "go-tools", "test-go-tools")); err != nil {
 		t.Fatal(err)
 	}
@@ -659,7 +663,7 @@ func TestJustVerifyRunsTheGoHalfWhenThePythonHalfFailsAndNamesBoth(t *testing.T)
 	if !built {
 		t.Error("verify does not run `just go-tools` (ADR 0044 rule 7)")
 	}
-	if !strings.Contains(line, "python3 -m unittest") {
+	if !strings.Contains(line, "python3 tools/unittest_ceiling.py discover") {
 		t.Errorf("the line does not run the Python suite: %q", line)
 	}
 	h := newHalves(t)

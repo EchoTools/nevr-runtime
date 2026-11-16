@@ -44,7 +44,7 @@ class TheGuardIsWired(unittest.TestCase):
 
     def test_the_host_test_runs_in_the_hooks_recipe(self):
         hooks_cmake = read("src/quest/host_tests/groups/hooks.cmake")
-        self.assertRegex(hooks_cmake, r"nevr_ht_test\(vk_free_guard_test GROUP hooks[^)]*TIMEOUT 120[^)]*src/quest/tests/vk_free_guard_test\.cpp")
+        self.assertRegex(hooks_cmake, r"nevr_ht_test\(vk_free_guard_test GROUP hooks[^)]*src/quest/tests/vk_free_guard_test\.cpp")
 
     def test_the_real_library_check_covers_the_slot_and_the_layout(self):
         text = read("src/quest/tests/got_pinned_test.cpp")
@@ -102,7 +102,7 @@ class TheAllocationCheckIsWired(unittest.TestCase):
 
     def test_the_host_test_runs_in_the_hooks_recipe(self):
         hooks_cmake = read("src/quest/host_tests/groups/hooks.cmake")
-        self.assertRegex(hooks_cmake, r"nevr_ht_test\(vk_alloc_check_test GROUP hooks[^)]*TIMEOUT 120[^)]*src/quest/tests/vk_alloc_check_test\.cpp")
+        self.assertRegex(hooks_cmake, r"nevr_ht_test\(vk_alloc_check_test GROUP hooks[^)]*src/quest/tests/vk_alloc_check_test\.cpp")
 
     def test_the_real_library_check_covers_the_slot_and_the_pins(self):
         text = read("src/quest/tests/got_pinned_test.cpp")

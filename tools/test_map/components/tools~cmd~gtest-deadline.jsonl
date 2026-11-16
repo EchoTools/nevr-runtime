@@ -1,0 +1,3 @@
+{"component":"tools/cmd/gtest-deadline","dir":"tools/cmd/gtest-deadline"}
+{"file":"tools/cmd/gtest-deadline/main.go","tests":["go:cmd/gtest-deadline","go:cmd/guard-proof"]}
+{"file":"tools/cmd/gtest-deadline/main_test.go","tests":["go:cmd/gtest-deadline","go:cmd/guard-proof"]}

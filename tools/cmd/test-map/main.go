@@ -34,6 +34,7 @@ import (
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
 	"github.com/EchoTools/nevr-runtime/tools/internal/runroot"
 	"github.com/EchoTools/nevr-runtime/tools/internal/testmap"
+	"github.com/EchoTools/nevr-runtime/tools/internal/testshelf"
 )
 
 const tool = "test-map"
@@ -177,7 +178,11 @@ func (g *generator) do() int {
 	if err != nil {
 		return g.fail(err)
 	}
-	if err := testmap.Validate(mp, testmap.Measured); err != nil {
+	shelf, err := loadShelf(repo)
+	if err != nil {
+		return g.fail(err)
+	}
+	if err := testmap.ValidateAgainstShelf(mp, testmap.Measured, shelf); err != nil {
 		return g.fail(err)
 	}
 	want, err := testmap.Encode(mp)
@@ -247,4 +252,15 @@ func (g *generator) checkDir(out string, want map[string][]byte) int {
 	fmt.Fprintf(g.stderr, "%s: FAIL -check: %s differs from the generator; first difference: %s\n", tool, out, where)
 	g.log.Error("check", "out", out, "result", "differs", "where", where, "exit", exitUncovered)
 	return exitUncovered
+}
+
+// loadShelf reads the checkout's tools/test_shelf.json, which the heavy measurements are checked against (no id is in both
+// lists). A checkout with no shelf file has nothing shelved: test-changed, which needs the file to run, is the reader that
+// refuses its absence.
+func loadShelf(repo string) (*testshelf.Shelf, error) {
+	path := filepath.Join(repo, filepath.FromSlash(testshelf.DefaultPath))
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	return testshelf.Load(path)
 }

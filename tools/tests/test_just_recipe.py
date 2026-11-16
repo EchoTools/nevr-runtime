@@ -106,7 +106,7 @@ class RealJustfileTest(unittest.TestCase):
     def test_the_test_auth_unit_recipe_is_found_and_runs_its_binaries(self):
         body = just_recipe.body(self.text, "test-auth-unit")
         self.assertIsNotNone(body)
-        self.assertIn('timeout -k 10 900 wine "$1"', body)
+        self.assertIn('"$gtest_deadline" -binary "$(basename "$1" .exe)" -- wine "$1"', body)
 
     def test_build_android_is_found_and_runs_one_cmake_build_with_the_job_count(self):
         body = just_recipe.body(self.text, "build-android")

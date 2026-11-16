@@ -1,4 +1,5 @@
 {"component":"cmake","dir":"cmake"}
+{"file":"cmake/TestShelf.cmake","tests":["build","go:internal/testshelf","pytest:test_test_shelf"]}
 {"file":"cmake/VerifyDistribution.cmake","tests":["build","pytest:test_signing_workflow"]}
 {"file":"cmake/nevr_build_identity.cmake","tests":["build"]}
 {"file":"cmake/nevr_build_info.cmake","tests":["build","pytest:test_quest_build_is_dev"]}

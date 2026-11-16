@@ -68,10 +68,13 @@
 {"file":"tools/remove_worktree.py","tests":["pytest:test_reap_merged","pytest:test_remove_worktree"]}
 {"file":"tools/render_credits.py","tests":["build","just:test-android","pytest:test_credits","pytest:test_credits_text_wiring"]}
 {"file":"tools/rollback_beta.py","tests":["pytest:test_rollback_beta"]}
-{"file":"tools/run_tool_tests.py","tests":["go:cmd/test-changed","go:cmd/test-go-tools","go:internal/policy","go:internal/testmap","pytest:test_run_tool_tests","pytest:test_run_tool_tests_memory"]}
+{"file":"tools/run_tool_tests.py","tests":["go:cmd/test-changed","go:cmd/test-go-tools","go:internal/policy","go:internal/testmap","pytest:test_run_tool_tests","pytest:test_run_tool_tests_memory","pytest:test_test_shelf"]}
 {"file":"tools/seed_build_tree.py","tests":["pytest:test_seed_build_tree","pytest:test_worktree_setup"]}
+{"file":"tools/shelf_reader.py","tests":["go:internal/testshelf","pytest:test_test_shelf"]}
 {"file":"tools/symbol_candidates.txt","tests":["go:cmd/test-map"]}
 {"file":"tools/symbols.pin","tests":["go:symcache"]}
+{"file":"tools/test_shelf.json","tests":["go:cmd/gtest-deadline","go:cmd/test-changed","go:cmd/test-go-tools","go:internal/testshelf","pytest:test_test_shelf"]}
+{"file":"tools/unittest_ceiling.py","tests":["pytest:test_run_tool_tests","pytest:test_test_shelf"]}
 {"file":"tools/vcpkg_root.sh","tests":["pytest:test_vcpkg_root","pytest:test_verify_parallel"]}
 {"file":"tools/verify-parallel.sh","tests":["pytest:test_verify_parallel","pytest:test_workflows_ndk"]}
 {"file":"tools/verify_agents_imports.py","tests":["agents-imports","go:cmd/test-map"]}

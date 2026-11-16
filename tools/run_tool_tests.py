@@ -86,6 +86,10 @@ $NEVR_TEST_LOCK_WAIT_S (default 5400); both records carry `lock` (`taken`, `stat
 a `lock_timeout` record that names the holder then. A SIGINT, SIGTERM or SIGHUP during the wait stops it the same way:
 exit 128 + the signal and a `lock_wait_interrupted` record.
 
+The ceiling. pytest is started with `-p timeout --timeout=<ceiling_s of tools/test_shelf.json> --timeout-method=thread`, so a
+test that runs past the ceiling fails; a test the shelf names is skipped with its reason and date by tools/tests/conftest.py. A
+run without pytest-timeout, or whose arguments set or switch off the timeout, is refused with exit 2 before pytest starts.
+
 The environment. pytest is started with a fixed one, so a run gives the same answer for whoever starts it:
 `HERMETIC_SET` (no user or system git configuration, a fixed identity, no commit or tag signing, `main` as the
 initial branch) and without the variables in `HERMETIC_UNSET` (no display for a test that starts Wine, no gpg home).
@@ -137,6 +141,7 @@ import types
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import shelf_reader  # noqa: E402
 import work_root  # noqa: E402
 
 DEFAULT_LOG_DIR = str(work_root.work_root() / "test-runs" / "tools-tests")
@@ -164,6 +169,28 @@ def seconds_from_env(name: str, default: float):
 
 # The plugins the suite uses, as (name for `-p`, module that provides it); pytest starts with autoload off and these.
 SUITE_PLUGINS = (("xdist", "xdist"), ("randomly", "pytest_randomly"))
+# The per-test ceiling (tools/test_shelf.json, `ceiling_s`) is held by pytest-timeout, which the run requires: a run without it
+# has no ceiling and is refused. The `thread` method keeps the signal handlers a test installs (SIGALRM is not used); a test
+# over the ceiling fails and its worker is replaced.
+TIMEOUT_PLUGIN = ("timeout", "pytest_timeout")
+TIMEOUT_METHOD = "thread"
+
+
+def timeout_flags(args: list, environ) -> tuple:
+    """(flags, problem): `-p timeout --timeout=<ceiling> --timeout-method=thread`, and no problem; or no flags and the
+    sentence that says why the run is refused (pytest-timeout is not installed, the arguments set or switch off the
+    timeout, or the shelf cannot be read). The ceiling is never raised for a test, so the arguments cannot set it."""
+    if importlib.util.find_spec(TIMEOUT_PLUGIN[1]) is None:
+        return [], "pytest-timeout is not installed, so no test is held to the ceiling of tools/test_shelf.json"
+    tokens = option_tokens(args, environ)
+    if any(tok == "--timeout" or tok.startswith("--timeout=") or tok.startswith("--timeout-method") for tok in tokens) \
+            or "no:timeout" in plugin_names(tokens):
+        return [], "the arguments set or switch off pytest's timeout, which is the ceiling of tools/test_shelf.json"
+    try:
+        ceiling = shelf_reader.ceiling_s()
+    except shelf_reader.ShelfError as exc:
+        return [], str(exc)
+    return ["-p", TIMEOUT_PLUGIN[0], f"--timeout={ceiling}", f"--timeout-method={TIMEOUT_METHOD}"], None
 # $NEVR_TEST_WORKERS when it is unset (a setting of that word is refused: only a count, `auto` or `logical` is one).
 DEFAULT_WORKERS = "default"
 # The worker count of a run that is given none: one per hardware thread, at most this many. Measured on the whole suite
@@ -996,6 +1023,11 @@ def run_locked(argv: list, lock: MachineLock) -> int:
               "a whole number", file=sys.stderr)
         return 2
 
+    ceiling_flags, ceiling_problem = timeout_flags(argv, os.environ)
+    if ceiling_problem:
+        print(f"test-tools: FAIL {ceiling_problem}", file=sys.stderr)
+        return 2
+
     log_dir = pathlib.Path(os.environ.get("NEVR_TEST_LOG_DIR") or DEFAULT_LOG_DIR)
     try:
         work_root.ensure_dir(log_dir, LOG_DIR_PURPOSE, LOG_DIR_REMOVED)
@@ -1052,7 +1084,7 @@ def run_locked(argv: list, lock: MachineLock) -> int:
     child_env, env_removed = hermetic_environment(os.environ)
     child_env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     seed_args, seed = randomly_seed([*plan["flags"], *args], child_env)
-    cmd = [sys.executable, "-m", "pytest", f"--junitxml={xml_path}", *plan["flags"], *seed_args, *args]
+    cmd = [sys.executable, "-m", "pytest", f"--junitxml={xml_path}", *plan["flags"], *ceiling_flags, *seed_args, *args]
     env = pytest_environment()
     base = {"start": start.isoformat(), "checkout": git("rev-parse", "--show-toplevel"), "cwd": cwd(),
             "user": user(), "head": head, "tree": tree,

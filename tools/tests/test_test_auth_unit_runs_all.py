@@ -24,6 +24,13 @@ case "$1" in *fail*) exit 1 ;; esac
 exit 0
 """
 
+# Stands in for gtest-deadline: `-binary NAME -- program args` runs the program (a program named *slow* is one over the ceiling).
+FAKE_DEADLINE = """#!/usr/bin/env bash
+shift 3
+case "$2" in *slow*) echo "gtest-deadline: FAIL S.T ran longer than 30s" >&2; exit 124 ;; esac
+exec "$@"
+"""
+
 # Makes `systemd-run --user --scope` unavailable, so run_test takes its time-limit-only branch.
 FAKE_SYSTEMD_RUN = "#!/usr/bin/env bash\nexit 1\n"
 
@@ -58,6 +65,7 @@ class TestAuthUnitRunsEveryBinaryTest(unittest.TestCase):
         self.bin.mkdir()
         self._write_exec(self.bin / "wine", FAKE_WINE)
         self._write_exec(self.bin / "systemd-run", FAKE_SYSTEMD_RUN)
+        self._write_exec(self.bin / "gtest-deadline", FAKE_DEADLINE)
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}")
         body = recipe_text()
         self.script = tmp / "run.sh"
@@ -65,6 +73,8 @@ class TestAuthUnitRunsEveryBinaryTest(unittest.TestCase):
         self.script.write_text(
             "set -euo pipefail\n"
             "test_failures=()\n"
+            "ceiling_s=30\n"
+            f'gtest_deadline="{self.bin}/gtest-deadline"\n'
             + run_test_function(body)
             + 'run_test "first_fail.exe"\n'
             + 'run_test "second_ok.exe"\n'
@@ -102,6 +112,18 @@ class TestAuthUnitRunsEveryBinaryTest(unittest.TestCase):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("REACHED END", result.stdout)
+
+    def test_a_binary_with_a_test_over_the_ceiling_fails_naming_the_ceiling_and_the_shelf(self):
+        self.script.write_text(self.script.read_text().replace('run_test "first_fail.exe"', 'run_test "slow_binary.exe"'))
+        result = self.run_script()
+        self.assertIn("a test in slow_binary.exe ran longer than 30s (named above); shelve it in tools/test_shelf.json",
+                      result.stderr)
+        self.assertIn("slow_binary.exe (a test over 30s)", result.stderr)
+
+    def test_every_binary_runs_through_gtest_deadline_and_none_through_a_wall_clock_limit(self):
+        body = run_test_function(recipe_text())
+        self.assertEqual(body.count('"$gtest_deadline" -binary "$(basename "$1" .exe)" -- wine "$1"'), 2)
+        self.assertNotRegex(body, r"timeout -k 10 \d+ wine")
 
     def test_the_recipe_does_not_exit_inside_run_test(self):
         # Mutant guard: the early `exit "$rc"` that stopped the loop must not come back.

@@ -49,19 +49,19 @@ set(_cguards src/quest/combat/fxtrail.cpp src/quest/combat/voipdrop.cpp src/ques
 
 # The gate on the folded combat modules (#2170, docs/adr/0046 rule 5): combat::Active() for every variant, both build kinds and both
 # combat.force answers (the whole table), the answer once per process, and its one log line with its reason and consequence.
-nevr_ht_test(combat_active_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
+nevr_ht_test(combat_active_test GROUP combat ${_cf} OBJS ${_ccore}
   SRC src/quest/tests/combat_active_test.cpp src/quest/combat/combat_active.cpp src/quest/sentinel/build_variant.cpp)
 # The two install steps (#2171, docs/adr/0046 rule 6): one registration table per phase in its own order, only when combat::Active() says
 # combat runs in this process, one `combat_install` line per phase, a plain release that installs nothing and says so once, the
 # not_started record, and the `combat_config` line.
-nevr_ht_test(combat_install_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(combat_install_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/combat_install_test.cpp src/quest/combat/combat_install.cpp ${_credirect} ${_clevelname} ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/sendguard.cpp
       src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cmods} ${_cec} ${_ctables} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp)
 # The script redirect (#2189, combat/script_redirect.h): the registry asked once by `combat` for the nine hashes in order, the line for a
 # registration and for each refusal, and the shipped Install() reaching the real host registry.
-nevr_ht_test(combat_script_redirect_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
+nevr_ht_test(combat_script_redirect_test GROUP combat ${_cf} OBJS ${_ccore}
   SRC src/quest/tests/combat_script_redirect_test.cpp ${_credirect})
 # Sendguard (#2179): the real wrapper through the thunk's entry into the one JUMP_SLOT of a libr15 image built in memory, against models of
 # CSendEventNode::Enter and the GameSpaceMT lookup and the node's context. A send to a game space that is not loaded dropped and the
@@ -70,7 +70,7 @@ nevr_ht_test(combat_script_redirect_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${
 # other refusals, the one changed word (no other byte of the image, the unwind record the plugin took for a slot included), the off key
 # and the old switch file's Warning, and the table's row reading the resolved configuration. got_pinned_test resolves the relocation
 # and the pins in the real libr15.
-nevr_ht_test(sendguard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(sendguard_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/sendguard_test.cpp src/quest/combat/combat_install.cpp ${_credirect} ${_clevelname} ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/sendguard.cpp
@@ -79,7 +79,7 @@ nevr_ht_test(sendguard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ci
 # CR15Game constructor that lays the default settings down at this+0x8c08 and this+0x8ce4. Bit 13 only where a copy holds the stock
 # 0x1003, the original first, no other byte changed, a saved false not undone, the golden lines. got_pinned_test resolves both slots in
 # the real libr15.
-nevr_ht_test(match_tag_default_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(match_tag_default_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/match_tag_default_test.cpp src/quest/combat/match_tags.cpp)
 # The equipment re-fire (#2121): the real wrappers through the six thunks, installed by the real GotHook into the six words of a libr15
 # image built in memory (JUMP_SLOT and GLOB_DAT of the three setters), against models of the setters, the change handlers, NetGameMT,
@@ -87,30 +87,30 @@ nevr_ht_test(match_tag_default_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccor
 # with the game's three arguments, the slot's own handler, the net game probe, a word that is not the setter refused alone, a pin that
 # differs refusing the module before any word is touched, the other refusals, and the golden lines. got_pinned_test resolves the six
 # relocations and the code pins in the real libr15.
-nevr_ht_test(equip_refire_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(equip_refire_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/equip_refire_test.cpp src/quest/combat/equip_refire.cpp src/quest/invite/frame_dispatch.cpp)
 # The new-unlocks clear (#2410): the real wrappers through the two thunks, installed by the real GotHook into the two words of a libr15 image built in
 # memory (JUMP_SLOT and GLOB_DAT of CR15NetGame::RemoveAllNewlyUnlockedItems), against models of the clear and CJson::Empty. The shared rule is the
 # header's GTest; here are the words hooked, each word's own original, the table entries, the frame work setting the dirty bit once the buffer is
 # empty, the held / re-armed / superseded / dropped lines, a word that is not the clear refused alone, and a pin that differs refusing the module.
 # got_pinned_test resolves the two relocations and the two code pins in the real libr15.
-nevr_ht_test(new_unlocks_clear_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(new_unlocks_clear_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/new_unlocks_clear_test.cpp src/quest/combat/new_unlocks_clear.cpp src/quest/invite/frame_dispatch.cpp)
 # The four heap sizes (#2175): the real module writing through the real GotDataSlot into the four GLOB_DAT words of a libr15 image built in
 # memory, against a model of the reader (`ldr x8,[slot]; ldr x1,[x8]`). All four slots, the Quest 2's System heap, each refusal alone, the two
 # switches, once, the golden lines. got_pinned_test resolves the four relocations, their symbol types and the words in the real libr15.
-nevr_ht_test(heaps_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(heaps_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/heaps_test.cpp src/quest/combat/heaps.cpp)
 # The render-target pool and the android_main witness (#2175): the real wrappers through the two kCaller thunks, installed by the real GotHook
 # into the two JUMP_SLOTs of a libr15 image built in memory, called through the slot against a fake Alloc, InitCommon's inline fill and a fake
 # CSysJava::Init. The pool is 0..1023 exactly once, the wrong caller and capacity pass through, each unrecognised layout leaves the stock 512,
 # the witness once with the System heap the game will read, each refusal alone, the switch, once, the golden lines.
-nevr_ht_test(memsys_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(memsys_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/memsys_test.cpp src/quest/combat/memsys.cpp)
 # The heap step as the sentinel runs it (#2175): the shipped early table on a libr15 image built in memory against a model of the start of
 # android_main. Before the first allocation it governs (the witness precedes the model's heap reads; a late run is the control), once, only in
 # the variants the gate allows (and a development build forced on), and each shipped row reads its switch.
-nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(heap_step_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/heap_step_test.cpp src/quest/combat/combat_install.cpp ${_credirect} ${_clevelname} ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
@@ -119,7 +119,7 @@ nevr_ht_test(heap_step_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_ci
 # The game-thread tick (#2172, docs/adr/0046; docs/adr/0039): the real thunk and GotHook against the JUMP_SLOT of a libr15 image built in
 # memory. The callback table, the vptr check (read once per object, not once per frame), and who owns the slot on each variant (plain release,
 # combat, q15t): the runner's normal step installs this module alone, and a plain release installs nothing.
-nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(combat_tick_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/combat_tick_test.cpp src/quest/combat/combat_install.cpp ${_credirect} ${_clevelname} ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp
       src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp src/quest/sentinel/build_variant.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp src/quest/combat/refresh_rate.cpp
@@ -127,7 +127,7 @@ nevr_ht_test(combat_tick_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_
       src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp ${_ctables})
 # The refresh-rate rule (#2172, #2000, #1648; docs/adr/0046 rule 3): the decision, the keys, the session from the arena to a combat map and back
 # through the tick, the lobbies arena players use, the legacy kill files, the release case (the game's own rate, nothing logged or registered).
-nevr_ht_test(refresh_rate_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(refresh_rate_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/refresh_rate_test.cpp src/quest/combat/refresh_rate.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp
       src/quest/combat/headset_gates.cpp src/quest/combat/powerboost.cpp ${_cmods} ${_cec} src/quest/combat/bvh.cpp src/quest/combat/wallfire.cpp src/quest/combat/music.cpp src/quest/combat/sensorwd.cpp
       src/quest/combat/combat_install.cpp ${_credirect} ${_clevelname} ${_cwrist} ${_cguards} src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_active.cpp src/quest/combat/heaps.cpp src/quest/combat/pfx.cpp src/quest/combat/pfxtev.cpp src/quest/combat/memsys.cpp
@@ -135,27 +135,27 @@ nevr_ht_test(refresh_rate_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${
 # What level is loaded (#2172): the answer every combat module asks, so arena (same APK as combat) is told apart by the level. A combat map, the
 # combat lobby and an Echo Arena level, each id checked against the CSymbol64 of its name; the lobbies arena players use are no class; an arena
 # level wins; a gamespace of another game, an absurd count and an unreadable game are no level.
-nevr_ht_test(combat_level_test GROUP combat ${_cf} TIMEOUT 120
+nevr_ht_test(combat_level_test GROUP combat ${_cf}
   SRC src/quest/tests/combat_level_test.cpp src/quest/combat/combat_level.cpp)
 # The four resource table steps (#2177, docs/adr/0046; docs/quest/combat/meshstep.md and its three siblings): each module's real handler through the
 # real thunk, installed by the real GotHook into the slot of a libr15 image built in memory (a JUMP_SLOT for meshstep and instmodel, an ABS64 factory
 # word for shaderstep and tablestep), called the way the game calls it. In a combat match the object has growth step 1; in an Echo Arena level, a
 # lobby arena players use, the combat lobby, a transition out of combat, with nothing loaded and with no game known it is the game's own; every
 # refusal leaves the slot alone; the kill file, the switch, once, the golden lines. got_pinned_test resolves the four relocations and every word.
-nevr_ht_test(meshstep_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(meshstep_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/meshstep_test.cpp src/quest/combat/meshstep.cpp src/quest/combat/table_step.cpp src/quest/combat/combat_tick.cpp
       src/quest/combat/combat_level.cpp)
-nevr_ht_test(instmodel_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(instmodel_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/instmodel_test.cpp src/quest/combat/instmodel.cpp src/quest/combat/table_step.cpp src/quest/combat/combat_tick.cpp
       src/quest/combat/combat_level.cpp)
-nevr_ht_test(shaderstep_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(shaderstep_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/shaderstep_test.cpp src/quest/combat/shaderstep.cpp src/quest/combat/table_step.cpp src/quest/combat/combat_tick.cpp
       src/quest/combat/combat_level.cpp)
-nevr_ht_test(tablestep_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(tablestep_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/tablestep_test.cpp src/quest/combat/tablestep.cpp src/quest/combat/table_step.cpp src/quest/combat/combat_tick.cpp
       src/quest/combat/combat_level.cpp)
 # The two factory words together (#2177): shaderstep's ConstructInstance word and tablestep's CreateInstance word are neighbours in one vtable.
-nevr_ht_test(shaderstep_tablestep_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(shaderstep_tablestep_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/shaderstep_tablestep_test.cpp src/quest/combat/shaderstep.cpp src/quest/combat/tablestep.cpp
       src/quest/combat/table_step.cpp src/quest/combat/combat_tick.cpp src/quest/combat/combat_level.cpp)
 # The global_mp level name (#2181, docs/adr/0046; docs/quest/combat/levelname.md): the real handlers through four thunks, installed by the real
@@ -163,26 +163,26 @@ nevr_ht_test(shaderstep_tablestep_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_c
 # game object's lowspec flag. Each word holds its thunk and calls its own original; global_mp with bit 31 gets the plain function and nothing else
 # does; an unreadable game never faults; the counter and the first sixteen lines; all four words or none; the refusals; the switch; the legacy kill
 # file as a warning only; a read-only vtable page. got_pinned_test resolves the four relocations, the stub and the code words in the real libr15.
-nevr_ht_test(levelname_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(levelname_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/levelname_test.cpp src/quest/combat/levelname.cpp src/quest/combat/combat_level.cpp)
 # The booster pool's actor (#2181): the real handler through the thunk, installed into the JUMP_SLOT of AllocatePooledActor in a libr15 image built in
 # memory, against a model of the function, CSymbol64::Append and the plain name. The suffixed name is asked as the plain one and nothing else changes;
 # the names are computed once; an unreadable plain name passes through; the refusals; it installs only with levelname.
-nevr_ht_test(boosterpool_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(boosterpool_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/boosterpool_test.cpp src/quest/combat/boosterpool.cpp src/quest/combat/combat_level.cpp)
 # The three headset gates (#2180, docs/adr/0046; docs/adr/0034 for the chain): the real entries through the real GotHook into the two JUMP_SLOTs of a
 # libr15 image built in memory, called through the slot from functions the gates' ranges name. Each gate answers its caller and no other; the bot gate
 # only while a combat map or the combat lobby is loaded (arena shares the APK); an entry above a handler that was on the slot first keeps answering and
 # a handler that asks to join above an entry is refused (#2219); the switches and their reasons, a pinned word that differs, the legacy switch files,
 # the golden lines. got_pinned_test resolves both relocations and every pinned word in the real libr15.
-nevr_ht_test(headset_gates_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(headset_gates_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/headset_gates_test.cpp src/quest/combat/headset_gates.cpp src/quest/combat/levelname.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
 # The menu gate's library name (headset_gates.cpp LibraryName, its dladdr refusal, called directly: the Bind frame is absent on the host).
-nevr_ht_test(headset_gates_library_name_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(headset_gates_library_name_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/headset_gates_library_name_test.cpp src/quest/combat/headset_gates.cpp src/quest/combat/combat_level.cpp
       src/quest/combat/combat_tick.cpp)
 # Which of the three gates a run installs, from the four `combat:` keys.
-nevr_ht_test(combat_gates_test GROUP combat NOEXC TIMEOUT 120
+nevr_ht_test(combat_gates_test GROUP combat NOEXC
   SRC src/quest/tests/combat_gates_test.cpp)
 # The crash and timing guards (#2178): each module's real handler through the real thunk, installed by the real GotHook into the slot of a libr15 image
 # built in memory, against a model of the game's objects and a stand-in for the game's function. The three that act by level (fxtrail, peerclamp and
@@ -190,20 +190,20 @@ nevr_ht_test(combat_gates_test GROUP combat NOEXC TIMEOUT 120
 # arena level and the combat lobby reading nothing and scanning no level (by count), a stale answer not believed, and a scope that cannot change refusing the
 # install. voipdrop and droneguard act in every level (crash-only guards of code arena shares) and ask nothing of the scope.
 set(_cscope_srcs src/quest/combat/combat_scope.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
-nevr_ht_test(fxtrail_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(fxtrail_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/fxtrail_test.cpp src/quest/combat/fxtrail.cpp ${_cscope_srcs})
-nevr_ht_test(voipdrop_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(voipdrop_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/voipdrop_test.cpp src/quest/combat/voipdrop.cpp)
-nevr_ht_test(custctx_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(custctx_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/custctx_test.cpp src/quest/combat/custctx.cpp ${_cscope_srcs})
-nevr_ht_test(droneguard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(droneguard_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/droneguard_test.cpp src/quest/combat/droneguard.cpp)
-nevr_ht_test(peerclamp_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(peerclamp_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/peerclamp_test.cpp src/quest/combat/peerclamp.cpp ${_cscope_srcs})
 # The particle-renderer gate (#2188, #1631; docs/adr/0046): the decision from `combat.pfx`, the gate that reads off until the install step has
 # decided, the install line, the plugin's `pfx.off` file not read and warned about, and the scope: open on a combat map only, shut on every Echo Arena
 # level, lobby and transition, against a fake CR15Game read by process_vm_readv. The module installs no hook and registers no tick.
-nevr_ht_test(pfx_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
+nevr_ht_test(pfx_test GROUP combat ${_cf} OBJS ${_ccore}
   SRC src/quest/tests/pfx_test.cpp src/quest/combat/pfx.cpp src/quest/combat/combat_level.cpp)
 # The event-effect decision (#2188, #1642; docs/adr/0046): the switch, the six ids, the non-event pass-through, one line per decision up to the cap,
 # the plugin's `pfxtev.off` file not read and warned about, and the scope: an event id is created on a combat map only.
@@ -212,24 +212,24 @@ nevr_ht_test(pfx_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
 # the cone and the link / unlink markers; all three stage-1 words or none; each refusal and its stage; the entry newest on its slot; and the arena
 # scope: nothing acts while an Echo Arena level, an arena lobby or no level is loaded, and the level is asked once every 32 frames, never per call.
 # got_pinned_test resolves the five relocations, the two called functions and the cone's call word in the real libr15.
-nevr_ht_test(powerboost_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(powerboost_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/powerboost_test.cpp src/quest/combat/powerboost.cpp ${_cscope_srcs} src/quest/tests/ec_contract_stub.cpp)
-nevr_ht_test(pfxtev_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore}
+nevr_ht_test(pfxtev_test GROUP combat ${_cf} OBJS ${_ccore}
   SRC src/quest/tests/pfxtev_test.cpp src/quest/combat/pfxtev.cpp)
 # Whether a combat level is loaded, as a cache the hooks on shared slots read for free (#2186): the production refresh against a model of the
 # gamespace tables and a fake clock. Fails closed, the combat map and the combat lobby are combat, every Echo Arena level and every lobby arena
 # players use is not, an arena level wins, one look per spacing and not per frame, one Info line per change and none for an arena match.
-nevr_ht_test(combat_scope_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(combat_scope_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/combat_scope_test.cpp src/quest/combat/combat_scope.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
 # The wrist HUD's heat fill (#2186): the real handler through the thunk, installed by the real GotHook into the JUMP_SLOT of a libr15 image built in
 # memory, called through the slot. The plugin's checks, moved with the same assertions, and the arena path: outside a combat level the game's
 # function with the same arguments, no read of the data, no write, no line. got_pinned_test resolves the relocation and the code words in the real libr15.
-nevr_ht_test(hudmeter_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(hudmeter_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/hudmeter_test.cpp src/quest/combat/hudmeter.cpp src/quest/combat/combat_scope.cpp src/quest/combat/combat_level.cpp
       src/quest/combat/combat_tick.cpp)
 # The shield colour and the tube mirror (#2186): the same shape of test for CSetMaterialPropertyNode::Update, including the second call on a copy of
 # the data, and the arena path with both switches on.
-nevr_ht_test(shieldgamma_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(shieldgamma_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/shieldgamma_test.cpp src/quest/combat/shieldgamma.cpp src/quest/combat/combat_scope.cpp src/quest/combat/combat_level.cpp
       src/quest/combat/combat_tick.cpp)
 
@@ -238,24 +238,24 @@ nevr_ht_test(shieldgamma_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_
 # or transition ever reaches the game's functions), the install on a libr15 image built in memory (build id, every pinned word, a name that resolves
 # elsewhere, a full tick table) and the host cost of a pass in an arena level. got_pinned_test resolves the symbols and words in the real libr15. The
 # scope is the real combat level answer (combat_scope.cpp, #2382).
-nevr_ht_test(gunconnect_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(gunconnect_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/gunconnect_test.cpp src/quest/combat/gunconnect.cpp src/quest/combat/gamespace.cpp ${_cscope_srcs})
 # Practice AI bots (#2185): the plugin test's sections, then the switches and the scenario key, the request file in a
 # development build only, the Echo Arena scope, the install on an image and the host cost of a look. The scope is the real combat level answer
 # (combat_scope.cpp, #2382): an Echo Arena level, no look or a stale look refuses the call (SeenEchoArena).
-nevr_ht_test(aibots_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(aibots_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/aibots_test.cpp src/quest/combat/aibots.cpp ${_cscope_srcs})
 # The gun hand default (#2185, T-26): the plugin test's sections, a marker the plugin wrote that stops the
 # module, then the switch, the scope (a profile with a marker never scans the levels; no hand is set in an arena level), the install on an image. The
 # scope is the real combat level answer (combat_scope.cpp, #2382): a stale look sets nothing, and a scope that cannot change refuses the install.
-nevr_ht_test(weapon_arm_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(weapon_arm_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/weapon_arm_test.cpp src/quest/combat/weapon_arm.cpp src/quest/combat/gamespace.cpp ${_cscope_srcs})
 # The EC client (#2187, docs/quest/combat/ec.md): the pure rules, the list hide, the real thunks installed by the real GotHook into the five slots of
 # a libr15 image built in memory and the WriteLogV slots of two platform-library images, called through the slots against a fake libc, the game's
 # WriteLog (a va_list through the WriteLogV slot) and a fake clock; the net tick, the step, the hide, the selection, the observer install, the
 # keys and the legacy files, and the scope (arena, the arena lobbies, the 250 ms cadence, a stale answer) against a fake CR15Game. got_pinned_test
 # resolves every relocation and word in the real files. The scope is the real combat level answer (combat_scope.cpp, #2382).
-nevr_ht_test(ec_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident} LOPTS -rdynamic
+nevr_ht_test(ec_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident} LOPTS -rdynamic
   SRC src/quest/tests/ec_test.cpp src/quest/combat/ec.cpp src/quest/sentinel/ec_page.cpp src/quest/integration/module_observers.cpp ${_cscope_srcs})
 # The page as a symbol of the sentinel (#2187): ec_page.cpp built into a shared object with the sentinel's flags, loaded RTLD_LOCAL as a dependency
 # of a stand-in for libr15, asked by dlsym(RTLD_DEFAULT) from a third object before and after PublishEcPage, and with another object that already
@@ -265,7 +265,7 @@ nevr_ht_so(ec_page_sentinel GROUP combat NOEXC COPTS -fvisibility=hidden OUTPUT_
 nevr_ht_so(ec_page_libr15 GROUP combat NOEXC OUTPUT_NAME ec_page_libr15 SRC src/quest/tests/ec_page_libr15.cpp LIBS ec_page_sentinel)
 nevr_ht_so(ec_page_script GROUP combat NOEXC OUTPUT_NAME ec_page_script SRC src/quest/tests/ec_page_script.cpp LIBS dl)
 nevr_ht_so(ec_page_other GROUP combat NOEXC OUTPUT_NAME ec_page_other SRC src/quest/tests/ec_page_other.cpp)
-nevr_ht_test(ec_page_test GROUP combat NOEXC DL TIMEOUT 120 SRC src/quest/tests/ec_page_test.cpp
+nevr_ht_test(ec_page_test GROUP combat NOEXC DL SRC src/quest/tests/ec_page_test.cpp
   DEPENDS ec_page_sentinel ec_page_libr15 ec_page_script ec_page_other
   ARGS $<TARGET_FILE:ec_page_libr15> $<TARGET_FILE:ec_page_script> $<TARGET_FILE:ec_page_sentinel>)
 nevr_ht_rerun(ec_page_test_other ec_page_test GROUP combat
@@ -278,7 +278,7 @@ nevr_ht_so(ecfx_stub_missing GROUP combat OUTPUT_NAME ac4e9374a146d3a4 DEFS STUB
 # The file name is the soname (ecfx checks the entry's library by name): each variant in a directory of its own.
 set_target_properties(ecfx_stub_full PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/combat/ecfx_full")
 set_target_properties(ecfx_stub_missing PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/combat/ecfx_missing")
-nevr_ht_test(ecfx_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident} LOPTS -rdynamic DEPENDS ecfx_stub_full ecfx_stub_missing
+nevr_ht_test(ecfx_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident} LOPTS -rdynamic DEPENDS ecfx_stub_full ecfx_stub_missing
   SRC src/quest/tests/ecfx_test.cpp src/quest/combat/ecfx.cpp src/quest/combat/ec.cpp src/quest/sentinel/ec_page.cpp
       src/quest/integration/module_observers.cpp ${_cscope_srcs}
   ARGS full $<TARGET_FILE:ecfx_stub_full>)
@@ -288,79 +288,79 @@ nevr_ht_rerun(ecfx_test_missing ecfx_test GROUP combat ARGS missing $<TARGET_FIL
 # installs, the per-thread state, and the scope: on an Echo Arena level, a lobby or no level every hook only calls the game's function. The EC
 # client is the stand-in ec_stub.cpp. got_pinned_test resolves the four relocations in the real libr15. The scope is the real combat level answer
 # (combat_scope.cpp, #2382): each test frame runs its refresh before the module's tick, and a scope that cannot change refuses the step.
-nevr_ht_test(dronekill_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(dronekill_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/dronekill_test.cpp src/quest/combat/dronekill.cpp ${_cscope_srcs} src/quest/tests/ec_stub.cpp)
 # dronemuzzle (#2187): the two entries (on the host, the C++ stand-ins the module builds there) through the real GotHook into two JUMP_SLOTs of a
 # libr15 image built in memory, called from FireBulletLocal's call site and from another; the continuations' rules, the frame tick, both orders
 # against another handler on the slot (#2219), the refusals. The arm64 entries are check/dronemuzzle.sh's (disassembly, ldar, qemu).
-nevr_ht_test(dronemuzzle_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(dronemuzzle_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/dronemuzzle_test.cpp src/quest/combat/dronemuzzle.cpp src/quest/combat/dronekill.cpp ${_cscope_srcs} src/quest/tests/ec_stub.cpp)
 # The bullet-velocity guard (#1737): the rule, and the real handler through the real thunk installed by the real GotHook into FireBullet's
 # JUMP_SLOT of a libr15 image built in memory, alone and below dronemuzzle's entry (and refused above it); the refusals, the switch, the lines.
-nevr_ht_test(bullet_velocity_guard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(bullet_velocity_guard_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/bullet_velocity_guard_test.cpp src/quest/combat/bullet_velocity_guard.cpp src/quest/combat/dronemuzzle.cpp src/quest/combat/dronekill.cpp
       ${_cscope_srcs} src/quest/tests/ec_stub.cpp)
 # The sound-symbol guard (#1737): the rule, and the real handler through the real caller-aware thunk installed by the real GotHook into Play3DSound's
 # JUMP_SLOT of a libr15 image built in memory, called from three sites (two stand in for PlaySound's and the bullet site's); the combat level answer it
 # reads, the arena path, the refusals over every pinned word and record, the switch, the lines and the arena-path cost.
-nevr_ht_test(sound_symbol_guard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(sound_symbol_guard_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/sound_symbol_guard_test.cpp src/quest/combat/sound_symbol_guard.cpp src/quest/combat/combat_scope.cpp src/quest/combat/combat_level.cpp
       src/quest/combat/combat_tick.cpp)
 # The Quest 2 step-down's combat input (#1737): the row's install, the look from a model of CR15Game (the loaded tables' class, the init-fiber
 # count as a load, an unreadable count as a load), its spacing and its lines. The owner's use of the look is texture_menu_hook_test's (hooks group).
-nevr_ht_test(texture_quest2_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(texture_quest2_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/combat_texture_quest2_test.cpp src/quest/combat/texture_quest2.cpp src/quest/combat/combat_level.cpp
       src/quest/combat/combat_tick.cpp src/quest/combat/combat_active.cpp src/quest/sentinel/build_variant.cpp)
 # The texel-buffer guard (#1650): the rules, and the real wrappers handed to the game's chain (FindMethod -> vkGetInstanceProcAddr ->
 # vkGetDeviceProcAddr) by the real vk_ext_window against a fake driver: the writes, the zeroed view, its failure, the refusals, the lines.
-nevr_ht_test(texel_buffer_guard_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(texel_buffer_guard_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/texel_buffer_guard_test.cpp src/quest/combat/texel_buffer_guard.cpp src/quest/sentinel/vk_ext_window.cpp)
 # The impact sounds (#2183, docs/adr/0046): the real handlers through the two thunks, installed by the real
 # GotHook into the load JUMP_SLOT and the Shutdown vtable word (ABS64) of a libr15 image built in memory, against a fake impact table, a fake loader and
 # Shutdown, a fake clock and a fake CR15Game that says which level is loaded. Every assertion of the plugin's test about the table, the loaders, the tick and
 # the lock; the install checks (D is read and never written, the write switch); and the scope: an arena level, an arena lobby, a transition with an arena
 # level, no game and an unreadable game all get the game's own loader and a tick that sleeps.
-nevr_ht_test(impactsnd_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(impactsnd_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/impactsnd_test.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
 # The level decals (#2183, #1619; docs/adr/0046): the table parser, the per-system state machine and the real handlers over a stand-in engine (a fake bullet
 # system, allocator, node, mesh and vertex buffer) through the real GotHook into the GLOB_DAT word of UpdateMovement and the Shutdown vtable word, chained above
 # impactsnd's. The scope: a game space in an arena level (or an arena lobby) draws and creates nothing and is read again once a second.
-nevr_ht_test(decals_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(decals_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/decals_test.cpp src/quest/combat/decals.cpp src/quest/combat/impactsnd.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
 # The pure BVH code (#2182): synthetic meshes in the game's Embree BVH2<Triangle4> format, ray hits, misses and
 # occlusion against known geometry, a random soup against two brute-force references, degenerate input, malformed trees, the node / stack / size limits.
-nevr_ht_test(bvh_core_test GROUP combat NOEXC TIMEOUT 120
+nevr_ht_test(bvh_core_test GROUP combat NOEXC
   SRC src/quest/tests/bvh_core_test.cpp)
 # The static BVH (#2182; docs/adr/0046): the real thunks through the real GotHook into the six JUMP_SLOTs of a libr15 image built in memory, called
 # through their slots against fake stock functions. The answers (nearest hit, segment test, the hit's fields), Initialize's refusals and their lines, the
 # 64-entry table, the callers' gate and its per-thread mark, the 10 s summary, all-or-none install and its rollback, the touch answer, and the scope:
 # every hook calls the game's function while no combat map is loaded (arena shares the APK), the switches and their lines, the legacy kill files.
 # got_pinned_test resolves the six relocations in the real libr15. The scope is the real combat level answer (combat_scope.cpp, #2382).
-nevr_ht_test(bvh_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(bvh_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/bvh_test.cpp src/quest/combat/bvh.cpp ${_cscope_srcs})
 # The wall-fire check (#2182; docs/adr/0046): the real thunk on the QueryCollision slot of the image, on top of the real bvh module, called from two call sites
 # against the engine's stub, a fake CncaGame and a synthetic room. A stock hit passes through, a clear segment is not blocked, a segment through each wall is,
 # another call site gets the stock answer, every wrong game structure and a non-finite segment get the stock answer, the log volume, the refusals and what they
 # leave alone, the switch and its lines, and the scope: no combat map, no check. got_pinned_test resolves the two relocations and the site word.
-nevr_ht_test(wallfire_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(wallfire_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/wallfire_test.cpp src/quest/combat/wallfire.cpp src/quest/combat/bvh.cpp ${_cscope_srcs})
 # The combat music (#2184, docs/adr/0046): the real handler through the real thunk, installed by the real GotHook into the JUMP_SLOT of a libr15 image built in
 # memory, against a model of CWwiseEngine::PostSoundEvent that records every call's registers. The 24 bank ids, the Stops before each Play, the game's own
 # registers and answer, the unload tick, the refusals, and the scope: a Play outside a combat map (an arena level, a lobby, no level, no frame yet) is the
 # game's call and nothing else. got_pinned_test resolves the relocation and the 29 code words in the real libr15.
-nevr_ht_test(music_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(music_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/music_test.cpp src/quest/combat/music.cpp src/quest/combat/combat_level.cpp src/quest/combat/combat_tick.cpp)
 # The scanner-sphere watchdog (#2184, docs/adr/0046): the real handlers through the real thunks, installed by the real GotHook into the two vtable words (ABS64) and
 # the JUMP_SLOT of a libr15 image built in memory, against models of the three game functions and of CModelCS components. A sphere timed and turned off after 6000 ms
 # through the game's own function, turned back on at its actor's next ping, the limits, the sweep, the lock never held across a game call or a log line, all three
 # words or none, and the scope: every handler is a pass-through outside a combat map (an arena level, a lobby, no level, a stale or missing answer). got_pinned_test
 # resolves the three relocations and the 34 code words in the real libr15. The scope is the real combat level answer (combat_scope.cpp, #2382).
-nevr_ht_test(sensorwd_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(sensorwd_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/sensorwd_test.cpp src/quest/combat/sensorwd.cpp ${_cscope_srcs})
 # The frozen-frame exit (#2377, combat/frozen_frame_exit.h): the rule's table, the submit observer (no clock read and no write outside a combat level,
 # a stamp inside one), and the watchdog against a libr15 image built in memory holding the pinned words and the in-VR word, the real combat tick and
 # level answer, a fake clock and fake finish, grace and end steps: the record before the finish, the end after the grace with exit code 1, once; a
 # null word or an arena level disarming; a leave from VR between the two reads not a freeze; the end step joining the thread unless the watchdog
 # is ending the process; and the install's refusals. frozen_frame_exit_pinned_test (hooks-pinned) checks the pins against the store libr15.
-nevr_ht_test(frozen_frame_exit_test GROUP combat ${_cf} TIMEOUT 120 OBJS ${_ccore} ${_cident}
+nevr_ht_test(frozen_frame_exit_test GROUP combat ${_cf} OBJS ${_ccore} ${_cident}
   SRC src/quest/tests/frozen_frame_exit_test.cpp ${_cffe} ${_cscope_srcs})

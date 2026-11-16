@@ -10,7 +10,7 @@ set(_on HOST INCS ${_sent})
 set(_off HOST NOEXC INCS ${_sent})
 
 # 1. sequence, post-load policy, identity, social switch, frame tap
-nevr_ht_test(integration_sequence_test GROUP integration ${_on} PTHREAD TIMEOUT 300
+nevr_ht_test(integration_sequence_test GROUP integration ${_on} PTHREAD
   SRC src/quest/tests/integration_sequence_test.cpp
       src/quest/integration/ctor_sequence.cpp src/quest/integration/post_load.cpp src/quest/integration/module_observers.cpp
       src/quest/integration/identity_source.cpp src/quest/integration/stage_log.cpp src/quest/integration/bridge_uri.cpp
@@ -18,7 +18,7 @@ nevr_ht_test(integration_sequence_test GROUP integration ${_on} PTHREAD TIMEOUT 
       src/quest/integration/self_check_wiring.cpp src/runtime/compat/self_check.cpp src/quest/sentinel/build_variant.cpp)
 
 # 1b. the hook log's host record sink (hook_log.h): the runtime library's records reach the shim's log through it.
-nevr_ht_test(host_record_sink_test GROUP integration ${_on} TIMEOUT 60
+nevr_ht_test(host_record_sink_test GROUP integration ${_on}
   SRC src/quest/tests/host_record_sink_test.cpp src/quest/sentinel/hook_log.cpp)
 
 # 2. the hook translation units and the counter budget
@@ -62,10 +62,10 @@ nevr_ht_obj(o_integ_hook_log GROUP integration ${_on} SRC src/quest/sentinel/hoo
 nevr_ht_obj(o_integ_social_names GROUP integration ${_on} DEFS NEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION
   SRC src/runtime/compat/social_names.cpp)
 # The dlopen hook's frames carry no personality (the one helper it calls is annotated and lives in another translation unit).
-nevr_ht_check(dlopen_hook_frames GROUP integration TIMEOUT 60
+nevr_ht_check(dlopen_hook_frames GROUP integration
   SRC ${CMAKE_COMMAND} -DREADELF=${NEVR_READELF} -DOBJECT=$<TARGET_OBJECTS:o_integ_dlopen_hook>
   -P ${NEVR_HT_DIR}/scripts/check_frames.cmake)
-nevr_ht_test(integration_hooks_test GROUP integration ${_on} DL PTHREAD TIMEOUT 300 LIBS ${NEVR_YAML_LIB} ${NEVR_ZSTD_LIB}
+nevr_ht_test(integration_hooks_test GROUP integration ${_on} DL PTHREAD LIBS ${NEVR_YAML_LIB} ${NEVR_ZSTD_LIB}
   OBJS o_integ_got_hook o_integ_hook_report o_integ_tstring_thunks o_integ_dlopen_hook o_integ_script_redirect o_integ_social_shim
        o_integ_social_game_calls o_integ_social_install o_integ_social_invite_gate o_integ_social_facade o_integ_hook_log
        o_integ_social_names o_integ_login_prompt_hook o_integ_frame_dispatch o_integ_login_title_hook o_integ_obb_skip_hook
@@ -79,7 +79,7 @@ nevr_ht_test(integration_hooks_test GROUP integration ${_on} DL PTHREAD TIMEOUT 
 add_dependencies(host-tests-integration o_integ_quit_hook)
 
 # 3. the bridge end to end, with a fake connector (SessionBridge still links the libcurl connector it builds when none is injected)
-nevr_ht_test(session_bridge_test GROUP integration ${_on} PTHREAD CURL TIMEOUT 300 LIBS ssl crypto
+nevr_ht_test(session_bridge_test GROUP integration ${_on} PTHREAD CURL LIBS ssl crypto
   SRC src/quest/tests/session_bridge_test.cpp src/quest/net/session_bridge.cpp src/quest/net/frame_tap.cpp
       src/quest/net/curl_ws_connector.cpp src/quest/auth/ca_bundle.cpp
       src/quest/net/ws_wire.cpp src/quest/net/loopback_game_server.cpp src/quest/net/remote_ws.cpp
@@ -141,11 +141,11 @@ nevr_ht_so(runtime_fx_bad_major GROUP integration OUTPUT_NAME nevr_fixture_bad_m
   SRC src/quest/tests/runtime_load_fixture.cpp)
 nevr_ht_so(runtime_fx_init_fail GROUP integration OUTPUT_NAME nevr_fixture_init_fail DEFS NEVR_FIXTURE_INIT_FAIL NOEXC
   SRC src/quest/tests/runtime_load_fixture.cpp)
-nevr_ht_test(runtime_load_test GROUP integration NOEXC DL TIMEOUT 120 ARGS "${CMAKE_BINARY_DIR}/integration"
+nevr_ht_test(runtime_load_test GROUP integration NOEXC DL ARGS "${CMAKE_BINARY_DIR}/integration"
   DEPENDS runtime_fx_ok runtime_fx_no_entry runtime_fx_null_descriptor runtime_fx_bad_major runtime_fx_init_fail
   SRC src/quest/tests/runtime_load_test.cpp src/quest/shim/runtime_load.cpp)
 # piece 15: the update start on real files (update_start_test.cpp). Built with exceptions: the engine it runs catches its own failures.
-nevr_ht_test(update_start_test GROUP integration DL TIMEOUT 300 ARGS "${CMAKE_BINARY_DIR}/integration"
+nevr_ht_test(update_start_test GROUP integration DL ARGS "${CMAKE_BINARY_DIR}/integration"
   DEPENDS runtime_fx_ok runtime_fx_null_descriptor runtime_fx_init_fail
   SRC src/quest/tests/update_start_test.cpp src/quest/shim/update_start.cpp src/quest/shim/runtime_load.cpp
       src/core/update/engine_start.cpp src/core/update/names.cpp src/core/update/fs_posix.cpp src/quest/data/sha256.cpp)

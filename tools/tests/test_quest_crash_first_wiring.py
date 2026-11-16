@@ -122,7 +122,7 @@ class TheGamesRequestsAreIntercepted(unittest.TestCase):
         cmake = (QUEST / "sentinel/CMakeLists.txt").read_text()
         self.assertEqual(cmake.count("crash_first_hook.cpp"), 2)  # a source, and the -fno-exceptions list
         hooks_cmake = (ROOT / "src/quest/host_tests/groups/hooks.cmake").read_text()
-        self.assertRegex(hooks_cmake, r"nevr_ht_test\(crash_first_hook_test GROUP hooks[^)]*TIMEOUT 120[^)]*src/quest/tests/crash_first_hook_test\.cpp")
+        self.assertRegex(hooks_cmake, r"nevr_ht_test\(crash_first_hook_test GROUP hooks[^)]*src/quest/tests/crash_first_hook_test\.cpp")
 
 
 class TheProviderLibrariesAreHookedWhenTheyLoad(unittest.TestCase):

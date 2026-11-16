@@ -17,7 +17,7 @@ unit tests in `tests/`; the rest are run by hand or by a `just` recipe.
 
 `tests/` holds the Python unit tests for these scripts and for the shell and Python tools below, plus
 source-invariant tests over the C++ tree and the release contract
-(`python3 -m unittest discover -s tools/tests -p 'test_*.py'`).
+(`python3 tools/unittest_ceiling.py discover -s tools/tests -p 'test_*.py'`: unittest, each test held to the ceiling of `tools/test_shelf.json`; `just test-tools` runs the same tests under pytest).
 
 ## Run a game or the device
 

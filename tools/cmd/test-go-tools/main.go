@@ -7,7 +7,7 @@
 //
 // With a Python command after "--" it runs that first (its output passes through, its exit code is kept), then, unless it
 // was interrupted (an exit code above 128), the Go half whatever the Python half did, so a red Python test never hides
-// the Go tests and the ADR 0044 policy checks. The Go half is `go test -count=1 -json -timeout 5m` over ./... (or the
+// the Go tests and the ADR 0044 policy checks. The Go half is `go test -count=1 -json -timeout 30s` (the ceiling of tools/test_shelf.json, per package binary; -skip names the shelf's Go tests) over ./... (or the
 // patterns given), started with the hermetic environment of testkit.EnvAt (no credentials, display, git configuration
 // or signing key; the Go caches kept), its stream written byte for byte to a file in the test-run log directory, the
 // failing and skipped tests named on standard output, and go_start and go_end records appended to the Python runner's
@@ -57,6 +57,7 @@ import (
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
 	"github.com/EchoTools/nevr-runtime/tools/internal/runroot"
 	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
+	"github.com/EchoTools/nevr-runtime/tools/internal/testshelf"
 )
 
 func main() {
@@ -96,8 +97,10 @@ func runWith(opts options, ctx context.Context, args []string, getenv func(strin
 const (
 	// exitSetup is the exit code of a run that could not be made or kept.
 	exitSetup = 2
-	// goTestTimeout ends a hung test with its name and a stack, in place of go's ten minutes a package.
-	goTestTimeout = 5 * time.Minute
+	// shelfEnv names another shelf file than <module dir>/test_shelf.json (a test gives one of its own).
+	shelfEnv = "NEVR_TEST_SHELF"
+	// shelfName is the shelf's file name in the module directory (tools/test_shelf.json).
+	shelfName = "test_shelf.json"
 	// pythonLogPrefix starts the line in which the Python runner names its log (tools/run_tool_tests.py).
 	pythonLogPrefix = "test-tools: log "
 )
@@ -215,7 +218,24 @@ func testTools(opts options, ctx context.Context, args []string, getenv func(str
 			log.Error("no record", "error", err.Error())
 		}
 	}
-	goArgs := append([]string{"test", "-count=1", "-json", "-timeout", goTestTimeout.String()}, patterns...)
+	// The ceiling of tools/test_shelf.json bounds each package's test binary (go has no per-test timeout, so every test in a
+	// package is held to it), and -skip keeps the tests the shelf names out: one pattern for the whole run, so a shelved test's
+	// name is skipped in every package that has a test of that name.
+	shelfPath := getenv(shelfEnv)
+	if shelfPath == "" {
+		shelfPath = filepath.Join(moduleDir, shelfName)
+	}
+	shelf, err := testshelf.Load(shelfPath)
+	if err != nil {
+		stream.Close()
+		fmt.Fprintf(stderr, "test-tools: FAIL %v\n", err)
+		return exitSetup
+	}
+	goFlags := []string{"-timeout", shelf.CeilingArg()}
+	if skip := shelf.GoSkipAll(); skip != "" {
+		goFlags = append(goFlags, "-skip", skip)
+	}
+	goArgs := append(append([]string{"test", "-count=1", "-json"}, goFlags...), patterns...)
 	record(map[string]any{"event": "go_start", "cmd": append([]string{"go"}, goArgs...)})
 	log.Info("go half", "go", goPath, "args", goArgs, "stream", stream.Name())
 

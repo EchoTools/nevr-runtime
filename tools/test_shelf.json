@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "about": [
+    "The test shelf: the one file that holds the ceiling every test runner of this repo holds a test to, and the tests that are over it.",
+    "ceiling_s is the longest a test may run, in seconds. It is read by every runner (tools/internal/testshelf, tools/shelf_reader.py, cmake/TestShelf.cmake, the justfile) and is never raised for a test.",
+    "A test over the ceiling is shelved, not rewritten: it stays in the repo, is skipped by the runner that reads this file, and comes back only when someone rewrites it to run fast (the aim for a unit test is milliseconds; the ceiling is only the limit).",
+    "An entry id is <kind>:<unit>, or <kind>:<unit>#<case> where the kind has cases. kind is just (a recipe), target (a tools/test_map.json target), pytest (unit: the file name under tools/tests; case: Class, Class.test or test), go (unit: the package under tools/; case: a Test function), gtest (unit: the binary; case: Suite.Test) or ctest (unit: the ctest test name).",
+    "Each entry carries its reason (what was measured, over how many runs, and where), and the date it was shelved. A test over the ceiling that is not listed here fails its runner's ceiling; an entry for a test that does not exist fails tools/internal/testshelf."
+  ],
+  "ceiling_s": 30,
+  "entries": [
+    {
+      "id": "pytest:test_run_tool_tests",
+      "reason": "Its subprocess-driven tests each start a whole pytest run: the JUnit records of 64 runs give a median of 59.7 s for test_the_recipe_passes_each_argument_through_whole and 43.1 s for test_the_workers_the_arguments_set_are_what_the_records_name, and the file's median in 58 test-changed runs is 68.9 s (max 1384.8 s); under load its runs hit their 120 s timeouts.",
+      "measured": "test-changed.jsonl (58 runs) and the tools-tests JUnit XML (64 runs), 2026-11-16",
+      "date": "2026-11-16"
+    },
+    {
+      "id": "pytest:test_package_release",
+      "reason": "Its pwsh install-script tests fail with System.IO.FileLoadException under machine load: the file's median in 46 test-changed runs is 27.0 s and its max 40.9 s, the failing run took 22.8 s and failed 2 tests. It was disabled by a skip on every class; the shelf replaces those skips.",
+      "measured": "test-changed.jsonl (46 runs) and the land log of 2026-11-16, 2026-11-16",
+      "date": "2026-11-16"
+    },
+    {
+      "id": "gtest:test_env_windows#EnvWindowsHttp.ATransferUnderTheLowSpeedFloorTimesOut",
+      "reason": "The test waits out curl's 30 s low-speed window: 30018 ms in the one run that logged it.",
+      "measured": "gtest output of the land run of 2026-11-16 (30018 ms)",
+      "date": "2026-11-16"
+    },
+    {
+      "id": "ctest:resource_request_hook_test",
+      "reason": "39.90 s in the one ctest run that logged it (just test-quest-hooks, machine load about 90); its own ctest limit was 120 s.",
+      "measured": "ctest output of the land run of 2026-11-16 (39.90 sec)",
+      "date": "2026-11-16"
+    },
+    {
+      "id": "just:test-android",
+      "reason": "A recipe, not a test: the NDK build and the checks it runs take a median of 57.6 s in 58 test-changed runs (min 2.7 s, max 94.2 s). A land does not run it; its tests come back when the build is split from them.",
+      "measured": "test-changed.jsonl (58 runs), 2026-11-16",
+      "date": "2026-11-16"
+    },
+    {
+      "id": "just:test-quest-hooks",
+      "reason": "A recipe, not a test: the host build and the ctest group it runs take a median of 60.3 s in 39 test-changed runs (min 54.7 s, max 587.4 s). A land does not run it; each ctest test in it is still held to the ceiling by ctest when the recipe is run by hand.",
+      "measured": "test-changed.jsonl (39 runs), 2026-11-16",
+      "date": "2026-11-16"
+    },
+    {
+      "id": "just:test-quest-data",
+      "reason": "A recipe, not a test: the host build and the ctest group it runs take a median of 40.9 s in 36 test-changed runs (min 37.4 s, max 54.1 s). A land does not run it; each ctest test in it is still held to the ceiling by ctest when the recipe is run by hand.",
+      "measured": "test-changed.jsonl (36 runs), 2026-11-16",
+      "date": "2026-11-16"
+    },
+    {
+      "id": "target:host-seams",
+      "reason": "tools/verify_host_seams.py compiles every host unit a second time and reads its object with nm: a median of 226.5 s in 5 test-changed runs (min 185.6 s, max 277.0 s).",
+      "measured": "test-changed.jsonl (5 runs), 2026-11-16",
+      "date": "2026-11-16"
+    }
+  ]
+}

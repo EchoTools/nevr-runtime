@@ -52,7 +52,9 @@ tools/scenario/control.py	ported by its unit of #2132
 tools/scenario/run_all.py	ported by its unit of #2132
 tools/scenario/run_scenario.py	ported by its unit of #2132
 tools/seed_build_tree.py	ported by its unit of #2132
+tools/shelf_reader.py	the Python reader of tools/test_shelf.json for tools/run_tool_tests.py, tools/tests/conftest.py, tools/unittest_ceiling.py and the justfile's ceiling; ends when those Python runners are ported (#2132)
 tools/tests/axml_fixtures.py	Go twin internal/axmlfix; stays for test_package_release.py and test_quest_release_base.py until they port
+tools/tests/conftest.py	pytest's hook that skips the tests tools/test_shelf.json names, which only pytest reads; ends when the Python suite is ported (#2132)
 tools/tests/gitenv.py	ported by its unit of #2132
 tools/tests/installer_world.py	ported by its unit of #2132
 tools/tests/just_recipe.py	ported by its unit of #2132
@@ -244,6 +246,7 @@ tools/tests/test_spectatorstream_order.py	ported by its unit of #2132
 tools/tests/test_symbol_corpus_template.py	ported by its unit of #2132
 tools/tests/test_symcache_sorted.py	ported by its unit of #2132
 tools/tests/test_test_auth_unit_runs_all.py	ported by its unit of #2132
+tools/tests/test_test_shelf.py	tests of the Python shelf reader, conftest and runners; ends with them (#2132)
 tools/tests/test_ui_text_wiring.py	ported by its unit of #2132
 tools/tests/test_url_diagnostic_log_invariants.py	ported by its unit of #2132
 tools/tests/test_vcpkg_pin.py	ported by its unit of #2132
@@ -272,6 +275,7 @@ tools/tests/test_workflows_ndk.py	ported by its unit of #2132
 tools/tests/test_worktree_include_hook.py	ported by its unit of #2132
 tools/tests/test_worktree_setup.py	ported by its unit of #2132
 tools/tests/test_xinput_binding_wiring.py	ported by its unit of #2132
+tools/unittest_ceiling.py	the unittest runner of the verify recipe's Python half, which has no pytest (#820): it holds each test to the shelf's ceiling; ends when that half is ported (#2132)
 tools/verify_agents_imports.py	ported by its unit of #2132
 tools/verify_doc_paths.py	ported by its unit of #2132
 tools/verify_gtest_floor.py	ported by its unit of #2132

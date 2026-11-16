@@ -13,6 +13,8 @@
 // <work root>/test-runs/test-changed/ and is kept as the run's evidence. A binary with no line gets the batch's own exit
 // code (1 when the batch exited 0), and its line says the batch exited before running it.
 //
+// A Go test runs with `-timeout <ceiling>` (per package binary) and `-skip` for the package's shelved tests.
+//
 // A path that was deleted is looked up in the map at the merge-base when the map no longer has it. A changed path that no
 // entry of the map covers stops the run before anything starts, naming the path; the fix is `just test-map`, never a
 // hand edit of the map.
@@ -21,10 +23,11 @@
 // reach the desktop) and with PRESET set to -preset (default $PRESET, else mingw-release), so the build and the tests
 // read one build tree. -n prints the plan and runs nothing.
 //
-// A land runs only the fast unit tests: an id testmap.Classify calls heavy (the Android and Quest suites, and any id whose
-// fastest recorded run is over testmap.HeavyBound) is left out of the run, and each one is printed as "skipped heavy"
-// with its fastest recorded time and the reason, and recorded in the plan. -heavy runs every selected id, heavy or not,
-// for the runs that call for them. The heavy set is internal/testmap's heavy.go, the one place that says it.
+// A land runs only the fast unit tests, and testmap.Plan is the one decision about the rest (internal/testmap/skip.go). An id
+// tools/test_shelf.json names is shelved: over the ceiling every test is held to, never run, `-heavy` included, and printed
+// "SHELVED <id>: not run: <reason> ..."; it comes back only by being rewritten and removed from the shelf. An id
+// testmap.Classify calls heavy and the shelf does not name (the Android and Quest suites by name, and any id whose fastest
+// recorded run is over testmap.HeavyBound) is printed "skipped heavy <id> (<time>): <reason>"; -heavy runs it.
 //
 // Exit codes: 0 every test passed, or the change needs none; 1 a test failed; 2 a flag, git, the map or the results file is
 // wrong; 3 a changed path is not in the map; 127 a program a test starts is not on PATH; 130 interrupted between tests;
@@ -56,6 +59,7 @@ import (
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
 	"github.com/EchoTools/nevr-runtime/tools/internal/runroot"
 	"github.com/EchoTools/nevr-runtime/tools/internal/testmap"
+	"github.com/EchoTools/nevr-runtime/tools/internal/testshelf"
 )
 
 const (
@@ -149,6 +153,7 @@ type runner struct {
 	preset         string
 	repo           string
 	heavy          bool
+	shelf          *testshelf.Shelf
 }
 
 func (r *runner) say(format string, a ...any) { fmt.Fprintf(r.stdout, tool+": "+format+"\n", a...) }
@@ -207,6 +212,9 @@ func (r *runner) do(repo, mapFile, base string, dry bool) int {
 	}
 	m, err := testmap.Load(mapFile)
 	if err != nil {
+		return r.fail(exitUsage, "%v", err)
+	}
+	if r.shelf, err = testshelf.Load(filepath.Join(r.repo, testshelf.DefaultPath)); err != nil {
 		return r.fail(exitUsage, "%v", err)
 	}
 	mbOut, err := r.git("merge-base", base, "HEAD")
@@ -276,18 +284,12 @@ func (r *runner) do(repo, mapFile, base string, dry bool) int {
 		components = append(components, c.component)
 		all = append(all, c.tests...)
 	}
-	selected := m.Order(all)
-	var skipped []testmap.HeavyID
-	if !r.heavy {
-		var unit []string
-		if unit, skipped, err = testmap.SplitHeavy(selected); err != nil {
-			return r.fail(exitUsage, "%v", err)
-		}
-		selected = unit
+	selected, skipped, err := testmap.Plan(r.shelf, m.Order(all), r.heavy)
+	if err != nil {
+		return r.fail(exitUsage, "%v", err)
 	}
-	for _, h := range skipped {
-		r.say("skipped heavy %s (%s): %s; run test-changed -heavy for it", h.ID, measuredText(h.Millis), h.Reason)
-		r.log.Info("skipped_heavy", "test", h.ID, "rule", h.Rule, "fastest_ms", h.Millis, "reason", h.Reason)
+	for _, k := range skipped {
+		r.sayskip(k)
 	}
 	steps, err := r.plan(m, selected)
 	if err != nil {
@@ -300,7 +302,7 @@ func (r *runner) do(repo, mapFile, base string, dry bool) int {
 	r.log.Info("plan", "base", base, "merge_base", mb, "paths", paths, "components", components, "tests", ids, "preset", r.preset)
 	if len(ids) == 0 {
 		if len(skipped) > 0 {
-			r.say("no tests to run: every test of the change is heavy (listed above)")
+			r.say("no tests to run: every test of the change is shelved or heavy (listed above)")
 		} else {
 			r.say("no tests to run: no changed path's component has any")
 		}
@@ -355,6 +357,42 @@ func measuredText(ms int64) string {
 // millisPerSecond converts the run log's milliseconds to the seconds the line prints.
 const millisPerSecond = 1000
 
+// sayskip prints, and records in the run log, one line for an id the run does not start: which kind skipped it (shelved or
+// heavy) and why. A shelved id is never run, so its line says what brings it back; a heavy id is run by -heavy.
+func (r *runner) sayskip(k testmap.Skip) {
+	if k.Kind == testmap.SkipShelved {
+		r.say("SHELVED %s: not run: %s (shelved %s; %s); it comes back only by being rewritten to run under the ceiling and removed from the shelf, -heavy does not run it", k.ID, k.Reason, k.Date, testshelf.DefaultPath)
+		r.log.Info("shelved", "test", k.ID, "date", k.Date, "reason", k.Reason)
+		return
+	}
+	r.say("skipped heavy %s (%s): %s; run test-changed -heavy for it", k.ID, measuredText(k.Millis), k.Reason)
+	r.log.Info("skipped_heavy", "test", k.ID, "rule", k.Rule, "fastest_ms", k.Millis, "reason", k.Reason)
+}
+
+// withGoCeiling is a Go test's argv held to the ceiling and without the shelf's tests of that package: `-timeout` bounds the
+// package's whole test binary (the go tool has no per-test timeout), so every test in it is held to the ceiling, and -skip
+// keeps the package's shelved tests out.
+func (r *runner) withGoCeiling(argv []string, pkg string) []string {
+	at := -1
+	for i, a := range argv {
+		if a == "test" {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		return argv
+	}
+	add := []string{"-timeout", r.shelf.CeilingArg()}
+	if skip := r.shelf.GoSkip(pkg); skip != "" {
+		add = append(add, "-skip", skip)
+	}
+	out := append([]string(nil), argv[:at+1]...)
+	out = append(out, argv[at+1:len(argv)-1]...)
+	out = append(out, add...)
+	return append(out, argv[len(argv)-1])
+}
+
 // describe is what the map says about one path, for the plan's line.
 func describe(lk testmap.Lookup) string {
 	own := "no tests of its own: " + lk.None
@@ -397,6 +435,9 @@ func (r *runner) plan(m *testmap.Map, ids []string) ([]step, error) {
 			return nil, fmt.Errorf("test %s has no command", id)
 		}
 		kind, _, _ := strings.Cut(id, ":")
+		if kind == testmap.KindGo {
+			argv = r.withGoCeiling(argv, strings.TrimPrefix(id, testmap.KindGo+":"))
+		}
 		if kind != testmap.KindGTest {
 			steps = append(steps, step{ids: []string{id}, argv: argv})
 			continue

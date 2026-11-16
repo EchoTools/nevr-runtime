@@ -2,6 +2,8 @@
 {"file":"tools/internal/testmap/fixture_test.go","tests":["go:cmd/test-changed","go:cmd/test-map","go:internal/questwiring","go:internal/testmap"]}
 {"file":"tools/internal/testmap/heavy.go","tests":["go:cmd/test-changed","go:cmd/test-map","go:internal/questwiring","go:internal/testmap"]}
 {"file":"tools/internal/testmap/heavy_test.go","tests":["go:cmd/test-changed","go:cmd/test-map","go:internal/questwiring","go:internal/testmap"]}
+{"file":"tools/internal/testmap/skip.go","tests":["go:cmd/test-changed","go:cmd/test-map","go:internal/questwiring","go:internal/testmap"]}
+{"file":"tools/internal/testmap/skip_test.go","tests":["go:cmd/test-changed","go:cmd/test-map","go:internal/questwiring","go:internal/testmap"]}
 {"file":"tools/internal/testmap/store.go","tests":["go:cmd/test-changed","go:cmd/test-map","go:internal/questwiring","go:internal/testmap"]}
 {"file":"tools/internal/testmap/store_test.go","tests":["go:cmd/test-changed","go:cmd/test-map","go:internal/questwiring","go:internal/testmap"]}
 {"file":"tools/internal/testmap/testmap.go","tests":["go:cmd/test-changed","go:cmd/test-map","go:internal/questwiring","go:internal/testmap"]}

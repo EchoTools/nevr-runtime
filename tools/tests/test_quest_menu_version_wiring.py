@@ -75,7 +75,7 @@ class QuestMenuVersionIsAGotHook(unittest.TestCase):
         text = (ROOT / "src/quest/host_tests/groups/hooks.cmake").read_text()
         self.assertRegex(
             text,
-            r"nevr_ht_test\(menu_version_label_test GROUP hooks[^)]*TIMEOUT 120[^)]*"
+            r"nevr_ht_test\(menu_version_label_test GROUP hooks[^)]*"
             r"src/quest/tests/menu_version_label_test\.cpp\s+src/quest/social/menu_version_label\.cpp",
         )
 

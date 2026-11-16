@@ -30,12 +30,12 @@ set(_ident o_social_id_libr15_identity o_social_id_libr15_patch_identity o_socia
 # InstallSocialHook registers it).
 nevr_ht_obj(o_social_names GROUP social ${_on} DEFS NEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION SRC src/runtime/compat/social_names.cpp)
 # The frames live across a call into the game carry no exception machinery; the negative control is an object that does.
-nevr_ht_check(social_frames_carry_no_personality GROUP social TIMEOUT 60
+nevr_ht_check(social_frames_carry_no_personality GROUP social
   SRC ${NEVR_REPO_ROOT}/tools/check_quest_social_frames.sh nm readelf
   $<TARGET_OBJECTS:o_social_game_calls>=SlotUpdateEntry $<TARGET_OBJECTS:o_social_game_calls>=SlotResetEntry
   $<TARGET_OBJECTS:o_social_install>=OnSocial $<TARGET_OBJECTS:o_social_install>=OnPresence
   $<TARGET_OBJECTS:o_social_invite_gate>=OnBoolean)
-nevr_ht_check(social_frame_checker_is_not_blind GROUP social TIMEOUT 60
+nevr_ht_check(social_frame_checker_is_not_blind GROUP social
   SRC ${CMAKE_COMMAND} -DCMD=${NEVR_REPO_ROOT}/tools/check_quest_social_frames.sh
   "-DCMD_ARGS=nm|readelf|$<TARGET_OBJECTS:o_social_facade>=Facade" -DEXPECT_RC=nonzero -DEXPECT_OUT=personality
   -P ${NEVR_HT_DIR}/scripts/expect_exit.cmake)
@@ -45,7 +45,7 @@ nevr_ht_test(social_names_test GROUP social ${_on} DL PTHREAD LIBS ${NEVR_ZSTD_L
   OBJS o_social_facade o_social_frames o_social_game_calls o_social_hook_log o_social_names
   SRC src/quest/tests/social_names_test.cpp)
 # A hang is a failure, not a stuck gate.
-nevr_ht_test(social_install_test GROUP social ${_off} DL PTHREAD TIMEOUT 300 LIBS ${NEVR_ZSTD_LIB}
+nevr_ht_test(social_install_test GROUP social ${_off} DL PTHREAD LIBS ${NEVR_ZSTD_LIB}
   OBJS o_social_install o_social_facade o_social_game_calls o_social_got_hook o_social_hook_log o_social_hook_report o_social_names
        o_social_invite_gate ${_ident}
   SRC src/quest/tests/social_install_test.cpp)

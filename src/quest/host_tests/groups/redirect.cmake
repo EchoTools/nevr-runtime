@@ -23,7 +23,7 @@ nevr_ht_obj(o_redirect_id_libr15_identity GROUP redirect HOST NOEXC INCS ${_sent
 nevr_ht_obj(o_redirect_id_libr15_patch_identity GROUP redirect HOST NOEXC INCS ${_sent} SRC src/quest/patch/libr15_patch_identity.cpp)
 nevr_ht_obj(o_redirect_id_sha256 GROUP redirect HOST NOEXC INCS ${_sent} SRC src/quest/data/sha256.cpp)
 # The thunk's frames must sit under the personality-free CIE: no "zPLR" augmentation, at least one "zR".
-nevr_ht_check(tstring_thunks_frames GROUP redirect TIMEOUT 60
+nevr_ht_check(tstring_thunks_frames GROUP redirect
   SRC ${CMAKE_COMMAND} -DREADELF=${NEVR_READELF} -DOBJECT=$<TARGET_OBJECTS:o_redirect_tstring_thunks>
   -P ${NEVR_HT_DIR}/scripts/check_frames.cmake)
 

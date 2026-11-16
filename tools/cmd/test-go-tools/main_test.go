@@ -103,7 +103,21 @@ type rig struct {
 	fake   *testkit.FakeCommand
 	py     *testkit.FakeCommand
 	logDir string
+	shelf  string
 	env    []string
+}
+
+// shelve writes the rig's shelf: the owner's ceiling and the given entry ids (each shelved with a reason).
+func (r *rig) shelve(ids ...string) {
+	r.t.Helper()
+	var entries []string
+	for _, id := range ids {
+		entries = append(entries, `{"id":"`+id+`","reason":"r","measured":"m","date":"2026-11-16"}`)
+	}
+	text := `{"schema":1,"about":[],"ceiling_s":30,"entries":[` + strings.Join(entries, ",") + `]}`
+	if err := os.WriteFile(r.shelf, []byte(text), 0o644); err != nil {
+		r.t.Fatal(err)
+	}
 }
 
 func newRig(t *testing.T, stdout string, exit int) *rig {
@@ -119,8 +133,20 @@ func newRigExit(t *testing.T, stdout, exit string) *rig {
 	r.script(f, "exit", exit)
 	r.script(py, "exit", "0")
 	r.logDir = filepath.Join(t.TempDir(), "runs")
-	r.env = testkit.WithPath(testkit.Env(t, "NEVR_TEST_LOG_DIR="+r.logDir), f.Dir(), py.Dir())
+	r.shelf = filepath.Join(t.TempDir(), "test_shelf.json")
+	r.shelve()
+	r.env = testkit.WithPath(testkit.Env(t, "NEVR_TEST_LOG_DIR="+r.logDir, shelfEnv+"="+r.shelf), f.Dir(), py.Dir())
 	return r
+}
+
+// emptyShelf is a shelf file with the owner's ceiling and nothing shelved.
+func emptyShelf(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "test_shelf.json")
+	if err := os.WriteFile(p, []byte(`{"schema":1,"ceiling_s":30,"entries":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 func (r *rig) script(f *testkit.FakeCommand, name, content string) {
@@ -210,7 +236,7 @@ func TestGoIsStartedWithTestCountOneJSONAndEveryPackage(t *testing.T) {
 	r := newRig(t, passingStream(), 0)
 	r.run()
 	calls := r.fake.Calls(t)
-	if len(calls) != 1 || strings.Join(calls[0].Args, " ") != "test -count=1 -json -timeout 5m0s ./..." {
+	if len(calls) != 1 || strings.Join(calls[0].Args, " ") != "test -count=1 -json -timeout 30s ./..." {
 		t.Errorf("go was called as %+v, want: go test -count=1 -json ./...", calls)
 	}
 }
@@ -220,7 +246,7 @@ func TestPackagePatternsGivenOnTheCommandLineReplaceTheDefault(t *testing.T) {
 	r := newRig(t, passingStream(), 0)
 	r.run("./internal/testkit/", "./symcache/")
 	calls := r.fake.Calls(t)
-	if len(calls) != 1 || strings.Join(calls[0].Args, " ") != "test -count=1 -json -timeout 5m0s ./internal/testkit/ ./symcache/" {
+	if len(calls) != 1 || strings.Join(calls[0].Args, " ") != "test -count=1 -json -timeout 30s ./internal/testkit/ ./symcache/" {
 		t.Errorf("go was called as %+v", calls)
 	}
 }
@@ -365,7 +391,7 @@ func TestTheLogDirectoryDefaultsToTheWorkRootsTestRunsTree(t *testing.T) {
 	t.Parallel()
 	f := testkit.Fake(t, "go")
 	work := t.TempDir()
-	env := testkit.WithPath(testkit.Env(t, "NEVR_WORK_ROOT="+work), f.Dir())
+	env := testkit.WithPath(testkit.Env(t, "NEVR_WORK_ROOT="+work, shelfEnv+"="+emptyShelf(t)), f.Dir())
 	var out, errb bytes.Buffer
 	if code := run(t.Context(), nil, testkit.Getenv(env), strings.NewReader(""), &out, &errb); code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
@@ -450,7 +476,7 @@ func TestAGoKilledBySignalIsAFailureWithAnExitCode(t *testing.T) {
 func TestWithNoLogDirOrWorkRootTheDefaultIsUnderHome(t *testing.T) {
 	t.Parallel()
 	f := testkit.Fake(t, "go")
-	env := testkit.WithPath(testkit.Env(t, "NEVR_WORK_ROOT="), f.Dir())
+	env := testkit.WithPath(testkit.Env(t, "NEVR_WORK_ROOT=", shelfEnv+"="+emptyShelf(t)), f.Dir())
 	home := testkit.Getenv(env)("HOME")
 	var out, errb bytes.Buffer
 	if code := run(t.Context(), nil, testkit.Getenv(env), strings.NewReader(""), &out, &errb); code != 0 {
@@ -666,8 +692,28 @@ func TestGoTestGetsATimeoutSoAHungTestEndsTheRunWithAName(t *testing.T) {
 	r := newRig(t, passingStream(), 0)
 	r.run()
 	calls := r.fake.Calls(t)
-	if len(calls) != 1 || strings.Join(calls[0].Args, " ") != "test -count=1 -json -timeout 5m0s ./..." {
+	if len(calls) != 1 || strings.Join(calls[0].Args, " ") != "test -count=1 -json -timeout 30s ./..." {
 		t.Errorf("go was called as %+v", calls)
+	}
+}
+
+func TestTheShelfsGoTestsAreSkippedAndAMissingShelfStopsTheRun(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.shelve("go:internal/a#TestSlow", "go:internal/b#TestAlsoSlow", "pytest:test_x")
+	if code, _, stderr := r.run(); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	calls := r.fake.Calls(t)
+	if len(calls) != 1 || strings.Join(calls[0].Args, " ") != "test -count=1 -json -timeout 30s -skip ^(TestAlsoSlow|TestSlow)$ ./..." {
+		t.Errorf("go was called as %+v", calls)
+	}
+	if err := os.Remove(r.shelf); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := r.run()
+	if code != exitSetup || !strings.Contains(stderr, "test shelf") || len(r.fake.Calls(t)) != 1 {
+		t.Errorf("a missing shelf: exit %d, stderr %q, calls %d: want %d, a shelf message and no second go call", code, stderr, len(r.fake.Calls(t)), exitSetup)
 	}
 }
 
@@ -889,7 +935,7 @@ func TestMinusCRunsGoTestInThatDirectory(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
 	calls := r.fake.Calls(t)
-	if len(calls) != 1 || calls[0].Dir != mod || strings.Join(calls[0].Args, " ") != "test -count=1 -json -timeout 5m0s ./internal/..." {
+	if len(calls) != 1 || calls[0].Dir != mod || strings.Join(calls[0].Args, " ") != "test -count=1 -json -timeout 30s ./internal/..." {
 		t.Errorf("go call = %+v, want it run in %s with the pattern after -C's argument", calls, mod)
 	}
 }

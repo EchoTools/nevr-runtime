@@ -541,7 +541,8 @@ its objects carry no checkout path and are shared across worktrees.
 
 A branch's check is `just test-changed` and nothing else ("Builds"); the recipes below are what its map runs, and the
 whole suites among them (`just test-full`, `just verify`, `just test-tools` with no file, `just test-auth-unit` with no
-binary) are the owner's alone.
+binary) are the owner's alone. Every test is held to the ceiling of `tools/test_shelf.json`, and a test over it is shelved
+there ("Builds").
 
 ```sh
 just test-changed             # The fast unit tests that cover this branch's change, from the map in tools/test_map/ (-n: the plan only; -heavy: the heavy suites too)
@@ -847,10 +848,13 @@ your seat name, for example `claude-main` or `codex`.
   groups, the Go packages and pytest files that read it, the checks such as `verify_pe_contract.py` for
   `src/runtime/host/`, and the scanners that read every file of its kind), and runs those that are fast unit tests, one at a
   time, each printed with its exit code (`tools/cmd/test-changed`). A land runs the unit tests for the changed code and
-  finishes in about a minute: the heavy ids, which are the `just test-android` and `just test-quest-*` recipes and any
-  id whose fastest recorded run is over 10 s (`tools/internal/testmap/heavy.go`, the one place that says it), are not
-  run; each is printed as `skipped heavy <id>` with its fastest recorded time and the reason. `test-changed -heavy` runs
-  them too, for the runs that call for them; they stay in the map and the repo. The build step stays, because the gtests
+  finishes in about a minute, and skips two kinds of id, each printed on its own line and recorded in the run log
+  (`testmap.Plan`, `tools/internal/testmap/skip.go`, asks the shelf first, so an id is one kind). A **shelved** id (the shelf
+  below) is `SHELVED <id>: not run: <reason>`; it is never run, `-heavy` included, and comes back only by being rewritten
+  to run fast and removed from the shelf. A **heavy** id, which the shelf does not name, is `skipped heavy <id>` with its
+  fastest recorded time and the reason: the `just test-android` and `just test-quest-*` recipes and any id whose fastest
+  recorded run is over 10 s (`tools/internal/testmap/heavy.go`, which holds no id the shelf names); `test-changed -heavy`
+  runs it, for the runs that call for it, and it stays in the map and the repo. The build step stays, because the gtests
   read what it builds. Quote its output, the plan lines and the summary, in the commit message. A
   changed path the map does not cover fails the command, naming the path: the fix is `just test-map` run in the branch and
   the map it writes committed in the same branch. The map is one file for each component (`tools/test_map/components/<directory with each / written ~>.jsonl`, one tracked file to a line) and a header (`tools/test_map/map.json`), so two branches that add tests for different code edit different files and their landings do not conflict on the map; a branch commits only the lines of the files it adds or changes. The map is written by `just test-map` (`tools/cmd/test-map`) from the
@@ -860,6 +864,27 @@ your seat name, for example `claude-main` or `codex`.
   change that removes tests on purpose puts a `GTest-Drop: <reason>` trailer on the commit that removes them. The PC login
   test is not part of a branch's check. No workflow runs on a push to `main` except `vcpkg-cache.yml`, when a vcpkg input
   changes; start the rest by hand.
+- **No test takes more than 30 s, and the ceiling is never raised for a test.** The ceiling is `ceiling_s` in
+  `tools/test_shelf.json`, the one file every runner reads (`tools/internal/testshelf`, `tools/shelf_reader.py`,
+  `cmake/TestShelf.cmake`; the justfile's `test_ceiling_s` is held equal to it by `tools/tests/test_test_shelf.py`, because a
+  recipe that read the file would fail every test that runs a copy of the justfile on its own). What it bounds depends
+  on the runner, and a runner that can only bound a program says so:
+  - **pytest** (`tools/run_tool_tests.py`): each test, by pytest-timeout (`--timeout`, method `thread`); the run is refused
+    without the plugin, and an argument cannot set or switch off the timeout. **unittest** (the Python half of
+    `just verify`, `tools/unittest_ceiling.py`): each test; a test over it stops the run with exit 124, naming it.
+  - **gtest** under Wine (`just test-auth-unit`): each test, by `gtest-deadline`, which reads gtest's RUN and OK lines and
+    kills the program's process group when one test runs past the ceiling. **ctest** (`src/quest/host_tests`): each ctest
+    test, which is one whole program, by its TIMEOUT property; a test passes no limit of its own. A program run by a
+    recipe directly (`timeout` with the ceiling): that program.
+  - **go test**: each package's test binary (`-timeout`), not each test: go has no per-test timeout, so every test in a
+    package is held to the ceiling, and a package whose tests together pass it fails. **cargo test** (`just
+    test-installer`): all the built test programs together, because libtest has no per-test timeout on stable Rust.
+  - **A test over the ceiling is shelved, not rewritten**: it stays in the repo and is listed, with its reason (what was
+    measured, over how many runs) and the date, in `tools/test_shelf.json`, the one list. The runner that reads the file
+    skips it (`conftest.py` and `unittest_ceiling.py` for Python, `-skip` for go, a gtest filter, a DISABLED ctest
+    property), and `just test-changed` prints it as the "Builds" bullet says. A test comes off the shelf only when someone rewrites it to run fast (the
+    aim for a unit test is milliseconds; the ceiling is only the limit). No test file carries a skip of its own for a
+    test the shelf names, and an entry for a test that does not exist fails `go -C tools test ./internal/testshelf`.
 - **No agent runs the full suite or any whole suite.** The whole suites are `just test-full` (`just verify` and the
   suites it does not run), `just verify`, `just test-tools` with no argument that names test files (options, their values
   and directories leave it whole) and `just test-auth-unit` with no binary and no `GTEST_FILTER`; only the owner runs them, at the

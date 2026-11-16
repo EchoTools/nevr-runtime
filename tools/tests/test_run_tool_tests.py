@@ -207,8 +207,6 @@ def load_script():
     return module
 
 
-@unittest.skip("disabled: the test is slow, and its subprocess runs hit the 120 s timeouts under machine load, "
-               "not on code; disabled until it no longer depends on machine load")
 class RunToolTestsRecord(unittest.TestCase):
     def setUp(self):
         # An ignored signal survives exec, and the script keeps it ignored (as under nohup); a shell's
@@ -1567,7 +1565,7 @@ class RunToolTestsRecord(unittest.TestCase):
 
     def test_the_verify_recipes_unittest_line_has_the_runners_environment(self):
         module = load_script()
-        line = next(ln for ln in JUSTFILE.read_text().splitlines() if "unittest discover" in ln)
+        line = next(ln for ln in JUSTFILE.read_text().splitlines() if "unittest_ceiling.py discover" in ln)
         words = shlex.split(line)
         unset = [words[i + 1] for i in range(words.index("env") + 1, len(words) - 1) if words[i] == "-u"]
         self.assertEqual(unset, list(module.HERMETIC_UNSET))
@@ -1576,7 +1574,7 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertEqual(module.HERMETIC_UNSET, ("DISPLAY", "WAYLAND_DISPLAY", "GNUPGHOME", "GIT_CONFIG_PARAMETERS",
                                                  "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME",
                                                  "GIT_COMMITTER_EMAIL"))
-        self.assertLess(line.index("env"), line.index("-m unittest"))
+        self.assertLess(line.index("env"), line.index("unittest_ceiling.py"))
 
     def test_the_hermetic_set_is_the_five_git_settings_and_the_two_isolation_variables(self):
         self.assertEqual(load_script().HERMETIC_SET, self.EXPECTED_GIT_ENV)
@@ -1638,8 +1636,6 @@ for _name in NEEDS_PYTEST:
                                                        "pytest is not installed")(getattr(RunToolTestsRecord, _name)))
 
 
-@unittest.skip("disabled: the test is slow, and its subprocess runs hit the 120 s timeouts under machine load, "
-               "not on code; disabled until it no longer depends on machine load")
 class SuiteHygiene(unittest.TestCase):
     """Properties of the test files themselves, read from their text."""
 

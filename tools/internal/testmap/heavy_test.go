@@ -45,7 +45,7 @@ func TestEveryMeasuredIdIsOverTheBoundAndClassifiedHeavy(t *testing.T) {
 			t.Errorf("Classify(%q) = %+v, want heavy by measurement", e.ID, c)
 		}
 	}
-	// The two ids a separate change disables are not hidden here.
+	// The two ids the shelf names are not classified here.
 	for _, id := range []string{"pytest:test_run_tool_tests", "pytest:test_package_release"} {
 		if Classify(id).Heavy {
 			t.Errorf("%s is classified heavy: a heavy class must not hide a failure", id)

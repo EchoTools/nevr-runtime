@@ -18,12 +18,12 @@ else()
   file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}")
 endif()
 add_test(NAME patcher_scratch_fresh COMMAND ${CMAKE_COMMAND} -DDIR=${_patcher_scratch} -P ${NEVR_HT_DIR}/scripts/fresh_dir.cmake)
-set_tests_properties(patcher_scratch_fresh PROPERTIES FIXTURES_SETUP patcher_scratch LABELS patcher)
+set_tests_properties(patcher_scratch_fresh PROPERTIES FIXTURES_SETUP patcher_scratch LABELS patcher TIMEOUT ${NEVR_TEST_CEILING_S})
 add_dependencies(host-tests-patcher nevr_quest_patch_libr15)
-nevr_ht_test(stub_codec_test GROUP patcher ${_pf} TIMEOUT 60 SRC src/quest/tests/stub_codec_test.cpp)
-nevr_ht_test(libr15_patch_table_test GROUP patcher ${_pf} TIMEOUT 60
+nevr_ht_test(stub_codec_test GROUP patcher ${_pf} SRC src/quest/tests/stub_codec_test.cpp)
+nevr_ht_test(libr15_patch_table_test GROUP patcher ${_pf}
   SRC src/quest/tests/libr15_patch_table_test.cpp src/quest/patch/libr15_patch_identity.cpp src/quest/data/sha256.cpp)
-nevr_ht_test(libr15_patcher_test GROUP patcher ${_pf} TIMEOUT 300 FIXTURE_REQUIRED patcher_scratch
+nevr_ht_test(libr15_patcher_test GROUP patcher ${_pf} FIXTURE_REQUIRED patcher_scratch
   DEPENDS nevr_quest_patch_libr15
   ARGS "${_patcher_scratch}" src/quest/tests/fixtures "$<TARGET_FILE:nevr_quest_patch_libr15>"
   SRC src/quest/tests/libr15_patcher_test.cpp src/quest/patch/libr15_patcher.cpp src/quest/patch/libr15_extra_rows.cpp

@@ -77,8 +77,6 @@ def host_binary(version, commit=COMMIT, literals=1, extra=b"", build=(b"NEVR-HOS
     return shipped_pe("BugSplat64.dll", version, b"\0" + b"\0".join(parts) + b"\0" + extra)
 
 
-@unittest.skip("disabled: the test is slow, and its pwsh install-script tests hit System.IO.FileLoadException under "
-               "machine load, not on code; disabled until it no longer depends on machine load")
 class PackageFixture(unittest.TestCase):
     """Fake artifacts for the tool. VERSION is what the fake binaries are stamped with."""
     VERSION = DEV
@@ -139,8 +137,6 @@ def words_of_the_old_model(text):
     return re.findall(r"(?i)release candidate|\bcandidate\b|\brc\b|-rc\b|\brc\.\d", text)
 
 
-@unittest.skip("disabled: the test is slow, and its pwsh install-script tests hit System.IO.FileLoadException under "
-               "machine load, not on code; disabled until it no longer depends on machine load")
 class LocalDevPackageTest(PackageFixture):
     """The local build: a development version, dev-named files, never a release."""
 
@@ -352,8 +348,6 @@ class LocalDevPackageTest(PackageFixture):
         self.assertIn("exists; not overwritten", again.stderr)
 
 
-@unittest.skip("disabled: the test is slow, and its pwsh install-script tests hit System.IO.FileLoadException under "
-               "machine load, not on code; disabled until it no longer depends on machine load")
 class ReleaseStagesTest(PackageFixture):
     """The CI path: gate and write the tree (what the signer signs), then seal. A release has no APK."""
     VERSION = RELEASE
@@ -1296,8 +1290,6 @@ def fake_pe(certificate_size: int, payload: bytes) -> bytes:
     return bytes(image) + payload
 
 
-@unittest.skip("disabled: the test is slow, and its pwsh install-script tests hit System.IO.FileLoadException under "
-               "machine load, not on code; disabled until it no longer depends on machine load")
 @unittest.skipUnless(shutil.which("pwsh"), "pwsh not installed")
 class InstallScriptsTest(unittest.TestCase):
     """install.ps1 and uninstall.ps1 run for real under pwsh against a fake install directory.

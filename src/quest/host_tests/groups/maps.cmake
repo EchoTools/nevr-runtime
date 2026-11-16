@@ -3,7 +3,7 @@
 # (src/core/map_script_check.h), which the PC provider applies too.
 set(_maps_sent src/quest/sentinel)
 
-nevr_ht_test(map_scripts_test GROUP shared NOEXC PTHREAD DL INCS ${_maps_sent} TIMEOUT 120
+nevr_ht_test(map_scripts_test GROUP shared NOEXC PTHREAD DL INCS ${_maps_sent}
   SRC src/quest/tests/map_scripts_test.cpp src/quest/plugin/script_redirect.cpp src/quest/plugin/map_scripts.cpp
       src/core/script_image_rules_elf.cpp src/quest/sentinel/hook_log.cpp src/quest/data/sha256.cpp)
 
@@ -27,13 +27,13 @@ set(_maps_mount_core
   src/quest/data/sha256.cpp)
 nevr_ht_obj(o_map_monocypher GROUP shared COPTS -w
   SRC third_party/monocypher/src/monocypher.c third_party/monocypher/src/monocypher-ed25519.c)
-nevr_ht_test(map_mount_rules_test GROUP shared HOST PTHREAD TIMEOUT 120
+nevr_ht_test(map_mount_rules_test GROUP shared HOST PTHREAD
   INCS src/quest/tests third_party/monocypher/src OBJS o_map_monocypher
   SRC src/quest/tests/map_mount_rules_test.cpp ${_maps_mount_core})
 
 # The dedicated server's maps hold, pure (core/map_server_hold.h; ADR 0048 decisions 13, 17 and 18): the timeout's size, rate and
 # bounds, the one group fetched, the hold lifted by the mount or the deadline, the join composition and the signed-only rule.
-nevr_ht_test(map_server_hold_test GROUP shared NOEXC TIMEOUT 120 INCS src
+nevr_ht_test(map_server_hold_test GROUP shared NOEXC INCS src
   SRC src/core/tests/map_server_hold_test.cpp src/core/map_server_hold.cpp)
 
 # The custom-map channel's start (core/map_channel.h; ADR 0048 decisions 3, 7, 8, 12): the settings, the start decision, the boot's
@@ -43,7 +43,7 @@ nevr_ht_test(map_server_hold_test GROUP shared NOEXC TIMEOUT 120 INCS src
 set(_maps_channel_monocypher "${NEVR_REPO_ROOT}/third_party/monocypher/src")
 set_source_files_properties("${_maps_channel_monocypher}/monocypher.c" "${_maps_channel_monocypher}/monocypher-ed25519.c"
   PROPERTIES COMPILE_OPTIONS "-w")
-nevr_ht_test(map_channel_test GROUP shared NOEXC PTHREAD TIMEOUT 120 INCS sdk/include src third_party/monocypher/src
+nevr_ht_test(map_channel_test GROUP shared NOEXC PTHREAD INCS sdk/include src third_party/monocypher/src
   SRC src/core/tests/map_channel_test.cpp src/core/map_channel.cpp src/core/map_run.cpp src/core/map_local_precedence.cpp src/core/map_manifest.cpp
       src/core/map_index.cpp src/core/minisign_verify.cpp src/core/map_derive.cpp src/core/map_set_tables.cpp
       src/cdn/cdn_validate.cpp src/cdn/cdn_limits.cpp src/core/device_memory.cpp src/quest/data/sha256.cpp

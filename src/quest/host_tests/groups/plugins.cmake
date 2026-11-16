@@ -57,12 +57,12 @@ set(_loader_srcs src/quest/plugin/packaged_plugins.cpp src/quest/plugin/plugin_p
     src/quest/data/sha256.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/sentinel_log.cpp src/core/crash_report.cpp
     src/quest/patch/libr15_patch_identity.cpp)
 nevr_ht_obj(o_plugins_loader GROUP plugins ${_pc} PTHREAD SRC ${_loader_srcs})
-nevr_ht_test(plugin_loader_test GROUP plugins ${_pc} PTHREAD DL TIMEOUT 120 ARGS "${CMAKE_BINARY_DIR}/plugins" DEPENDS ${_plugin_fixtures}
+nevr_ht_test(plugin_loader_test GROUP plugins ${_pc} PTHREAD DL ARGS "${CMAKE_BINARY_DIR}/plugins" DEPENDS ${_plugin_fixtures}
   OBJS o_plugins_loader ${_loader_noexc} SRC src/runtime/ext/plugin_manifest.cpp src/quest/tests/plugin_loader_test.cpp)
-nevr_ht_test(packaged_plugins_test GROUP plugins ${_pc} PTHREAD TIMEOUT 120 ARGS src/quest/tests/fixtures
+nevr_ht_test(packaged_plugins_test GROUP plugins ${_pc} PTHREAD ARGS src/quest/tests/fixtures
   SRC src/quest/tests/packaged_plugins_test.cpp src/quest/plugin/packaged_plugins.cpp src/quest/plugin/plugin_plan.cpp
       src/runtime/ext/plugin_load_plan.cpp)
-nevr_ht_test(plugin_runtime_test GROUP plugins ${_pc} PTHREAD DL TIMEOUT 120 ARGS "${CMAKE_BINARY_DIR}/plugins" DEPENDS ${_plugin_fixtures}
+nevr_ht_test(plugin_runtime_test GROUP plugins ${_pc} PTHREAD DL ARGS "${CMAKE_BINARY_DIR}/plugins" DEPENDS ${_plugin_fixtures}
   OBJS o_plugins_loader ${_loader_noexc}
   SRC src/quest/tests/plugin_runtime_test.cpp src/quest/plugin/plugin_runtime.cpp src/runtime/ext/plugin_load_plan.cpp)
 # The constructor's attach step (docs/adr/0021 sections 6, 7, 10, 12): the real Attach on the shipped patcher's output laid out in
@@ -77,7 +77,7 @@ foreach(f libr15_attach process_end_hook arm64_reloc)
 endforeach()
 # The loader sources again, built as the test's line builds them: with the standard library's assertions and the tests directory.
 nevr_ht_obj(o_plugins_loader_asserts GROUP plugins ${_pc} PTHREAD INCS src/quest/tests DEFS _GLIBCXX_ASSERTIONS SRC ${_loader_srcs})
-nevr_ht_test(libr15_attach_step_test GROUP plugins ${_pc} PTHREAD DL INCS src/quest/tests DEFS _GLIBCXX_ASSERTIONS TIMEOUT 120
+nevr_ht_test(libr15_attach_step_test GROUP plugins ${_pc} PTHREAD DL INCS src/quest/tests DEFS _GLIBCXX_ASSERTIONS
   ARGS src/quest/tests/fixtures
   OBJS o_plugins_step_libr15_attach_step o_plugins_step_libr15_patcher o_plugins_step_libr15_extra_rows o_plugins_step_libr15_attach
        o_plugins_step_process_end_hook o_plugins_step_arm64_reloc o_plugins_loader_asserts ${_loader_noexc}

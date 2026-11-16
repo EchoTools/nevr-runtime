@@ -24,6 +24,11 @@ import (
 // Measured also holds the fastest run of the toolchain ids, for the line a land prints; those figures are not tested
 // against the bound, because a cached run of them is short and a cold one builds the toolchain.
 //
+// The shelf (tools/test_shelf.json, skip.go) is asked first. An id over the shelf's ceiling is shelved, which no run starts,
+// -heavy included, so it has no entry here: ValidateAgainstShelf refuses a Measured entry for a shelved id. This list holds
+// only the ids over HeavyBound that are not shelved (a run of them is allowed, by -heavy), and the toolchain recipes the
+// shelf does not name.
+//
 // An id that fails when it runs is not made heavy to keep it from failing a land: it stays out of Measured.
 
 // HeavyBound is the fastest run an id may have and still be a land test.
@@ -48,18 +53,14 @@ type Measurement struct {
 }
 
 // Measured are the fastest recorded runs, from the fastest test_end of each id in the run log of test-changed (gtest
-// ids run as one batch and are not listed): the ids the measurement rule makes heavy, and the toolchain recipes seen. pytest:test_run_tool_tests and
-// pytest:test_package_release are over the bound too and are not listed: a separate change disables them, and a heavy
-// class must not hide a failure.
+// ids run as one batch and are not listed): the ids the measurement rule makes heavy, and the toolchain recipes seen. The
+// ids the shelf names (pytest:test_run_tool_tests, pytest:test_package_release, host-seams, the Android and two Quest
+// recipes) are not listed: the shelf classifies them, and a heavy class must not hide a failure.
 var Measured = []Measurement{
-	{"host-seams", hostSeamsMs},
 	{"pytest:test_launch_client", launchClientMs},
 	{"go:internal/updatewiring", updateWiringMs},
 	{"go:cmd/quest-repack-libs", questRepackLibsMs},
 	{"pytest:test_run_tool_tests_memory", runToolTestsMemoryMs},
-	{"just:test-android", androidMs},
-	{"just:test-quest-hooks", questHooksMs},
-	{"just:test-quest-data", questDataMs},
 	{"just:test-quest-combat", questCombatMs},
 	{"just:test-quest-shared", questSharedMs},
 	{"just:test-quest-data-net", questDataNetMs},
@@ -69,14 +70,10 @@ var Measured = []Measurement{
 
 // The fastest recorded runs, in milliseconds, of the ids in Measured.
 const (
-	hostSeamsMs          = 185563
 	launchClientMs       = 31019
 	updateWiringMs       = 19541
 	questRepackLibsMs    = 10575
 	runToolTestsMemoryMs = 10520
-	androidMs            = 2718
-	questHooksMs         = 54657
-	questDataMs          = 37409
 	questCombatMs        = 24571
 	questSharedMs        = 13855
 	questDataNetMs       = 9782

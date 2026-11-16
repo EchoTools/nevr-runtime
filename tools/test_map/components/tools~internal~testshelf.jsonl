@@ -1,0 +1,3 @@
+{"component":"tools/internal/testshelf","dir":"tools/internal/testshelf"}
+{"file":"tools/internal/testshelf/testshelf.go","tests":["go:cmd/gtest-deadline","go:cmd/test-changed","go:cmd/test-go-tools","go:cmd/test-map","go:internal/questwiring","go:internal/testmap","go:internal/testshelf"]}
+{"file":"tools/internal/testshelf/testshelf_test.go","tests":["go:cmd/gtest-deadline","go:cmd/test-changed","go:cmd/test-go-tools","go:cmd/test-map","go:internal/questwiring","go:internal/testmap","go:internal/testshelf"]}

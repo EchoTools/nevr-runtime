@@ -150,6 +150,15 @@ const oldSrcLine = `  {"name": "src", "dir": "src", "files": {"src/old.cpp": ["g
 // schema2Map is testMap without the src component: src/old.cpp is then covered only by the map at the merge-base.
 func schema2Map() string { return strings.Replace(testMap, oldSrcLine, "", 1) }
 
+// shelfOf is a shelf with the ceiling of the owner's order and the given entries (id, reason pairs).
+func shelfOf(entries ...[2]string) string {
+	var parts []string
+	for _, e := range entries {
+		parts = append(parts, `{"id":"`+e[0]+`","reason":"`+e[1]+`","measured":"fixture","date":"2026-11-16"}`)
+	}
+	return `{"schema":1,"about":[],"ceiling_s":30,"entries":[` + strings.Join(parts, ",") + `]}`
+}
+
 type fixture struct {
 	t    *testing.T
 	dir  string
@@ -176,6 +185,14 @@ func (f *fixture) write(rel, text string) {
 	if err := os.WriteFile(p, []byte(text), filePerm); err != nil {
 		f.t.Fatal(err)
 	}
+}
+
+// shelve replaces the shelf in the base: origin/main moves to a commit that holds it, so the change a test makes is only its own.
+func (f *fixture) shelve(text string) {
+	f.t.Helper()
+	f.write("tools/test_shelf.json", text)
+	f.commit("shelf")
+	f.git("update-ref", "refs/remotes/origin/main", "HEAD")
 }
 
 func (f *fixture) commit(msg string) {
@@ -216,6 +233,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	f.git("init", "-q", "-b", "main")
 	f.writeMap(testMap)
+	f.write("tools/test_shelf.json", shelfOf())
 	f.write("src/a/x.cpp", "x\n")
 	f.write("src/old.cpp", "old\n")
 	f.write("src/h/x.cpp", "h\n")
@@ -300,7 +318,7 @@ func TestRunsTheUnionOfTheChangedComponentsTestsInOrderWithoutTheDisplay(t *test
 		"just build",
 		"python3 tools/verify_host_seams.py build/mingw-x",
 		"just test-auth-unit test_a test_b",
-		"go -C tools test -count=1 ./cmd/x",
+		"go -C tools test -count=1 -timeout 30s ./cmd/x",
 		"python3 tools/run_tool_tests.py tools/tests/test_y.py",
 	}
 	if got := f.calls(); !reflect.DeepEqual(got, want) {
@@ -526,7 +544,7 @@ func TestADeletedPathIsLookedUpInTheMapAtTheMergeBase(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d\n%s\n%s", code, out, errs)
 	}
-	if want := []string{"just test-auth-unit test_old", "go -C tools test -count=1 ./internal/testmap"}; !reflect.DeepEqual(f.calls(), want) {
+	if want := []string{"just test-auth-unit test_old", "go -C tools test -count=1 -timeout 30s ./internal/testmap"}; !reflect.DeepEqual(f.calls(), want) {
 		t.Errorf("calls = %q, want %q", f.calls(), want)
 	}
 	if !strings.Contains(out, "(deleted: looked up in the map at the merge-base)") {
@@ -565,7 +583,7 @@ func TestAScannerAddsItsTestsToEveryPathItMatches(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d\n%s\n%s", code, out, errs)
 	}
-	if want := []string{"go -C tools test -count=1 ./cmd/doc"}; !reflect.DeepEqual(f.calls(), want) {
+	if want := []string{"go -C tools test -count=1 -timeout 30s ./cmd/doc"}; !reflect.DeepEqual(f.calls(), want) {
 		t.Errorf("calls = %q, want %q", f.calls(), want)
 	}
 	if !strings.Contains(out, "docs/a.md -> docs : no tests of its own: no test reads it ; scanners doc-scan: go:cmd/doc") {
@@ -584,7 +602,7 @@ func TestAScannerOnAFileWithItsOwnTestsKeepsBothAndNamesWhatItAdds(t *testing.T)
 		{
 			name:    "the scanner adds a test",
 			tests:   `"go:cmd/doc"`,
-			calls:   []string{"just build", "python3 tools/verify_host_seams.py build/mingw-x", "just test-auth-unit test_a test_b", "go -C tools test -count=1 ./cmd/doc"},
+			calls:   []string{"just build", "python3 tools/verify_host_seams.py build/mingw-x", "just test-auth-unit test_a test_b", "go -C tools test -count=1 -timeout 30s ./cmd/doc"},
 			newPart: "go:cmd/doc",
 		},
 		{
@@ -770,7 +788,7 @@ func TestALandSkipsTheHeavyTestsAndListsEachWithItsTimeAndReason(t *testing.T) {
 		t.Errorf("calls = %q\nwant %q", got, want)
 	}
 	for _, line := range []string{
-		"skipped heavy just:test-android (fastest run 3 s): it builds and runs the Android or Quest toolchain",
+		"skipped heavy just:test-android (no run time kept): it builds and runs the Android or Quest toolchain",
 		"skipped heavy just:test-quest-foo (no run time kept): it builds and runs the Android or Quest toolchain",
 		"skipped heavy pytest:test_launch_client (fastest run 31 s): its fastest recorded run is over the 10 s bound of a land test",
 	} {
@@ -827,4 +845,61 @@ func TestADryRunNamesTheSkippedHeavyTestsAndRunsNothing(t *testing.T) {
 	if got := f.calls(); len(got) != 0 {
 		t.Errorf("-n ran %q", got)
 	}
+}
+
+func TestAShelvedTestIsNotRunAndSaysWhy(t *testing.T) {
+	f := newFixture(t)
+	f.shelve(shelfOf([2]string{"gtest:test_b", "slow: 41 s"},
+		[2]string{"pytest:test_y", "median 59 s"}, [2]string{"target:seams", "226 s"}))
+	f.write("src/a/x.cpp", "changed\n")
+	f.write("tools/y.py", "changed\n")
+	f.commit("change")
+	code, out, errb := f.run()
+	if code != 0 {
+		t.Fatalf("exit %d\n%s%s", code, out, errb)
+	}
+	for _, want := range []string{"SHELVED gtest:test_b: not run: slow: 41 s (shelved 2026-11-16; tools/test_shelf.json)",
+		"SHELVED pytest:test_y: not run: median 59 s", "SHELVED seams: not run: 226 s"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	want := []string{"just build", "just test-auth-unit test_a", "go -C tools test -count=1 -timeout 30s ./cmd/x"}
+	if !reflect.DeepEqual(f.calls(), want) {
+		t.Errorf("calls = %q, want %q", f.calls(), want)
+	}
+}
+
+func TestAGoTestRunsUnderTheCeilingAndWithoutItsShelvedTests(t *testing.T) {
+	f := newFixture(t)
+	f.shelve(shelfOf([2]string{"go:cmd/x#TestSlow", "41 s"}, [2]string{"go:cmd/x#TestAlsoSlow", "35 s"}))
+	f.write("tools/y.py", "changed\n")
+	f.commit("change")
+	if code, out, errb := f.run(); code != 0 {
+		t.Fatalf("exit %d\n%s%s", code, out, errb)
+	}
+	want := "go -C tools test -count=1 -timeout 30s -skip ^(TestAlsoSlow|TestSlow)$ ./cmd/x"
+	if !containsString(f.calls(), want) {
+		t.Errorf("calls = %q, want one to be %q", f.calls(), want)
+	}
+}
+
+func TestABrokenShelfIsAUsageError(t *testing.T) {
+	f := newFixture(t)
+	f.shelve(`{"schema":1,"ceiling_s":0,"entries":[]}`)
+	f.write("tools/y.py", "changed\n")
+	f.commit("change")
+	code, _, errb := f.run()
+	if code != exitUsage || !strings.Contains(errb, "ceiling_s") {
+		t.Errorf("exit %d, stderr %q: want %d naming ceiling_s", code, errb, exitUsage)
+	}
+}
+
+func containsString(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
