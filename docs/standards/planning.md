@@ -109,9 +109,10 @@ mechanical and reversible) or listed for a decision. Branches and issues are nev
 - An issue that landed work fixed is closed, by the `Closes #N` line of the commit that landed it.
 
 **Landing**
-- No pull requests. Work starts from an existing issue, and the commit that lands on `main` names it with a closing
+- No pull requests. Code work starts from an existing issue, and the commit that lands on `main` names it with a closing
   keyword (`Closes #N`, `Fixes #N` or `Resolves #N`), one line for each issue; GitHub closes the issue when the commit
-  reaches `main`. There is no "no issue" form: a fix that has no issue gets an issue first.
+  reaches `main`. A `docs` commit has no issue, and work marked as having no issue carries `No-Issue: <why>`
+  (`AGENTS.md`, "Code work starts from an existing issue"); otherwise a fix that has no issue gets an issue first.
 - `Refs #N` (or `Part of #N`, `Completes #N`) is only for a commit that leaves a named live check owed (a headset run, a
   server run), and the message says what is still open. That check is a task line on the issue; close the issue with
   the evidence when the check is done. Landed work never leaves its issue open silently.

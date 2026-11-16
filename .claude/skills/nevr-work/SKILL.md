@@ -42,7 +42,7 @@ Each gate has a proof to produce. A gate you did not pass is named as not passed
 ### 1. Orient
 
 Read `AGENTS.md`, the global `CLAUDE.md` if you are a maintainer seat, `git log --oneline -20`, `git status`, and the
-issue the unit tracks (work starts from an existing issue: "Review, verification and landing"). Read the standard for the work you will
+issue the unit tracks, when it has one (a `docs` change has none, and neither has work marked as having none: "Review, verification and landing"). Read the standard for the work you will
 do (`AGENTS.md` "For contributors", "Required reading": verification, logging, naming, planning, n-rules). For C++ or build work
 read the C++ Mingw Addendum at the end of `AGENTS.md`; a Quest change is built with the NDK, not MinGW
 (`just configure-android`), so check which of the addendum's hard stops apply to it. If a file you will change is
@@ -100,7 +100,7 @@ as not run unless you ran it (the evidence ladder is `docs/standards/verificatio
 
 ### 7. Land
 
-No pull requests. The commit message: the issue (`Closes`/`Refs #N`), each command run on the exact tip with its exit
+No pull requests. The commit message: the issue (`Closes`/`Refs #N`; none for a `docs` commit; `No-Issue: <why>` when the work is marked as having none), each command run on the exact tip with its exit
 code, the mutants, and what was not run or not established ("What a landed commit carries"). Start a fresh-context
 review subagent with the diff, the commit message and the issue; FIX goes back to step 4, MERGE goes on to `just land` as
 "Landing" in "Review, verification and landing" says. Commit identity and trailers:
