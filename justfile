@@ -4451,6 +4451,7 @@ verify: go-tools
 
 # Generate combat override files from echomod build output, into the copy of the game install NEVR_GAME_ROOT names (just stops with the variable's name when it is unset: this checkout's echovr/ may be the owner's install)
 generate-combat-overrides build_dir:
+    @[ -n "{{env('NEVR_GAME_ROOT')}}" ] || { echo "ERROR: NEVR_GAME_ROOT is empty: set it to a throwaway copy of the game install (AGENTS.md \"The game install\")" >&2; exit 2; }
     python tools/echomod/generate_resources.py \
         --build-dir {{build_dir}} \
         --output-dir "{{env('NEVR_GAME_ROOT')}}/echovr/bin/win10/_overrides/combat"
