@@ -1,7 +1,9 @@
 // Package evidence checks a commit message for what "What a landed commit carries" (AGENTS.md) lists. It reads the
 // form only; whether a claim is true is the review's. Every commit names an issue (Closes, Fixes, Resolves, Refs, Part of
-// or Completes #N) except one whose Conventional Commit type is docs: a one-shot documentation change has no issue, and
-// its message is its record. A docs commit that names one still passes.
+// or Completes #N) except one whose Conventional Commit type is docs (a one-shot documentation change has no issue, and
+// its message is its record) and one that carries a "No-Issue: <reason>" trailer, the way to mark that this
+// work has no issue. The trailer is a whole line starting at column 0, its key matched in any case, and its reason is
+// not empty or white space only. A commit that names an issue still passes whatever else it carries.
 package evidence
 
 import (
@@ -12,6 +14,8 @@ import (
 const (
 	typeFix  = "fix"
 	typeDocs = "docs"
+	// issueItemText is the item reported when a commit names no issue and carries no No-Issue trailer; it names the way out.
+	issueItemText = "an issue reference (Closes #N or Refs #N), or a No-Issue: <reason> trailer when the work is marked as having none"
 )
 
 var (
@@ -20,6 +24,9 @@ var (
 	subjectType = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*)(\([^)]*\))?!?:`)
 	exitWord    = regexp.MustCompile(`(?i)\bexit[ :=]*\d+|\brc[ :=]*\d+`)
 	trailerRe   = regexp.MustCompile(`(?m)^Co-Authored-By: .+`)
+	// noIssueRe is the "No-Issue: <reason>" trailer: at the start of a line, key in any case, a reason with at least one
+	// non-white-space character on the same line.
+	noIssueRe = regexp.MustCompile(`(?mi)^No-Issue:[ \t]*\S`)
 )
 
 // commitType returns the lower-cased Conventional Commit type of a subject line, or "" when the subject does not parse.
@@ -81,8 +88,8 @@ func Missing(msg string) []string {
 	if kind == typeFix {
 		need("Siblings")
 	}
-	if kind != typeDocs && !issueRef.MatchString(msg) {
-		missing = append(missing, "an issue reference (Closes #N or Refs #N)")
+	if kind != typeDocs && !issueRef.MatchString(msg) && !noIssueRe.MatchString(msg) {
+		missing = append(missing, issueItemText)
 	}
 	if !trailerRe.MatchString(msg) {
 		missing = append(missing, "a Co-Authored-By trailer")

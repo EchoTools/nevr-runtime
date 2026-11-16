@@ -130,3 +130,22 @@ func TestARunIsRecordedInTheToolsLog(t *testing.T) {
 	}
 	testkit.RequireRunRecorded(t, env, "commit-evidence", code, args)
 }
+
+const noIssueReason = "one-shot cleanup with no issue behind it"
+
+func TestNoIssueTrailerPassesAndNeedsAReason(t *testing.T) {
+	for _, kind := range []string{"fix", "feat"} {
+		msg := strings.Replace(good, "docs: a change (Refs #1)", kind+": a change", 1) + "\n## Siblings\nnone.\n"
+		if code, out := runOn(t, msg); code != 1 || !strings.Contains(out, "No-Issue: <reason>") {
+			t.Errorf("%s without trailer: code %d: %s", kind, code, out)
+		}
+		if code, out := runOn(t, msg+"\nno-issue: "+noIssueReason+"\n"); code != 0 {
+			t.Errorf("%s with trailer: code %d: %s", kind, code, out)
+		}
+		for _, bad := range []string{"No-Issue:   ", " No-Issue: " + noIssueReason} {
+			if code, out := runOn(t, msg+"\n"+bad+"\n"); code != 1 || !strings.Contains(out, "an issue reference") {
+				t.Errorf("%s with %q: code %d: %s", kind, bad, code, out)
+			}
+		}
+	}
+}

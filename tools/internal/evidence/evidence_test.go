@@ -107,3 +107,62 @@ func TestDocsMissingASectionIsStillRefused(t *testing.T) {
 		t.Fatalf("%v", m)
 	}
 }
+
+const noIssueReason = "one-shot cleanup with no issue behind it"
+
+// noIssueMessage is a message of the given subject type with no issue reference and the given text appended to its body.
+func noIssueMessage(subject, extra string) string {
+	return withSubject(subject) + "\n## Siblings\nnone.\n\n" + extra + "\n"
+}
+
+func TestNoIssueTrailerReplacesTheReference(t *testing.T) {
+	for _, subject := range []string{"fix: a change", "feat(x): a change"} {
+		for _, key := range []string{"No-Issue", "no-issue", "NO-ISSUE"} {
+			if m := Missing(noIssueMessage(subject, key+": "+noIssueReason)); len(m) != 0 {
+				t.Errorf("%q %q: %v", subject, key, m)
+			}
+		}
+	}
+}
+
+func TestNoIssueTrailerNeedsAReasonOnItsLine(t *testing.T) {
+	for _, extra := range []string{"No-Issue:", "No-Issue:   ", "No-Issue:\t", "No-Issue:\nsomething on the next line"} {
+		if m := Missing(noIssueMessage("feat: a change", extra)); !hasItem(m, issueItem) {
+			t.Errorf("%q: issue item not demanded: %v", extra, m)
+		}
+	}
+}
+
+func TestNoIssueMustStartTheLine(t *testing.T) {
+	for _, extra := range []string{" No-Issue: " + noIssueReason, "\tNo-Issue: " + noIssueReason, "the text reads No-Issue: " + noIssueReason} {
+		if m := Missing(noIssueMessage("feat: a change", extra)); !hasItem(m, issueItem) {
+			t.Errorf("%q: issue item not demanded: %v", extra, m)
+		}
+	}
+}
+
+func TestIssueItemNamesTheWayOut(t *testing.T) {
+	m := Missing(noIssueMessage("feat: a change", ""))
+	if !hasItem(m, "No-Issue: <reason>") {
+		t.Fatalf("%v", m)
+	}
+}
+
+func TestReferenceAndNoIssueTogetherPass(t *testing.T) {
+	msg := noIssueMessage("feat: a change (Refs #1)", "No-Issue: "+noIssueReason)
+	if m := Missing(msg); len(m) != 0 {
+		t.Fatalf("%v", m)
+	}
+}
+
+func TestNoIssueDoesNotExcuseAMissingSection(t *testing.T) {
+	msg := strings.Replace(noIssueMessage("feat: a change", "No-Issue: "+noIssueReason), "## Mutants", "## Other", 1)
+	m := Missing(msg)
+	if !hasItem(m, "## Mutants") || hasItem(m, issueItem) {
+		t.Fatalf("%v", m)
+	}
+	fix := withSubject("fix: a change") + "\nNo-Issue: " + noIssueReason + "\n"
+	if m := Missing(fix); len(m) != 1 || !strings.Contains(m[0], "Siblings") {
+		t.Fatalf("%v", m)
+	}
+}
