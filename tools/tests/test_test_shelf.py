@@ -111,10 +111,12 @@ class SkipReasonTest(unittest.TestCase):
         other.add_marker.assert_not_called()
         self.assertIn("shelved", shelved.add_marker.call_args.args[0].kwargs["reason"])
 
-    def test_the_two_files_the_load_disable_covered_are_skipped_through_the_shelf(self):
+    def test_the_file_the_load_disable_covered_that_remains_shelved_is_skipped_through_the_shelf(self):
         shelf = shelf_reader.load()
-        for unit in ("test_run_tool_tests", "test_package_release"):
-            self.assertIsNotNone(shelf_reader.skip_reason(shelf, unit, "AnyClass", "test_any"), unit)
+        reason = shelf_reader.skip_reason(shelf, "test_package_release", "AnyClass", "test_any")
+        self.assertIsNotNone(reason, "test_package_release")
+        self.assertIn("shelved", reason)
+        self.assertIn("pytest:test_package_release", reason)
 
 
 class GTestFilterTest(unittest.TestCase):

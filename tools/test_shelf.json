@@ -10,12 +10,6 @@
   "ceiling_s": 30,
   "entries": [
     {
-      "id": "pytest:test_run_tool_tests",
-      "reason": "Its subprocess-driven tests each start a whole pytest run: the JUnit records of 64 runs give a median of 59.7 s for test_the_recipe_passes_each_argument_through_whole and 43.1 s for test_the_workers_the_arguments_set_are_what_the_records_name, and the file's median in 58 test-changed runs is 68.9 s (max 1384.8 s); under load its runs hit their 120 s timeouts.",
-      "measured": "test-changed.jsonl (58 runs) and the tools-tests JUnit XML (64 runs), 2026-11-16",
-      "date": "2026-11-16"
-    },
-    {
       "id": "pytest:test_package_release",
       "reason": "Its pwsh install-script tests fail with System.IO.FileLoadException under machine load: the file's median in 46 test-changed runs is 27.0 s and its max 40.9 s, the failing run took 22.8 s and failed 2 tests. It was disabled by a skip on every class; the shelf replaces those skips.",
       "measured": "test-changed.jsonl (46 runs) and the land log of 2026-11-16, 2026-11-16",

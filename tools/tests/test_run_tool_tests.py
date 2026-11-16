@@ -4,6 +4,7 @@ These tests run the real script, as `just test-tools` does, against small suites
 """
 
 import ast
+import concurrent.futures
 import datetime
 import getpass
 import importlib.metadata
@@ -492,12 +493,20 @@ class RunToolTestsRecord(unittest.TestCase):
             (["-n", "2", "-n", "3"], "parallel", 3, None),  # argparse keeps the last
             (["-p", "no:xdist"], "serial", 0, "-p no:xdist"),
         )
-        for i, (given, mode, workers, reason) in enumerate(cases):
+        # Each case is a whole run of the script on the suite, so the cases start together (each has its own log
+        # directory): the test's wall time is one run's, not eight, and every case is still checked below.
+        def run_case(i: int, given: list):
+            logs = self.logs / str(i)
+            return subprocess.run([sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider", *given,
+                                   str(self.suite)], capture_output=True, text=True, cwd=REPO, timeout=120,
+                                  env=self.env(logs, NEVR_TEST_WORKERS="2"))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(cases)) as pool:
+            runs = [pool.submit(run_case, i, list(given)) for i, (given, _, _, _) in enumerate(cases)]
+            results = [run.result() for run in runs]
+        for i, ((given, mode, workers, reason), result) in enumerate(zip(cases, results)):
             with self.subTest(arguments=given):
                 logs = self.logs / str(i)
-                result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider", *given,
-                                         str(self.suite)], capture_output=True, text=True, cwd=REPO, timeout=120,
-                                        env=self.env(logs, NEVR_TEST_WORKERS="2"))
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 records = [json.loads(line) for line in (logs / "runs.jsonl").read_text().splitlines()]
                 for record in records:
@@ -1177,12 +1186,28 @@ class RunToolTestsRecord(unittest.TestCase):
     def test_the_recipe_passes_each_argument_through_whole(self):
         spaced = self.root / "dir with spaces"
         shutil.copytree(self.suite, spaced)
+        # The recipe's Go half runs `go test` over the whole tools module, which is the slow part of this test and not
+        # what it checks. A fake `go` on PATH answers that one command with nothing; every other go command (the
+        # recipe's build of its tools) is the real go. The argument is a file in the spaced directory, not the
+        # directory: a directory is a whole run, which the recipe hands to the suite-run wrapper (a recorded run).
+        shim = self.root / "shim"
+        shim.mkdir()
+        real_go = shutil.which("go")
+        self.assertIsNotNone(real_go, "go is needed to build the recipe's tools")
+        go = shim / "go"
+        go.write_text("#!/bin/sh\n"
+                      "case \" $* \" in *\" test \"*) exit 0 ;; esac\n"
+                      f"exec {shlex.quote(real_go)} \"$@\"\n", encoding="utf-8")
+        go.chmod(go.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        env = self.env(self.logs)
+        env["PATH"] = f"{shim}{os.pathsep}{env['PATH']}"
+        suite_file = spaced / "test_sample.py"
         result = subprocess.run(["just", "--justfile", str(JUSTFILE), "--working-directory", str(REPO),
-                                 "test-tools", "-q", "-p", "no:cacheprovider", str(spaced)],
-                                capture_output=True, text=True, env=self.env(self.logs), timeout=120)
+                                 "test-tools", "-q", "-p", "no:cacheprovider", str(suite_file)],
+                                capture_output=True, text=True, env=env, timeout=120)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         record = self.records()[0]
-        self.assertEqual(record["cmd"][-1], str(spaced))
+        self.assertEqual(record["cmd"][-1], str(suite_file))
         self.assertEqual(record["failed"], ["test_sample::test_breaks"])
 
     def test_a_stderr_nobody_reads_holds_up_no_failure_line_nor_the_record(self):
