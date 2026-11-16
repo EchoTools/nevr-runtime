@@ -15,6 +15,8 @@
 {"file":"src/core/build_literal_scan.h","tests":["just:test-android","just:test-quest-integration","just:test-quest-shared","go:cmd/test-map","pytest:test_config_yaml_source"]}
 {"file":"src/core/burst_then_count.h","tests":["build","gtest:test_ecfx_rules","just:test-android","just:test-quest-combat","just:test-quest-hooks","go:cmd/test-map","go:internal/combatwiring","pytest:test_config_yaml_source"]}
 {"file":"src/core/call_ring.h","tests":["build","gtest:test_export_trace","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/cargo_session_pin.cpp","tests":["build","gtest:test_cargo_session_pin","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/cargo_session_pin.h","tests":["build","gtest:test_cargo_session_pin","go:cmd/test-map","pytest:test_config_yaml_source"]}
 {"file":"src/core/cli_flags.h","tests":["build","gtest:test_cli_check","gtest:test_cmdline_strip","go:cmd/test-map","go:internal/updatewiring","pytest:test_cli_flag_names","pytest:test_config_yaml_source"]}
 {"file":"src/core/cli_option_value.h","tests":["build","gtest:test_behavioral","gtest:test_cli_check","go:cmd/test-map","pytest:test_config_yaml_source","pytest:test_runtime_lifecycle_invariants"]}
 {"file":"src/core/combat_level_class.h","tests":["build","gtest:test_combat_level_class","just:test-android","just:test-quest-combat","just:test-quest-hooks","go:cmd/test-map","pytest:test_config_yaml_source"]}

@@ -141,6 +141,16 @@ class Store {
   bool writer_live_ = false;
 };
 
+// One label's share of a mount (PLAN-v7 F5): the names it mounted, the names left out because a blob is not in the store (missing) and
+// the names left out for another reason (refused, its records of 0 bytes with no chunk to name included). A label the policy turns
+// off has no share.
+struct LabelMount {
+  std::string label;
+  std::size_t names = 0;
+  std::size_t missing = 0;
+  std::size_t refused = 0;
+};
+
 // What a mount holds: the shadow to publish and the label names the shadow's record tags index.
 struct Mounted {
   std::unique_ptr<nevr_shadow::Shadow> shadow;
@@ -151,6 +161,7 @@ struct Mounted {
   std::size_t missing = 0;          // names left out because a blob is not in the store
   std::size_t refused = 0;          // names left out for another reason
   std::size_t files = 0;            // store files the shadow holds open
+  std::vector<LabelMount> per_label;  // one per label a name or a record of 0 bytes of it was seen for, sorted by label
 };
 
 // Opens each store file the mounted objects lie in once, held for the life of the process, and builds a shadow from the manifest's

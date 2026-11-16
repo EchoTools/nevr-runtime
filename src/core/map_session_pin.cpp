@@ -71,13 +71,10 @@ void PopPartialUtf8(std::string& text) {
   if (!text.empty() && static_cast<unsigned char>(text.back()) >= kUtf8LeadMin) text.pop_back();
 }
 
-// One piece of a notice line. A field (an id, a version, a token) is cut when the line is too long; the fixed words stay whole.
-struct Part {
-  std::string text;
-  bool field = false;
-};
+}  // namespace
 
 // The notice line, at most kNoticeLineMax bytes: the longest field is cut first, two bytes at a time, and marked with '~'.
+// `Part` is declared in map_session_pin.h, so the cargo pin's lines (core/cargo_session_pin.h) are cut by this same rule.
 std::string FitLine(std::vector<Part> parts) {
   auto total = [&parts] {
     std::size_t n = 0;
@@ -103,6 +100,8 @@ std::string FitLine(std::vector<Part> parts) {
   }
   return line;
 }
+
+namespace {
 
 constexpr const char* kHexDigits = "0123456789abcdef";
 constexpr int kHexDigitBits = 4;

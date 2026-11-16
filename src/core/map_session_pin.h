@@ -78,6 +78,15 @@ bool CheckGameBytes(const std::uint8_t* at, std::uint64_t va, const std::uint8_t
 // The fields as the text one log line carries: `key=value` separated by spaces, a value with a space in double quotes.
 std::string FormatFields(const PinFields& fields);
 
+// One piece of a notice line. A field (an id, a version, a token) is cut when the line is too long; the fixed words stay whole.
+struct Part {
+  std::string text;
+  bool field = false;
+};
+// The notice line, at most kNoticeLineMax bytes: the longest field is cut first, two bytes at a time, and marked with '~'. A
+// piece that is not a field is never cut; a line of fixed words longer than the maximum is cut at the maximum.
+std::string FitLine(std::vector<Part> parts);
+
 // What this run's channel holds, as the session pin reads it. Replaced whole by SetChannelView.
 struct ChannelView {
   std::vector<std::pair<std::uint64_t, std::string>> listed;     // level -> id, both names of every map listed for this platform

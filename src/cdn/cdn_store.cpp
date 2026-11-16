@@ -357,6 +357,12 @@ Mounted Mount(Env& env, const Store& store, const Manifest& manifest, const Plat
     groups[std::make_pair(e.label, e.name)].push_back(&e);
   }
   nevr_shadow::Input input;
+  std::map<std::string, LabelMount> byLabel;  // per_label, by label: every label a group or an empty record of it was seen for
+  std::map<std::string, std::size_t> emptiesOf;  // the records of 0 bytes a label mounted, for the share a failed build gives back
+  // Copies the shares into the result on every return: the per-label counts are the totals' split by label.
+  const auto exportLabels = [&result, &byLabel] {
+    for (const auto& kv : byLabel) result.per_label.push_back(kv.second);
+  };
   std::map<std::string, std::uint32_t> labelIndex;
   std::map<std::uint32_t, std::uint32_t> packageOfFile;  // store file -> its index in input.handles
   std::set<std::uint32_t> failedFiles;
@@ -364,6 +370,8 @@ Mounted Mount(Env& env, const Store& store, const Manifest& manifest, const Plat
   std::map<std::string, std::uint32_t> firstChunkOfLabel;  // the chunk of a label's first mounted object: its records of 0 bytes name it
   for (const auto& group : groups) {
     // The group mounts when every record's blob is held, its sizes are the ones the store holds and its file opens.
+    LabelMount& share = byLabel[group.first.first];
+    share.label = group.first.first;
     bool missing = false, mismatch = false, unopened = false;
     for (const Entry* e : group.second) {
       const BlobLoc* loc = store.Find(e->sha256);
@@ -397,10 +405,12 @@ Mounted Mount(Env& env, const Store& store, const Manifest& manifest, const Plat
     }
     if (missing) {
       ++result.missing;
+      ++share.missing;
       continue;
     }
     if (mismatch || unopened) {
       ++result.refused;
+      ++share.refused;
       continue;
     }
     const auto it = labelIndex.emplace(group.first.first, static_cast<std::uint32_t>(result.labels.size()));
@@ -430,6 +440,7 @@ Mounted Mount(Env& env, const Store& store, const Manifest& manifest, const Plat
       firstChunkOfLabel.emplace(group.first.first, rec.chunk);
     }
     ++result.names;
+    ++share.names;
   }
   // The records of 0 bytes (see the header). A label's own records mount only when the label is on, they are this platform's (or name
   // none, a top-level record), and the label mounted an object: they name that label's first chunk, a chunk that exists, which the
@@ -442,6 +453,9 @@ Mounted Mount(Env& env, const Store& store, const Manifest& manifest, const Plat
     if (chunk == firstChunkOfLabel.end()) {
       ++noChunk[e.label];
       ++result.refused;
+      LabelMount& share = byLabel[e.label];
+      share.label = e.label;
+      ++share.refused;
       continue;
     }
     nevr_shadow::Record rec;
@@ -455,6 +469,7 @@ Mounted Mount(Env& env, const Store& store, const Manifest& manifest, const Plat
     input.records.push_back(rec);
     ++result.records;
     ++result.empty_records;
+    ++emptiesOf[e.label];
   }
   for (const auto& kv : noChunk) {
     env.Event(EventLevel::kWarn, "cdn_mount",
@@ -463,6 +478,7 @@ Mounted Mount(Env& env, const Store& store, const Manifest& manifest, const Plat
   }
   if (input.records.empty()) {
     for (const std::int64_t h : input.handles) env.CloseBlob(h);
+    exportLabels();
     return result;
   }
   const nevr_shadow::Status status = nevr_shadow::Shadow::Build(input, &result.shadow);
@@ -472,13 +488,19 @@ Mounted Mount(Env& env, const Store& store, const Manifest& manifest, const Plat
               {{"result", "refused"}, {"reason", nevr_shadow::StatusName(status)},
                {"consequence", "nothing is served from this set; the game's own data shows"}});
     result.refused += result.names + result.empty_records;
+    for (auto& kv : byLabel) {
+      kv.second.refused += kv.second.names + emptiesOf[kv.first];
+      kv.second.names = 0;
+    }
     result.names = 0;
     result.records = 0;
     result.empty_records = 0;
     result.labels.clear();
+    exportLabels();
     return result;
   }
   result.files = input.handles.size();
+  exportLabels();
   return result;
 }
 

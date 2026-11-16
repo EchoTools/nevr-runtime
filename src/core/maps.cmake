@@ -67,6 +67,11 @@ target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_session_pin.cpp"
 # The dedicated server's maps hold, pure (core/map_server_hold.h; ADR 0048 decisions 13, 17 and 18): the timeout from the set's
 # size and the measured rate, the one group a server fetches, the hold's state, the join composition and the signed-only rule.
 # Its PC glue is runtime/server/map_hold.cpp and join_hold.cpp. Platform-free: no PCH, no Log().
+# The cargo pin's pure core (core/cargo_session_pin.h; PLAN-v7 5.5 R7): the pin over the records of the pin labels, the boot status over
+# the gate's tokens and the decision with its notice lines. Platform-free: no PCH, no Log().
+set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/cargo_session_pin.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/cargo_session_pin.cpp")
+
 set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/map_server_hold.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_server_hold.cpp")
 
@@ -166,4 +171,15 @@ if(BUILD_TESTING AND GTest_FOUND)
   target_include_directories(test_combat_level_class PRIVATE "${CMAKE_SOURCE_DIR}/src")
   target_link_libraries(test_combat_level_class PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk)
   gtest_discover_tests(test_combat_level_class DISCOVERY_MODE PRE_TEST)
+
+  # The cargo pin's pure core (core/cargo_session_pin.h; PLAN-v7 5.5 R7): the golden pin, the record rules, the whole-set rule, the
+  # gate-first boot status and the 16 decision rows with their notice lines. cdn_plan.cpp is the policy's StateOf, which the core does
+  # not link (the runtime does).
+  add_executable(test_cargo_session_pin "${CMAKE_CURRENT_LIST_DIR}/tests/test_cargo_session_pin.cpp"
+    "${CMAKE_SOURCE_DIR}/src/cdn/cdn_plan.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/tests/test_cargo_session_pin.cpp" "${CMAKE_SOURCE_DIR}/src/cdn/cdn_plan.cpp"
+    PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  target_include_directories(test_cargo_session_pin PRIVATE "${CMAKE_SOURCE_DIR}/src")
+  target_link_libraries(test_cargo_session_pin PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk)
+  gtest_discover_tests(test_cargo_session_pin DISCOVERY_MODE PRE_TEST)
 endif()

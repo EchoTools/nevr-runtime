@@ -497,6 +497,41 @@ void ALabelThatIsOffAndAnotherPlatformsEntryAreNotMounted() {
   QCHECK(mounted.shadow->Find(kArchive, 1, &f, &user) && user == 0);
 }
 
+void PerLabelSharesSplitTheMountByLabel() {
+  // MakeFrame(bytes, size): a frame whose content size is `bytes` and whose length is `size`. The names are the entries' name ids.
+  constexpr std::uint64_t kFrameABytes = 300;
+  constexpr std::size_t kFrameASize = 120;
+  constexpr std::uint64_t kFrameBBytes = 500;
+  constexpr std::size_t kFrameBSize = 200;
+  constexpr std::uint64_t kWrongBytes = 301;  // one byte more than the stored frame's content size
+  constexpr std::uint64_t kNameOne = 1;
+  constexpr std::uint64_t kNameTwo = 2;
+  constexpr std::uint64_t kNameWrong = 4;
+  constexpr std::uint64_t kNameFive = 5;
+  constexpr std::size_t kLabelsMounted = 2;
+  FakeEnv env;
+  std::unique_ptr<nc::Store> store = Open(env, TestLimits());
+  const std::string a = MakeFrame(kFrameABytes, kFrameASize, 'a'), b = MakeFrame(kFrameBBytes, kFrameBSize, 'b');
+  Put(*store, a, kFrameABytes);  // b is never stored
+  nc::Manifest m;
+  m.labels = {"game", "extra", "other"};
+  nc::Entry wrong = MakeEntry("extra", kOther, kNameWrong, a, kFrameABytes);
+  wrong.bytes = kWrongBytes;  // the store holds kFrameABytes bytes: a size mismatch refuses the name
+  m.entries = {MakeEntry("game", kArchive, kNameOne, a, kFrameABytes), MakeEntry("game", kOther, kNameTwo, b, kFrameBBytes), wrong,
+               MakeEntry("other", kArchive, kNameFive, a, kFrameABytes)};
+  nc::Policy policy;
+  policy.overrides["extra"] = nc::LabelState::kOn;   // unlisted labels default to off: `extra` must be on to have a share
+  policy.overrides["other"] = nc::LabelState::kOff;  // a label the policy turns off has no share
+  const nc::Mounted mounted = nc::Mount(env, *store, m, nc::kAndroidArm64, policy);
+  QCHECK(mounted.per_label.size() == kLabelsMounted);
+  // Sorted by label: "extra" first (its one name refused), then "game" (one name mounted, one missing).
+  QCHECK(mounted.per_label[0].label == "extra" && mounted.per_label[0].names == 0 && mounted.per_label[0].missing == 0 &&
+         mounted.per_label[0].refused == 1);
+  QCHECK(mounted.per_label[1].label == "game" && mounted.per_label[1].names == 1 && mounted.per_label[1].missing == 1 &&
+         mounted.per_label[1].refused == 0);
+  QCHECK(mounted.names == 1 && mounted.missing == 1 && mounted.refused == 1);
+}
+
 void ARecordOfZeroBytesPointsAtARealChunkWithSizeZero() {
   FakeEnv env;
   std::unique_ptr<nc::Store> store = Open(env, TestLimits());
@@ -687,6 +722,7 @@ int main() {
   ARecordResolvesLikeTheEngineDoes();
   ANameWhoseBlobIsNotHeldIsLeftOutWholeAndCounted();
   ALabelThatIsOffAndAnotherPlatformsEntryAreNotMounted();
+  PerLabelSharesSplitTheMountByLabel();
   ARecordOfZeroBytesPointsAtARealChunkWithSizeZero();
   EmptyRecordsWithNoObjectToBorrowAChunkFromAreRefused();
   EmptyRecordsOfALabelThatIsOffDoNotMount();

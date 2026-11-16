@@ -11,3 +11,4 @@
 {"file":"src/core/tests/map_session_pin_test.cpp","tests":["build","gtest:test_map_session_pin_core","go:cmd/test-map","pytest:test_config_yaml_source"]}
 {"file":"src/core/tests/script_image_builders.h","tests":["build","gtest:test_map_scripts","gtest:test_script_image_rules","just:test-quest-shared","go:cmd/test-map","pytest:test_config_yaml_source"]}
 {"file":"src/core/tests/script_image_rules_test.cpp","tests":["build","gtest:test_script_image_rules","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/tests/test_cargo_session_pin.cpp","tests":["build","gtest:test_cargo_session_pin","go:cmd/test-map","pytest:test_config_yaml_source"]}
