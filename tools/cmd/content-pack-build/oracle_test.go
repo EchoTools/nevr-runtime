@@ -231,8 +231,9 @@ func TestAPlantedDifferenceInADeclaredFieldIsNamed(t *testing.T) {
 // tac-mod entry, the OVERCHARGE bubble rows), the three NEUTRON steps one each (the point tac-mod entry,
 // required_charge, the barrier wall's explosion rows), the UMBRAL VEIL step one (the smoke tac-mod entry), the two
 // MEDIGUN steps one each (ability_properties.medigun, the MEDIGUN bubble rows), and the map terminal step 12 (its actor
-// table, its CScriptCR press events and labels, and one per other type of actor_copy.py's TYPE_NAMES, 10).
-const shippedFields = 40
+// table, its CScriptCR press events and labels, and one per other type of actor_copy.py's TYPE_NAMES, 10), and the
+// OVERCHARGE arrow mesh step four, one per type of the cross's records.
+const shippedFields = 44
 
 func TestTheDeclaredFieldsOfTheShippedStepsAreWellFormed(t *testing.T) {
 	t.Parallel()

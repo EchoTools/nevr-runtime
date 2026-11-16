@@ -225,6 +225,8 @@ func TestTheProductionStepsAreTheEchoCombatOnesInOrder(t *testing.T) {
 		// steps_buff.go first: the files' init functions run in file-name order
 		"equipment lists offer the OVERCHARGE tac mod",
 		"each combat player's actor gets OVERCHARGE's own heal bubble",
+		// steps_buff_fx_arrow.go after steps_buff.go, before steps_dot_constraints.go, by file name
+		"OVERCHARGE's purple arrow mesh: the cross's four records under fx_overcharge_arrow",
 		"DOT FIELD magazine drops its leftover rigid-attach rows",
 		"DOT FIELD magazine drops its leftover parented-constraint rows",
 		"DOT FIELD dampener starts off and its nodes sit at the origin",

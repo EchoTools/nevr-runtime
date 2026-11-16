@@ -60,8 +60,10 @@ var gunPatchTables = map[uint64]map[uint64]string{
 // tables are levelTableSteps' and dotDampTables' resources, counted already. Which component tables those are is the
 // shipped data's and is not established without it, so they are counted as they come (mapTermComponentTables), each
 // one of actor_copy.py's TYPE_NAMES (mapTermResourcesNamed), and any other resource the step changes fails here.
-// (5 + 2 + 2 + 2 - 1 + 1 + 1) x 5 + 1 + 1 + 2 + 1 + 1 + 1 x 4 = 70, plus the map buttons' component tables, over both
-// client sets.
+// steps_buff_fx_arrow.go changes the four records of the OVERCHARGE arrow mesh under fx_overcharge_arrow, one per type,
+// all four new resources in Sets[0] (buffArrowResources).
+// (5 + 2 + 2 + 2 - 1 + 1 + 1) x 5 + 1 + 1 + 2 + 1 + 1 + 1 x 4 = 70, plus the arrow's 4 and the map buttons' component
+// tables, over both client sets.
 // The count covers every step, so a step that changes a resource it does not name fails here; what each data step
 // writes into its own tables is checked by that step's own test, and the gun patch's files by gunPatchTables above.
 const (
@@ -87,6 +89,8 @@ const (
 	// steps_buff.go: the global level's heal bubble table, one resource; its tac-mod step's mp_equipment is equipmentResources.
 	// steps_medigun.go's MEDIGUN bubble rows are in the same table
 	healBubbleTableResources = 1
+	// steps_buff_fx_arrow.go: the cross's four records under fx_overcharge_arrow, one per type; new resources in Sets[0]
+	buffArrowResources = 4
 	// steps_mapterm.go: each map level's actor table 347869ce492dc7da, which gets the three copies of the REMATCH subtree
 	mapTermActorTables = 1
 )
@@ -215,10 +219,10 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 	}
 	levelTables := levelTableSteps + dotConstraintTables + dotDampTables + dotFieldTables - dotFieldTablesSharedWithDamp + dotFieldTexStreamTables + pointExplosionTables
 	if want := levelTables*len(droneLevels) + equipmentResources + weaponSettingsResources + dotFieldMaterialResources + rulesCanvasResources + healBubbleTableResources +
-		mapTermActorTables*len(mapTermLevels) + mapTermComponentTables; changed != want {
-		t.Errorf("%d resources changed, want %d (%d level tables + %d DOT constraint tables + %d DOT dampener tables + %d DOT FIELD tables - %d shared + %d DOT FIELD texture streaming table + %d explosion table, x %d levels, mp_equipment, mp_weapon_settings, %d red materials, the RULES canvas, the global level's heal bubble table, %d actor table x %d map levels and %d map-button component tables)", changed,
+		buffArrowResources + mapTermActorTables*len(mapTermLevels) + mapTermComponentTables; changed != want {
+		t.Errorf("%d resources changed, want %d (%d level tables + %d DOT constraint tables + %d DOT dampener tables + %d DOT FIELD tables - %d shared + %d DOT FIELD texture streaming table + %d explosion table, x %d levels, mp_equipment, mp_weapon_settings, %d red materials, the RULES canvas, the global level's heal bubble table, %d OVERCHARGE arrow records, %d actor table x %d map levels and %d map-button component tables)", changed,
 			want, levelTableSteps, dotConstraintTables, dotDampTables, dotFieldTables, dotFieldTablesSharedWithDamp, dotFieldTexStreamTables, pointExplosionTables, len(droneLevels), dotFieldMaterialResources,
-			mapTermActorTables, len(mapTermLevels), mapTermComponentTables)
+			buffArrowResources, mapTermActorTables, len(mapTermLevels), mapTermComponentTables)
 	}
 	t.Log(fmt.Sprintf("%d resources match the gun patch's", len(p.changes[Sets[0]])))
 }
