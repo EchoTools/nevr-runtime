@@ -58,8 +58,10 @@ class Mounter {
   // under -require-signed-plugins refuses a script whose `official` is false.
   virtual Grant Script(const std::string& owner, std::uint64_t hash, std::int64_t held, const std::string& sha256,
                        bool official) = 0;
-  virtual Grant Rekey(const std::string& owner, std::uint64_t hash, std::uint64_t stock_source,
-                      const std::string& stock_sha256) = 0;
+  // `version_dir`: the folder of the map version being mounted (UTF-8, in the cache); a platform that serves a rekey from a copy of
+  // the player's stock file writes the copy below it, so the copy lives and goes with the version.
+  virtual Grant Rekey(const std::string& owner, std::uint64_t hash, std::uint64_t stock_source, const std::string& stock_sha256,
+                      const std::string& version_dir) = 0;
   virtual Grant Set(const std::string& owner, std::int64_t held, const std::string& label, const std::string& sha256,
                     bool verified_stamp) = 0;
   // !ok when any pair was dropped (not allowed, or over the limit); reason "alias_partial". The callee only stages: the decision

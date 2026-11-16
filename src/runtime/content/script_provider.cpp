@@ -13,6 +13,7 @@
 #include "core/log_text.h"
 #include "core/logging.h"
 #include "core/map_script_check.h"
+#include "cdn/env_windows.h"
 #include "core/script_image_rules.h"
 #include "quest/data/sha256.h"
 #include "runtime/content/content_pack.h"
@@ -27,6 +28,7 @@ constexpr std::size_t kLogTextBytes = 300;        // the most of a text one log 
 constexpr std::size_t kFinalPathStartChars = 512;  // the first buffer for GetFinalPathNameByHandleW; grown when it is short
 constexpr std::wstring_view kVolumePrefix = L"\\\\?\\";
 constexpr std::wstring_view kUncPrefix = L"\\\\?\\UNC\\";
+constexpr const char* kEnvTag = "[NEVR.MAPS]";  // the tag the PC Env writes its records under (the maps channel's)
 
 struct Entry {
   std::string owner;
@@ -65,11 +67,12 @@ std::string Hash16(std::uint64_t hash) {
 std::string Printable(const std::string& text) { return nevr_log_text::Printable(text.c_str(), kLogTextBytes); }
 
 // One record per Register or RegisterRekey: Info when the script is held, Warning with the token when it is refused.
-void LogOutcome(const char* kind, const std::string& owner, std::uint64_t hash, const Outcome& o, const std::wstring& path) {
+void LogOutcome(const char* kind, const std::string& owner, std::uint64_t hash, const Outcome& o, const std::wstring& path,
+                const std::string& extra = std::string()) {
   if (o.ok()) {
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.MAPS] map script held kind=%s owner=%s hash=%s file=\"%s\" (the game's loads of scripts\\%s.dll map this file)",
-        kind, Printable(owner).c_str(), Hash16(hash).c_str(), Printable(nevr_content::Narrow(path)).c_str(),
+        "[NEVR.MAPS] map script held kind=%s owner=%s hash=%s file=\"%s\"%s (the game's loads of scripts\\%s.dll map this file)",
+        kind, Printable(owner).c_str(), Hash16(hash).c_str(), Printable(nevr_content::Narrow(path)).c_str(), extra.c_str(),
         Hash16(hash).c_str());
     return;
   }
@@ -229,8 +232,65 @@ Outcome RegisterHeld(const std::string& owner, std::uint64_t hash, std::int64_t 
   return HoldLocked(owner, hash, sha256, official, file, std::move(final_path));
 }
 
+// The sha-256 of the whole of `file`, read through it from its start; refused when it cannot be read or passes no size bound.
+Outcome HashHeld(HANDLE file, std::uint64_t byte_limit, std::string* digest) {
+  std::vector<std::uint8_t> bytes;
+  const Outcome read = ReadAll(file, &bytes, /*pinned_bytes=*/0, byte_limit);
+  if (!read.ok()) return read;
+  *digest = nevr_quest::data::Sha256Hex(bytes.data(), bytes.size());
+  return Outcome{};
+}
+
+// The copy's file, open for reading with read sharing only: while it is held nothing can write it or delete it.
+HANDLE OpenCopyHeld(const std::wstring& path) {
+  return CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+}
+
+// The copy a rekey is served from: `<copy_dir>\scripts\<hash16>.dll`, the stock bytes `stock` (whose digest is `stock_sha256`).
+// A copy already there whose bytes hash to `stock_sha256` is kept; any other file there is replaced. The copy is written through the
+// PC Env's atomic write (a temporary beside it, flushed, moved over the target), opened share-read, and hashed again through the held
+// handle, so the file held is the file that was checked. Returns the held handle, or INVALID_HANDLE_VALUE with `refusal` set.
+HANDLE HoldCopy(const std::wstring& copy_path, const std::vector<std::uint8_t>& stock, const std::string& stock_sha256,
+                std::uint64_t byte_limit, bool* kept, Outcome* refusal) {
+  *kept = false;
+  HANDLE existing = OpenCopyHeld(copy_path);
+  if (existing != INVALID_HANDLE_VALUE) {
+    std::string digest;
+    if (HashHeld(existing, byte_limit, &digest).ok() && digest == stock_sha256) {
+      *kept = true;
+      return existing;
+    }
+    CloseHandle(existing);  // a wrong copy: replaced below (the move over a file still open elsewhere fails and says so)
+  }
+  nevr_cdn::WindowsEnv env(kEnvTag);
+  const std::size_t slash = copy_path.find_last_of(L'\\');
+  const std::string dir = nevr_content::Narrow(copy_path.substr(0, slash));
+  const std::string data(stock.begin(), stock.end());
+  if (!env.MakeDirs(dir) || !env.WriteFileAtomically(nevr_content::Narrow(copy_path), data)) {
+    *refusal = Refuse("copy_unwritable", "error=" + std::to_string(GetLastError()));
+    return INVALID_HANDLE_VALUE;
+  }
+  HANDLE file = OpenCopyHeld(copy_path);
+  if (file == INVALID_HANDLE_VALUE) {
+    *refusal = Refuse("copy_unwritable", "open error=" + std::to_string(GetLastError()));
+    return INVALID_HANDLE_VALUE;
+  }
+  std::string digest;
+  Outcome again = HashHeld(file, byte_limit, &digest);
+  if (again.ok() && digest != stock_sha256) again = Refuse("copy_sha_mismatch", "sha256=" + digest);
+  if (!again.ok()) {
+    CloseHandle(file);
+    *refusal = again;
+    return INVALID_HANDLE_VALUE;
+  }
+  return file;
+}
+
+// A rekey: the player's own stock file, checked, copied on the device and the copy served under `hash`. The copy is its own file, so
+// the game's load of it is a module of its own, not the stock script's (a path the loader already has maps to the same module).
 Outcome RegisterStock(const std::string& owner, std::uint64_t hash, std::uint64_t stock_source,
-                      const std::string& stock_sha256, bool official, std::wstring* held_path) {
+                      const std::string& stock_sha256, bool official, const std::wstring& copy_dir, std::wstring* held_path,
+                      bool* kept) {
   std::wstring stock_path;
   std::uint64_t byte_limit = 0;
   {
@@ -240,27 +300,30 @@ Outcome RegisterStock(const std::string& owner, std::uint64_t hash, std::uint64_
     stock_path = CanonicalScriptPath(g_state.inputs.exe_dir, stock_source);
     byte_limit = ByteLimitLocked();
   }
-  HANDLE file = CreateFileW(stock_path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                            FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file == INVALID_HANDLE_VALUE) {
+  if (copy_dir.empty()) return Refuse("bad_copy_dir", "no folder for the copy");
+  HANDLE stock_file = CreateFileW(stock_path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (stock_file == INVALID_HANDLE_VALUE) {
     return Refuse("stock_missing", Hash16(stock_source) + " error=" + std::to_string(GetLastError()));
   }
-  std::vector<std::uint8_t> bytes;
-  Outcome result = ReadAll(file, &bytes, /*pinned_bytes=*/0, byte_limit);
-  if (result.ok()) {
-    const std::string got = nevr_quest::data::Sha256Hex(bytes.data(), bytes.size());
-    if (got != stock_sha256) result = Refuse("stock_sha_mismatch", Hash16(stock_source) + " sha256=" + got);
-  }
-  if (result.ok()) {
-    // A rekeyed script passes the same image rules as a downloaded one (ADR 0048 decision 6).
-    const nevr_script_image::ImageVerdict verdict = nevr_script_image::CheckPeScript(bytes.data(), bytes.size());
-    if (!verdict.ok()) result = Refuse(nevr_map_script::ImageRefusalToken(verdict.reason), verdict.detail);
-  }
+  std::vector<std::uint8_t> stock;
+  Outcome result = ReadAll(stock_file, &stock, /*pinned_bytes=*/0, byte_limit);
+  CloseHandle(stock_file);  // the stock file is only read; the copy is what is held
+  if (!result.ok()) return result;
+  const std::string got = nevr_quest::data::Sha256Hex(stock.data(), stock.size());
+  if (got != stock_sha256) return Refuse("stock_sha_mismatch", Hash16(stock_source) + " sha256=" + got);
+  // A rekeyed script passes the same image rules as a downloaded one (ADR 0048 decision 6).
+  const nevr_script_image::ImageVerdict verdict = nevr_script_image::CheckPeScript(stock.data(), stock.size());
+  if (!verdict.ok()) return Refuse(nevr_map_script::ImageRefusalToken(verdict.reason), verdict.detail);
+
+  const std::string name = Hash16(hash);
+  const std::wstring copy_path = copy_dir + L"\\scripts\\" + std::wstring(name.begin(), name.end()) + L".dll";
+  HANDLE file = HoldCopy(copy_path, stock, stock_sha256, byte_limit, kept, &result);
+  if (file == INVALID_HANDLE_VALUE) return result;
   std::wstring final_path;
-  if (result.ok() && !FinalPathOfHandle(file, &final_path)) {
+  if (!FinalPathOfHandle(file, &final_path)) {
     result = Refuse("no_final_path", "error=" + std::to_string(GetLastError()));
-  }
-  if (result.ok()) {
+  } else {
     *held_path = final_path;
     std::lock_guard<std::mutex> lock(g_mutex);
     result = HoldLocked(owner, hash, stock_sha256, official, file, std::move(final_path));
@@ -290,10 +353,11 @@ Outcome RegisterDerived(const std::string& owner, std::uint64_t hash, std::int64
 }
 
 Outcome RegisterRekey(const std::string& owner, std::uint64_t hash, std::uint64_t stock_source,
-                      const std::string& stock_sha256, bool official) {
+                      const std::string& stock_sha256, bool official, const std::wstring& copy_dir) {
   std::wstring path;
-  const Outcome o = RegisterStock(owner, hash, stock_source, stock_sha256, official, &path);
-  LogOutcome("rekey", owner, hash, o, path);
+  bool kept = false;
+  const Outcome o = RegisterStock(owner, hash, stock_source, stock_sha256, official, copy_dir, &path, &kept);
+  LogOutcome("rekey", owner, hash, o, path, o.ok() ? (kept ? " copy=kept stock=" + Hash16(stock_source) : " copy=written stock=" + Hash16(stock_source)) : std::string());
   return o;
 }
 

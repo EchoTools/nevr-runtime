@@ -83,6 +83,30 @@ void WriteBytes(const std::wstring& path, const std::vector<std::uint8_t>& bytes
   CloseHandle(h);
 }
 
+std::vector<std::uint8_t> ReadBytes(const std::wstring& path) {
+  std::vector<std::uint8_t> bytes;
+  HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                         FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return bytes;
+  LARGE_INTEGER size{};
+  if (GetFileSizeEx(h, &size)) {
+    bytes.resize(static_cast<std::size_t>(size.QuadPart));
+    DWORD got = 0;
+    if (!ReadFile(h, bytes.data(), static_cast<DWORD>(bytes.size()), &got, nullptr)) bytes.clear();
+  }
+  CloseHandle(h);
+  return bytes;
+}
+
+// The file's identity (volume and file index): a copy that was kept keeps it, one that was replaced does not.
+bool FileIdentity(const std::wstring& path, BY_HANDLE_FILE_INFORMATION* out) {
+  HANDLE h = CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return false;
+  const bool ok = GetFileInformationByHandle(h, out) != FALSE;
+  CloseHandle(h);
+  return ok;
+}
+
 bool SameFile(const std::wstring& a, const std::wstring& b) {
   BY_HANDLE_FILE_INFORMATION ia{}, ib{};
   HANDLE ha = CreateFileW(a.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
@@ -145,6 +169,10 @@ class MapScripts : public ::testing::Test {
     if (!o.ok()) Keep(h);
     return o;
   }
+
+  // Where a rekey's copy goes: the channel's folder below a version's folder.
+  std::wstring CopyDir() const { return cache_ + L"\\rekeyed"; }
+  std::wstring CopyPath(std::uint64_t hash) const { return CopyDir() + L"\\scripts\\" + Hash16W(hash) + L".dll"; }
 
   std::wstring GamePath(std::uint64_t hash) const { return exe_dir_ + L"\\scripts\\" + Hash16W(hash) + L".dll"; }
 
@@ -357,17 +385,87 @@ TEST_F(MapScripts, AFileWhoseBytesAreNotItsDigestAndBadClaimsAreRefused) {
   EXPECT_EQ(maps::Register("map:arena1", kHash, h, Sha(image), true).reason, "not_configured");
 }
 
-TEST_F(MapScripts, ARekeyServesThePlayersOwnStockFileAndRefusesAWrongDigest) {
+TEST_F(MapScripts, ARekeyServesACopyOfThePlayersStockFileAndRefusesAWrongDigest) {
   const std::vector<std::uint8_t> stock = BuildDll();
   WriteBytes(GamePath(kStockHash), stock);
-  EXPECT_EQ(maps::RegisterRekey("map:arena1", kHash, kStockHash, std::string(nevr_cdn::kSha256HexChars, 'b')).reason, "stock_sha_mismatch");
-  EXPECT_EQ(maps::RegisterRekey("map:arena1", kHash, kOtherHash, Sha(stock)).reason, "stock_missing");
-  EXPECT_EQ(maps::RegisterRekey("map:arena1", kStockHash, kStockHash, Sha(stock)).reason, "stock_hash");
-  ASSERT_TRUE(maps::RegisterRekey("map:arena1", kHash, kStockHash, Sha(stock)).ok());
+  EXPECT_EQ(maps::RegisterRekey("map:arena1", kHash, kStockHash, std::string(nevr_cdn::kSha256HexChars, 'b'), false, CopyDir()).reason, "stock_sha_mismatch");
+  EXPECT_EQ(maps::RegisterRekey("map:arena1", kHash, kOtherHash, Sha(stock), false, CopyDir()).reason, "stock_missing");
+  EXPECT_EQ(maps::RegisterRekey("map:arena1", kStockHash, kStockHash, Sha(stock), false, CopyDir()).reason, "stock_hash");
+  EXPECT_EQ(maps::RegisterRekey("map:arena1", kHash, kStockHash, Sha(stock), false, L"").reason, "bad_copy_dir");
+  EXPECT_EQ(maps::HeldCount(), 0u);
+  ASSERT_TRUE(maps::RegisterRekey("map:arena1", kHash, kStockHash, Sha(stock), false, CopyDir()).ok());
   std::wstring load;
   ASSERT_TRUE(maps::Rewrite(Lower(GamePath(kHash)).c_str(), &load, nullptr, nullptr));
-  EXPECT_TRUE(SameFile(load, GamePath(kStockHash)));
+  EXPECT_TRUE(SameFile(load, CopyPath(kHash))) << Narrow(load);
+  EXPECT_FALSE(SameFile(load, GamePath(kStockHash)));
   EXPECT_TRUE(maps::Holds("map:arena1", kHash));
+}
+
+// The point of the copy: the game's load of the rekeyed path must be a module of its own. A load of the stock file's path gives the
+// stock module (one HMODULE per file), so a script that sets up bindings twice would hand the engine one module for two scripts.
+// The bytes of the two files are the same, so the digests are equal.
+TEST_F(MapScripts, TheCopyAndTheStockFileLoadAsTwoModulesWithEqualDigests) {
+  const std::vector<std::uint8_t> stock = BuildDll();
+  WriteBytes(GamePath(kStockHash), stock);
+  ASSERT_TRUE(maps::RegisterRekey("map:arena1", kHash, kStockHash, Sha(stock), false, CopyDir()).ok());
+  std::wstring load;
+  ASSERT_TRUE(maps::Rewrite(Lower(GamePath(kHash)).c_str(), &load, nullptr, nullptr));
+  HMODULE from_stock = LoadLibraryExW(GamePath(kStockHash).c_str(), nullptr, 0);
+  ASSERT_NE(from_stock, nullptr) << GetLastError();
+  HMODULE from_copy = LoadLibraryExW(load.c_str(), nullptr, 0);
+  ASSERT_NE(from_copy, nullptr) << GetLastError();
+  EXPECT_NE(from_copy, from_stock);
+  EXPECT_EQ(Sha(ReadBytes(load)), Sha(ReadBytes(GamePath(kStockHash))));
+  EXPECT_EQ(Sha(ReadBytes(load)), Sha(stock));
+  FreeLibrary(from_copy);
+  FreeLibrary(from_stock);
+}
+
+// A copy that is already there with the stock's digest is kept (the same file, not written again); any other file in its place is
+// replaced, and the bytes held are the stock's.
+TEST_F(MapScripts, ARightCopyIsKeptAndAWrongOneIsReplaced) {
+  const std::vector<std::uint8_t> stock = BuildDll();
+  WriteBytes(GamePath(kStockHash), stock);
+  WriteBytes(CopyPath(kHash), {9, 9, 9, 9});
+  ASSERT_TRUE(maps::RegisterRekey("map:arena1", kHash, kStockHash, Sha(stock), false, CopyDir()).ok());
+  EXPECT_EQ(ReadBytes(CopyPath(kHash)), stock);
+  BY_HANDLE_FILE_INFORMATION written{};
+  ASSERT_TRUE(FileIdentity(CopyPath(kHash), &written));
+  maps::Forget();
+  Configure();
+  ASSERT_TRUE(maps::RegisterRekey("map:arena1", kHash, kStockHash, Sha(stock), false, CopyDir()).ok());
+  BY_HANDLE_FILE_INFORMATION kept{};
+  ASSERT_TRUE(FileIdentity(CopyPath(kHash), &kept));
+  EXPECT_EQ(kept.nFileIndexLow, written.nFileIndexLow);
+  EXPECT_EQ(kept.nFileIndexHigh, written.nFileIndexHigh);
+  EXPECT_EQ(ReadBytes(CopyPath(kHash)), stock);
+}
+
+// The copy is held for the process with read sharing only: nothing can rewrite or delete it, so the file the loader maps is the one
+// that was hashed.
+TEST_F(MapScripts, TheHeldCopyCanNeitherBeWrittenNorDeleted) {
+  const std::vector<std::uint8_t> stock = BuildDll();
+  WriteBytes(GamePath(kStockHash), stock);
+  ASSERT_TRUE(maps::RegisterRekey("map:arena1", kHash, kStockHash, Sha(stock), false, CopyDir()).ok());
+  EXPECT_FALSE(DeleteFileW(CopyPath(kHash).c_str()));
+  HANDLE writer = CreateFileW(CopyPath(kHash).c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  EXPECT_EQ(writer, INVALID_HANDLE_VALUE);
+  if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
+  // The stock file is only read: it is not held, and no stock byte is written anywhere but the copy.
+  EXPECT_EQ(ReadBytes(GamePath(kStockHash)), stock);
+  HANDLE stock_writer = CreateFileW(GamePath(kStockHash).c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+  EXPECT_NE(stock_writer, INVALID_HANDLE_VALUE) << "the stock file is still held";
+  if (stock_writer != INVALID_HANDLE_VALUE) CloseHandle(stock_writer);
+}
+
+// A copy that cannot be written is a refusal that holds nothing: here the folder the copy needs is a file.
+TEST_F(MapScripts, ACopyThatCannotBeWrittenRefusesAndHoldsNothing) {
+  const std::vector<std::uint8_t> stock = BuildDll();
+  WriteBytes(GamePath(kStockHash), stock);
+  WriteBytes(CopyDir(), {1});
+  EXPECT_EQ(maps::RegisterRekey("map:arena1", kHash, kStockHash, Sha(stock), false, CopyDir()).reason, "copy_unwritable");
+  EXPECT_EQ(maps::HeldCount(), 0u);
 }
 
 // Holds is the resource-set registry's script waiver (SetScriptWaiver): true only for the owner the provider holds
@@ -389,7 +487,7 @@ TEST_F(MapScripts, WithdrawDropsEveryScriptAndRekeyOfTheOwnerAndKeepsAnotherOwne
   const std::vector<std::uint8_t> stock = BuildDll();
   WriteBytes(GamePath(kStockHash), stock);
   ASSERT_TRUE(RegisterImage(BuildDll()).ok());
-  ASSERT_TRUE(maps::RegisterRekey("map:arena1", kOtherHash, kStockHash, Sha(stock)).ok());
+  ASSERT_TRUE(maps::RegisterRekey("map:arena1", kOtherHash, kStockHash, Sha(stock), false, CopyDir()).ok());
   ASSERT_TRUE(RegisterImage(BuildDll(), kThirdHash, "map:arena2").ok());
   const std::wstring held = cache_ + L"\\" + Hash16W(kHash) + L"-1.dll";
   EXPECT_FALSE(DeleteFileW(held.c_str()));
@@ -672,7 +770,7 @@ TEST_F(MapScripts, ARekeyedStockFileRunsThePeRulesToo) {
   import.nonempty_directory = 1;
   const std::vector<std::uint8_t> stock = BuildDll(import);
   WriteBytes(GamePath(kStockHash), stock);
-  EXPECT_EQ(maps::RegisterRekey("map:arena1", kHash, kStockHash, Sha(stock)).reason, "pe_imports");
+  EXPECT_EQ(maps::RegisterRekey("map:arena1", kHash, kStockHash, Sha(stock), false, CopyDir()).reason, "pe_imports");
   EXPECT_EQ(maps::HeldCount(), 0u);
 }
 

@@ -39,6 +39,7 @@ namespace nevr_map_channel::pc {
 namespace {
 
 constexpr const char* kEnvTag = "[NEVR.MAPS]";  // the tag the PC env writes its records under
+constexpr const char* kRekeyCopyDir = "rekeyed";  // below a version folder: the copies of the player's stock scripts served as rekeys
 constexpr std::size_t kLockNameHexDigits = 16;  // the root lock's name: the first digits of sha256(root)
 constexpr std::uint32_t kStopWaitMs = 2000;     // the fetch's stop waits this long, then detaches (the fetch ends at its next transfer)
 constexpr std::uint32_t kServerQueueWaitMs = 500;  // a dedicated server's worker checks for a stop this often while no group is requested
@@ -116,8 +117,14 @@ class PcMounter : public nevr_maps::Mounter {
   }
 
   nevr_maps::Grant Rekey(const std::string& owner, std::uint64_t hash, std::uint64_t stock_source,
-                         const std::string& stock_sha256) override {
-    return Took(nevr_map_scripts::RegisterRekey(owner, hash, stock_source, stock_sha256));
+                         const std::string& stock_sha256, const std::string& version_dir) override {
+    // The copy of the player's stock file is written in a folder of its own below the version's folder (ADR 0048 decision 6), never
+    // among the members the fetch stamped (their paths are scripts/<hash16>.dll in the version folder itself).
+    std::wstring copy_dir = Wide(version_dir + "/" + kRekeyCopyDir);
+    for (wchar_t& c : copy_dir) {
+      if (c == L'/') c = L'\\';
+    }
+    return Took(nevr_map_scripts::RegisterRekey(owner, hash, stock_source, stock_sha256, /*official=*/false, copy_dir));
   }
 
   nevr_maps::Grant DerivedScript(const std::string& owner, std::uint64_t hash, std::int64_t held, const std::string& sha256,

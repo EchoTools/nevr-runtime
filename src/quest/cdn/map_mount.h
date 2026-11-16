@@ -34,7 +34,7 @@ class QuestMounter : public nevr_maps::Mounter {
                           bool official) override;
   // Refused `script_unsupported`: rekeys and rebuilt scripts need route A or recipes on the Quest.
   nevr_maps::Grant Rekey(const std::string& owner, std::uint64_t hash, std::uint64_t stock_source,
-                         const std::string& stock_sha256) override;
+                         const std::string& stock_sha256, const std::string& version_dir) override;
   nevr_maps::Grant Set(const std::string& owner, std::int64_t held, const std::string& label, const std::string& sha256,
                        bool verified_stamp) override;
   // `alias_partial` when any pair was dropped; the caller then withdraws the map whole.

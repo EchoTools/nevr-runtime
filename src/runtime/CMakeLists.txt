@@ -2394,12 +2394,19 @@ if(BUILD_TESTING)
     # Links the real Log(). No game file is read.
     set(_map_scripts_test_sources tests/test_map_scripts.cpp content/script_provider.cpp content/map_scripts_install.cpp
       content/content_json.cpp content/content_pack.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp
-      log/boot_log_tee.cpp)
+      log/boot_log_tee.cpp "${CMAKE_SOURCE_DIR}/src/cdn/env_windows.cpp")
     add_executable(test_map_scripts ${_map_scripts_test_sources})
     set_source_files_properties(${_map_scripts_test_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_definitions(test_map_scripts PRIVATE NEVR_USE_MINHOOK)
     target_include_directories(test_map_scripts PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_map_scripts PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core nlohmann_json::nlohmann_json)
+    # A rekey's copy is written through the PC Env's atomic write (cdn/env_windows.cpp), which needs libcurl, ws2_32 and BCrypt.
+    target_link_libraries(test_map_scripts PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core nlohmann_json::nlohmann_json
+      CURL::libcurl ws2_32)
+    if(MINGW)
+      add_dependencies(test_map_scripts nevr_runtime_bcrypt_minimal)
+      target_link_libraries(test_map_scripts PRIVATE
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>)
+    endif()
     gtest_discover_tests(test_map_scripts DISCOVERY_MODE PRE_TEST)
 
     # #593: Log() routes by boot phase. Links the real Log() (nevr_core) and the real boot tee.

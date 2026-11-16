@@ -169,6 +169,17 @@ The signed-only rule of decision 18 is `ServerMountsScripts`, which the mount ca
   (`map_types.h`) adds what only a map needs: a held share-read handle and its stamp, its final path, a directory listing, a
   removal and a rename of a whole directory. The hasher is the portable SHA-256 (`src/quest/data/sha256.h`): the Quest `Env`
   (`src/cdn/env_posix.cpp`) uses it today. The PC Env (`src/cdn/env_windows.cpp`) hashes with BCrypt instead.
+- A rekeyed script (decision 6) is served from a copy of the player's own stock script, made on the device: the PC's script provider
+  (`src/runtime/content/script_provider.cpp`, `RegisterRekey`) writes it to `<version dir>\rekeyed\scripts\<hash16>.dll` through
+  `nevr_cdn::WindowsEnv::WriteFileAtomically`, so the channel still adds nothing to the Env; the temporary file that call makes beside
+  the target is the Env's own, and it is moved over the target or deleted before the call returns. The copy is opened share-read, hashed
+  again through that handle (its digest must be the pin's `stock_sha256`) and held for the process. A copy already there with the right
+  digest is kept; any other file there is replaced. The reason for a copy: the loader gives one module per file, so a load of the
+  rekeyed path that was answered with the stock file's path returned the stock module. The rebuild's writer (`ChannelDeriver`,
+  `RegisterDerived`) is not reused, because it does a different job: it runs on the fetch thread, only for a pin with `edits`, applies
+  them under a recipe digest and stamp the manifest pins and the cache index records (`map_derive.h`), and the mount holds its output
+  by that stamp; a pin without `edits` (`rekeys` in `map_run.cpp`) has no recipe, no result digest and no stamp, so reusing it would
+  need a new field in the signed package format for no gain. The provider's copy has the digest that is already pinned, `stock_sha256`.
 - The limits are ADR 0045 decision 8's: one document's bytes, a recipe's buffers and the groups the cache keeps are shares of the
   device's memory and free space (`MapDocumentBytes`, `map_manifest.h`), never a constant. What a format defines stays constant in
   `map_format.h`, which cites the format.

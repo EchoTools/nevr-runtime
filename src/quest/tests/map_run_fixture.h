@@ -352,7 +352,7 @@ class FakeMounter : public Mounter {
     script_official.push_back(official);
     return Take(owner, held, !refuse_scripts.count(hash), "pe_rules");
   }
-  Grant Rekey(const std::string& owner, std::uint64_t hash, std::uint64_t, const std::string&) override {
+  Grant Rekey(const std::string& owner, std::uint64_t hash, std::uint64_t, const std::string&, const std::string&) override {
     calls.push_back("rekey " + owner + " " + std::to_string(hash));
     return Ok(!refuse_scripts.count(hash), "rekey_mismatch");
   }

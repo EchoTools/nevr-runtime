@@ -46,7 +46,8 @@ nevr_maps::Grant QuestMounter::Script(const std::string& owner, std::uint64_t ha
   return Granted();
 }
 
-nevr_maps::Grant QuestMounter::Rekey(const std::string&, std::uint64_t, std::uint64_t, const std::string&) {
+nevr_maps::Grant QuestMounter::Rekey(const std::string&, std::uint64_t, std::uint64_t, const std::string&,
+                                      const std::string&) {
   return Refused(kScriptUnsupported);
 }
 

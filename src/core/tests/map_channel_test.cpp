@@ -63,7 +63,7 @@ class CountingMounter : public nevr_maps::Mounter {
     ++calls;
     return nevr_maps::Grant{};
   }
-  nevr_maps::Grant Rekey(const std::string&, std::uint64_t, std::uint64_t, const std::string&) override {
+  nevr_maps::Grant Rekey(const std::string&, std::uint64_t, std::uint64_t, const std::string&, const std::string&) override {
     ++calls;
     return nevr_maps::Grant{};
   }

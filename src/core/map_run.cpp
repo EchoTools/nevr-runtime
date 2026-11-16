@@ -511,7 +511,7 @@ class MountRun {
     }
     for (const RekeyPin* r : rekeys) {
       if (held_by_other(r->hash)) return refuse_scripts("duplicate");
-      const Grant grant = mounter_.Rekey(owner, r->hash, r->stock_source, r->stock_sha256);
+      const Grant grant = mounter_.Rekey(owner, r->hash, r->stock_source, r->stock_sha256, version_dir);
       if (!grant.ok) return refuse_scripts(grant.reason);
     }
 

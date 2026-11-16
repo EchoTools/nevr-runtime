@@ -4,7 +4,8 @@
 // LoadLibraryW. A map's script is a file in the maps cache that the maps channel opened and holds; Register checks it
 // (core/script_image_rules.h) and remembers it under its hash, and the "map-scripts" load rewriter
 // (map_scripts_install.cpp) hands the loader that held file for a load of the canonical path. A rekeyed script is the
-// player's own stock DLL served under a new hash: no stock bytes ever travel.
+// player's own stock DLL, copied on the device and served under a new hash: no stock bytes ever travel, and the copy is a
+// file of its own, so the loader maps it as a module of its own (a load of the stock path would give the stock module).
 //
 // - The claim's refusals are the shared rules (core/map_script_check.h): a hash is refused when the game has its own file
 //   for it (stock_hash), the content pack carries it (pack_hash), or a map took it first (duplicate); so the content pack's
@@ -59,11 +60,16 @@ void SetRevoked(const std::vector<std::string>& revoked_sha256);
 Outcome Register(const std::string& owner, std::uint64_t hash, std::int64_t held_handle, const std::string& sha256,
                  bool rehash, std::uint64_t pinned_bytes = 0, bool official = false);
 
-// A rekeyed script: `hash` is served from the player's own `<exe dir>\scripts\<stock_source16>.dll`, which is opened, held
-// and hashed here and must be `stock_sha256`. The stock bytes pass the same size bound and PE rules as a downloaded script.
-// Tokens as Register, with stock_missing and stock_sha_mismatch in place of unreadable and sha_mismatch.
+// A rekeyed script: `hash` is served from a copy of the player's own `<exe dir>\scripts\<stock_source16>.dll`. The stock file is
+// opened, read and hashed here and must be `stock_sha256`; its bytes pass the same size bound and PE rules as a downloaded
+// script. The copy is `<copy_dir>\scripts\<hash16>.dll`: written through the PC Env's atomic write (nevr_cdn::WindowsEnv), opened
+// with read sharing only, hashed again through that handle (its digest must be `stock_sha256`) and held for the process. A copy
+// already there with the right digest is kept; any other file there is replaced. No stock byte leaves the device. The stock file is
+// not held. `copy_dir` is a folder of the maps cache (the channel passes one below the map version's folder).
+// Tokens as Register, with stock_missing and stock_sha_mismatch in place of unreadable and sha_mismatch, and bad_copy_dir (no
+// folder), copy_unwritable (the copy could not be written or opened) and copy_sha_mismatch (the copy's bytes are not the stock's).
 Outcome RegisterRekey(const std::string& owner, std::uint64_t hash, std::uint64_t stock_source,
-                      const std::string& stock_sha256, bool official = false);
+                      const std::string& stock_sha256, bool official, const std::wstring& copy_dir);
 
 // A rekeyed script the recipe rebuild wrote (core/map_derive.h) from the player's own stock script `stock_sha256`: the file is
 // `<version dir>\scripts\<hash16>.dll` in the maps cache, held through `held_handle` as Register holds a map's script.
