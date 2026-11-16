@@ -120,6 +120,7 @@ set(PATCHES_SOURCES
     # ADR 0048 decision 6: a map's script DLLs, held and served through the load rewriter (runtime/content/script_provider.h).
     "content/script_provider.cpp"
     "content/map_scripts_install.cpp"
+    "content/cdn_scripts_install.cpp"
     # docs/adr/0048 decision 5: the config-alias lookup detour, installed only when a mounted map stages an alias.
     "content/config_alias_hook.cpp"
     # ADR 0048 decision 9: the session map pin's PC half (the pure part is core/map_session_pin.cpp, in nevr_core).
@@ -240,6 +241,7 @@ set(PATCHES_SOURCES
     "${CMAKE_SOURCE_DIR}/src/cdn/cdn_manifest.cpp"
     "${CMAKE_SOURCE_DIR}/src/cdn/cdn_plan.cpp"
     "${CMAKE_SOURCE_DIR}/src/cdn/cdn_script_gate.cpp"
+    "${CMAKE_SOURCE_DIR}/src/cdn/cdn_scripts.cpp"
     "${CMAKE_SOURCE_DIR}/src/cdn/cdn_demand.cpp"
     "${CMAKE_SOURCE_DIR}/src/cdn/cdn_store.cpp"
     "${CMAKE_SOURCE_DIR}/src/cdn/cdn_run.cpp"
@@ -563,7 +565,7 @@ set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp P
 # The CDN core and its PC Env: the core includes no windows.h, and env_windows.cpp and windows_map_fs.cpp define NOMINMAX themselves, so
 # neither takes the PCH.
 set_source_files_properties(${CMAKE_SOURCE_DIR}/src/cdn/cdn_limits.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_validate.cpp
-  ${CMAKE_SOURCE_DIR}/src/cdn/cdn_manifest.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_plan.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_script_gate.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_demand.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_store.cpp
+  ${CMAKE_SOURCE_DIR}/src/cdn/cdn_manifest.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_plan.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_script_gate.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_scripts.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_demand.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_store.cpp
   ${CMAKE_SOURCE_DIR}/src/cdn/cdn_run.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_prefetch.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_resolver.cpp
   ${CMAKE_SOURCE_DIR}/src/cdn/cdn_service.cpp ${CMAKE_SOURCE_DIR}/src/cdn/env_windows.cpp
   ${CMAKE_SOURCE_DIR}/src/cdn/windows_map_fs.cpp
@@ -2416,7 +2418,7 @@ if(BUILD_TESTING)
     # Links the real Log(). No game file is read.
     set(_map_scripts_test_sources tests/test_map_scripts.cpp content/script_provider.cpp content/map_scripts_install.cpp
       content/content_json.cpp content/content_pack.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp
-      log/boot_log_tee.cpp "${CMAKE_SOURCE_DIR}/src/cdn/env_windows.cpp")
+      content/cdn_scripts_install.cpp log/boot_log_tee.cpp "${CMAKE_SOURCE_DIR}/src/cdn/env_windows.cpp" "${CMAKE_SOURCE_DIR}/src/cdn/cdn_scripts.cpp")
     add_executable(test_map_scripts ${_map_scripts_test_sources})
     set_source_files_properties(${_map_scripts_test_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_definitions(test_map_scripts PRIVATE NEVR_USE_MINHOOK)

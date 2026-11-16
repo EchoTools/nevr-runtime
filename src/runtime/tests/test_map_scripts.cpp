@@ -21,6 +21,9 @@
 #include "runtime/content/script_provider.h"
 #include "runtime/hook/dll_load_hook.h"
 #include "cdn/cdn_env.h"
+#include "cdn/cdn_manifest.h"
+#include "cdn/cdn_scripts.h"
+#include "runtime/content/cdn_scripts_install.h"
 #include "core/map_manifest.h"
 #include "core/map_script_check.h"
 #include "core/resource_set_registry.h"
@@ -853,6 +856,95 @@ TEST(MapScriptsPath, TheCanonicalKeyIsTheGamesPathFolded) {
             L"c:\\games\\echovr\\bin\\win10\\scripts\\00ab0000000000cd.dll");
   EXPECT_EQ(maps::CanonicalScriptPath(L"C:/Games/EchoVR/bin/win10/", 1),
             L"c:\\games\\echovr\\bin\\win10\\scripts\\0000000000000001.dll");
+}
+
+// The PC registrar (runtime/content/cdn_scripts_install.cpp; PLAN-v5 5.3 item 2) claims a label's listed copy through the provider as
+// "cargo:<label>": with the player's stock file present the copy is held under the cargo owner and nothing is refused; with the stock file
+// gone the claim is refused stock_missing, the label's refusal names it, and the copy the earlier claim held is withdrawn with the label.
+// The policy is applied first (configure-once), so the registrar's own SetPolicy is kept and this test's facts stay in force.
+TEST_F(MapScripts, ThePcRegistrarHoldsAListedCopyAndWithdrawsTheLabelOnAMissingStock) {
+  maps::Forget();
+  ASSERT_EQ(maps::ApplyPolicy(maps::PolicyCaller::kMaps, In()), maps::PolicyOutcome::kSet);
+  const std::vector<std::uint8_t> stock = BuildDll();
+  WriteBytes(GamePath(kStockHash), stock);
+  nevr_cdn::Manifest m;
+  m.labels = {"combat_content"};
+  nevr_cdn::ScriptEntry s;
+  s.label = "combat_content";
+  s.platform = nevr_cdn::kWindowsX64.name;
+  s.name = kHash;
+  s.stock_source = kStockHash;
+  s.stock_sha256 = Sha(stock);
+  m.scripts.push_back(s);
+  const std::string cache(cache_.begin(), cache_.end());  // the test's temporary folder is ASCII
+  const nevr_cdn::ScriptRegistrar registrar = nevr_cdn_scripts::PcRegistrar(cache, /*signed_only=*/false);
+
+  const nevr_cdn::ScriptRegistration held = registrar(m, nevr_cdn::kWindowsX64);
+  EXPECT_TRUE(held.refused.empty());
+  ASSERT_EQ(held.held.size(), 1u);
+  EXPECT_TRUE(maps::Holds("cargo:combat_content", kHash));
+  EXPECT_FALSE(maps::Holds("map:arena1", kHash));
+
+  ASSERT_TRUE(DeleteFileW(GamePath(kStockHash).c_str()));
+  s.name = kOtherHash;
+  m.scripts = {s};
+  const nevr_cdn::ScriptRegistration refused = registrar(m, nevr_cdn::kWindowsX64);
+  ASSERT_EQ(refused.refused.size(), 1u);
+  EXPECT_EQ(refused.refused[0].reason, "stock_missing");
+  EXPECT_TRUE(refused.refused[0].pack.empty());
+  EXPECT_TRUE(refused.held.empty());
+  EXPECT_FALSE(maps::Holds("cargo:combat_content", kOtherHash));
+  EXPECT_FALSE(maps::Holds("cargo:combat_content", kHash)) << "the label's earlier copy is withdrawn with the label";
+  maps::Forget();
+}
+
+// The registrar is the run's first policy caller when the maps channel has not started: its own SetPolicy installs the run's signed-only
+// fact, so the copy is refused signed_only with no policy applied beforehand (the provider configures on this call).
+TEST_F(MapScripts, ThePcRegistrarSetsTheSignedOnlyPolicyWhenItIsTheFirstCaller) {
+  maps::Forget();
+  MakeDirs(cache_);
+  nevr_cdn::Manifest m;
+  m.labels = {"combat_content"};
+  nevr_cdn::ScriptEntry s;
+  s.label = "combat_content";
+  s.platform = nevr_cdn::kWindowsX64.name;
+  s.name = kHash;
+  s.stock_source = kStockHash;
+  s.stock_sha256 = std::string(nevr_cdn::kSha256HexChars, 'c');
+  m.scripts.push_back(s);
+  const std::string cache(cache_.begin(), cache_.end());
+  const nevr_cdn::ScriptRegistration r = nevr_cdn_scripts::PcRegistrar(cache, /*signed_only=*/true)(m, nevr_cdn::kWindowsX64);
+  ASSERT_EQ(r.refused.size(), 1u);
+  EXPECT_EQ(r.refused[0].reason, "signed_only");
+  EXPECT_FALSE(maps::Holds("cargo:combat_content", kHash));
+  maps::Forget();
+}
+
+// KNOWN-WRONG #2242: this pins the refusal that exists only because no manifest verifier is in this client (cdn_scripts_install.cpp
+// kManifestVerified = false). With official = false, the signed-only gate refuses the copy with reason signed_only, and the label's
+// refusal says so. The policy is applied signed-only first, so the registrar's call is kept with the same fact. The assertion pins the
+// gate's behaviour for official = false; it does not assert the absence of the verifier.
+TEST_F(MapScripts, ThePcRegistrarRefusesACopyUnderSignedOnlyWhileNoManifestIsVerified) {
+  maps::Forget();
+  ASSERT_EQ(maps::ApplyPolicy(maps::PolicyCaller::kMaps, In(/*signed_only=*/true)), maps::PolicyOutcome::kSet);
+  const std::vector<std::uint8_t> stock = BuildDll();
+  WriteBytes(GamePath(kStockHash), stock);
+  nevr_cdn::Manifest m;
+  m.labels = {"combat_content"};
+  nevr_cdn::ScriptEntry s;
+  s.label = "combat_content";
+  s.platform = nevr_cdn::kWindowsX64.name;
+  s.name = kHash;
+  s.stock_source = kStockHash;
+  s.stock_sha256 = Sha(stock);
+  m.scripts.push_back(s);
+  const std::string cache(cache_.begin(), cache_.end());
+  const nevr_cdn::ScriptRegistration r = nevr_cdn_scripts::PcRegistrar(cache, /*signed_only=*/true)(m, nevr_cdn::kWindowsX64);
+  ASSERT_EQ(r.refused.size(), 1u);
+  EXPECT_EQ(r.refused[0].reason, "signed_only");
+  EXPECT_TRUE(r.held.empty());
+  EXPECT_FALSE(maps::Holds("cargo:combat_content", kHash));
+  maps::Forget();
 }
 
 }  // namespace

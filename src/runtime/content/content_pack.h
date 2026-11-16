@@ -90,6 +90,9 @@ bool RewriteScript(const wchar_t* lower_path, std::wstring* load_path);
 // count: the map script provider refuses a hash the pack holds (runtime/content/script_provider.h).
 bool CarriesScript(const wchar_t* lower_path);
 
+// The id of the served pack, "" when none is served: the CDN's registrar names it in a refusal of a hash the pack carries (pack_hash).
+std::string ServedPackId();
+
 // CFile::Open's type, and the body of its detour: an open the pack serves goes to `original` with the pack's file and is logged
 // with the game's result; every other open goes to `original` unchanged.
 using CFileOpenFn = std::uint64_t (*)(const char* path, std::uint32_t flags, HANDLE* out);

@@ -117,6 +117,7 @@ add_library(ovrplatformloader SHARED
   ../../cdn/cdn_manifest.cpp
   ../../cdn/cdn_plan.cpp
   ../../cdn/cdn_script_gate.cpp
+  ../../cdn/cdn_scripts.cpp
   ../../cdn/cdn_store.cpp
   ../../cdn/env_posix.cpp
   activation.cpp
@@ -167,7 +168,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../cdn/maps.cmake")
 # personality or LSDA; see the contract in callback_thunk.h. tests/quest
 # TestHookFramesCarryNoPersonality pins it.
 # ec_page.cpp is on the hook path (the EC client's handlers reach the page through it): built without exceptions, as the combat code is.
-set_source_files_properties(entry.cpp ec_page.cpp login_prompt_hook.cpp ../invite/frame_dispatch.cpp main_level.cpp login_title_hook.cpp obb_skip_hook.cpp path_rewrite_hook.cpp process_end_hook.cpp crash_first_hook.cpp permission_request.cpp permission_wait_hook.cpp vk_ext_window.cpp os_build_gate_hook.cpp resource_request_hook.cpp ../../core/resource_shadow.cpp ../../cdn/cdn_resolver.cpp ../../cdn/cdn_limits.cpp ../../cdn/cdn_validate.cpp ../../cdn/cdn_manifest.cpp ../../cdn/cdn_plan.cpp ../../cdn/cdn_script_gate.cpp ../../cdn/cdn_store.cpp ../../cdn/cdn_run.cpp ../../cdn/env_posix.cpp ../../cdn/cdn_service.cpp ../cdn/cdn_worker.cpp ../cdn/cdn_start.cpp render_config_hook.cpp menu_cards_hook.cpp ../invite/wizard_metric_hook.cpp texture_quality_hook.cpp texture_menu_hook.cpp ui_texture_mips.cpp irradiance_default_hook.cpp irradiance_default_install.cpp quit_hook.cpp hand_pose_log_hook.cpp vk_free_guard.cpp vk_alloc_check.cpp pns_provider_hook.cpp toast_presenter.cpp credits_text.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+set_source_files_properties(entry.cpp ec_page.cpp login_prompt_hook.cpp ../invite/frame_dispatch.cpp main_level.cpp login_title_hook.cpp obb_skip_hook.cpp path_rewrite_hook.cpp process_end_hook.cpp crash_first_hook.cpp permission_request.cpp permission_wait_hook.cpp vk_ext_window.cpp os_build_gate_hook.cpp resource_request_hook.cpp ../../core/resource_shadow.cpp ../../cdn/cdn_resolver.cpp ../../cdn/cdn_limits.cpp ../../cdn/cdn_validate.cpp ../../cdn/cdn_manifest.cpp ../../cdn/cdn_plan.cpp ../../cdn/cdn_script_gate.cpp ../../cdn/cdn_scripts.cpp ../../cdn/cdn_store.cpp ../../cdn/cdn_run.cpp ../../cdn/env_posix.cpp ../../cdn/cdn_service.cpp ../cdn/cdn_worker.cpp ../cdn/cdn_start.cpp render_config_hook.cpp menu_cards_hook.cpp ../invite/wizard_metric_hook.cpp texture_quality_hook.cpp texture_menu_hook.cpp ui_texture_mips.cpp irradiance_default_hook.cpp irradiance_default_install.cpp quit_hook.cpp hand_pose_log_hook.cpp vk_free_guard.cpp vk_alloc_check.cpp pns_provider_hook.cpp toast_presenter.cpp credits_text.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # The Quest join on a resolved invite code (#966, S4). Its std::function<bool()> and std::function<std::int64_t()>
 # come through the shared invite_join.h; libc++ marks those templates' type info default-visibility, so an object

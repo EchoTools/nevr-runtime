@@ -16,6 +16,7 @@
 
 #include "cdn/cdn_run.h"
 #include "cdn/cdn_script_gate.h"
+#include "cdn/cdn_scripts.h"
 #include "quest/tests/cdn_fake_env.h"
 #include "quest/tests/cdn_zstd_support.h"
 #include "quest/tests/test_check.h"
@@ -53,6 +54,7 @@ struct World {
   json empty = json::array();
   std::string other_label;      // a second label, when set, holding other_objs (the gate turns off one label, never its neighbour)
   std::vector<Obj> other_objs;
+  std::vector<json> script_list;  // the label's own `scripts` list (cdn_manifest.h), when non-empty
   nc::RunConfig config;
 
   explicit World(int n = 4) {
@@ -80,7 +82,13 @@ struct World {
     for (const Obj& o : objs) entries.push_back(EntryOf(o, label));
     for (const json& e : extra_entries) entries.push_back(e);
     json labels = json::object();
-    labels[label] = json{{"entries", entries}};
+    json own = json{{"entries", entries}};
+    if (!script_list.empty()) {
+      json scripts = json::array();
+      for (const json& s : script_list) scripts.push_back(s);
+      own["scripts"] = scripts;
+    }
+    labels[label] = own;
     if (!other_label.empty()) {
       json others = json::array();
       for (const Obj& o : other_objs) others.push_back(EntryOf(o, other_label));
@@ -1123,6 +1131,190 @@ void ARegistrarRefusalTurnsOffALabelWithNoScriptRecord() {
 }
 }  // namespace
 
+// The `scripts` list of CombatWorld's label, naming the script the record names (R10b, the gate's listed rule, 5.2 case 6).
+json ListedScriptJson() {
+  return json{{"name", kScriptName}, {"platform", "android-arm64"}, {"stock_source", "0x77"}, {"stock_sha256", std::string(64, 'c')}};
+}
+
+// Case 6 through the mount (X8): the label's own `scripts` list names a script and a file is on disk under that name, nothing held. The
+// label is refused script_shadowed and not published. Red on the base: the gate's listed rule is off there (cdn_run.cpp GatedPolicy).
+void AListedNameOnDiskRefusesTheLabelThroughTheMount() {
+  World w = CombatWorld();
+  w.script_list.push_back(ListedScriptJson());
+  const std::shared_ptr<cdn_test::Fs> fs = StoredBeforeTheGate(w);
+  fs->files[kScriptFile] = "a third-party file under the listed name";
+  FakeEnv env(fs);
+  Captured cap;
+  QCHECK(!nc::MountFromCache(env, GatedConfig(w), cap.Sink()) && cap.sets.empty());
+  const auto lines = env.EventsNamed("cdn_mount");
+  QCHECK(lines.size() == 1 && FakeEnv::Value(lines[0], "reason") == "script_shadowed");
+}
+
+// ── the registrar core (PLAN-v5 5.3 item 2, R10b) ───────────────────────────────────────────────────────────────────────────
+
+// One `scripts` entry of a label, for a platform (the stock fields are fixed: the registrar core never reads them).
+nc::ScriptEntry ScriptEntryOf(const std::string& label, std::uint64_t name, const char* platform = "android-arm64") {
+  nc::ScriptEntry s;
+  s.label = label;
+  s.platform = platform;
+  s.name = name;
+  s.stock_source = 0x77;
+  s.stock_sha256 = std::string(64, 'c');
+  return s;
+}
+
+// Two labels of the Android platform, with a script each of "combat_content" (1, 2, 3) and "other" (4), and one of the Windows platform.
+nc::Manifest TwoLabelScripts() {
+  nc::Manifest m;
+  m.labels = {kCombat, "other", "game"};
+  m.scripts = {ScriptEntryOf(kCombat, 0x1), ScriptEntryOf(kCombat, 0x2), ScriptEntryOf("other", 0x4),
+               ScriptEntryOf("game", 0x5, "windows-x86_64"), ScriptEntryOf(kCombat, 0x3)};
+  return m;
+}
+
+// What the registrar core was asked, in order, and how many labels it withdrew, each a fake of one callback.
+struct RegistrarFakes {
+  std::vector<std::string> asked;      // "<label>/<name>" per claim
+  std::vector<std::string> withdrawn;  // the label of each withdraw
+  bool refuse_one = false;             // the claim refuses `refuse_name`
+  std::uint64_t refuse_name = 0;
+  std::string reason = "stock_hash";
+  std::string pack;
+  std::vector<std::string> held_already;  // "<label>/<name>" the registrar holds from an earlier pass
+
+  nc::ScriptRegistration Run(const nc::Manifest& m, const nc::Platform& p) {
+    const auto held = [this](const std::string& label, std::uint64_t name) {
+      return std::find(held_already.begin(), held_already.end(), label + "/" + std::to_string(name)) != held_already.end();
+    };
+    const auto claim = [this](const std::string& label, const nc::ScriptEntry& s) {
+      asked.push_back(label + "/" + std::to_string(s.name));
+      nc::ScriptClaim c;
+      c.ok = !(refuse_one && s.name == refuse_name);
+      c.reason = reason;
+      c.pack = pack;
+      return c;
+    };
+    const auto withdraw = [this](const std::string& label) { withdrawn.push_back(label); };
+    return nc::RegisterScriptLabels(m, p, held, claim, withdraw);
+  }
+};
+
+// The labels of a platform are the labels whose `scripts` list names it, in manifest order, each once.
+void ScriptLabelsNamesEachLabelOfThePlatformOnceInManifestOrder() {
+  const nc::Manifest m = TwoLabelScripts();
+  const std::vector<std::string> android = nc::ScriptLabels(m, nc::kAndroidArm64);
+  QCHECK(android.size() == 2 && android[0] == kCombat && android[1] == "other");
+  const std::vector<std::string> windows = nc::ScriptLabels(m, nc::kWindowsX64);
+  QCHECK(windows.size() == 1 && windows[0] == "game");
+}
+
+// A script is listed for its own label, platform and name, and for no other.
+void ListsScriptIsTrueOnlyForTheLabelPlatformAndName() {
+  const nc::Manifest m = TwoLabelScripts();
+  QCHECK(nc::ListsScript(m, nc::kAndroidArm64, kCombat, 0x2));
+  QCHECK(!nc::ListsScript(m, nc::kAndroidArm64, "other", 0x2));
+  QCHECK(!nc::ListsScript(m, nc::kAndroidArm64, kCombat, 0x9));
+  QCHECK(!nc::ListsScript(m, nc::kWindowsX64, kCombat, 0x2));
+  QCHECK(nc::ListsScript(m, nc::kWindowsX64, "game", 0x5));
+}
+
+// Every claim accepted: each script is claimed once, in label order, held, and nothing is withdrawn or refused.
+void AllClaimsOkHoldsEachScriptInOrderAndWithdrawsNothing() {
+  RegistrarFakes f;
+  const nc::ScriptRegistration r = f.Run(TwoLabelScripts(), nc::kAndroidArm64);
+  QCHECK(f.asked == std::vector<std::string>({"combat_content/1", "combat_content/2", "combat_content/3", "other/4"}));
+  QCHECK(f.withdrawn.empty() && r.refused.empty());
+  QCHECK(r.held.size() == 4 && r.held[0] == std::make_pair(std::string(kCombat), std::uint64_t{1}) &&
+         r.held[2] == std::make_pair(std::string(kCombat), std::uint64_t{3}) && r.held[3] == std::make_pair(std::string("other"), std::uint64_t{4}));
+}
+
+// One refusal withdraws the label's others (5.3 item 2): the label's earlier copies are not held, its later ones are not claimed, the
+// label is withdrawn once and named refused, and another label keeps its copy.
+void OneRefusalWithdrawsTheLabelsOthersAndClaimsNoMore() {
+  RegistrarFakes f;
+  f.refuse_one = true;
+  f.refuse_name = 0x2;
+  const nc::ScriptRegistration r = f.Run(TwoLabelScripts(), nc::kAndroidArm64);
+  QCHECK(f.asked == std::vector<std::string>({"combat_content/1", "combat_content/2", "other/4"}));
+  QCHECK(f.withdrawn == std::vector<std::string>({kCombat}));
+  QCHECK(r.refused.size() == 1 && r.refused[0].label == kCombat && r.refused[0].script == 0x2 && r.refused[0].reason == "stock_hash" &&
+         r.refused[0].pack.empty());
+  QCHECK(r.held.size() == 1 && r.held[0] == std::make_pair(std::string("other"), std::uint64_t{4}));
+}
+
+// A refusal of a content pack's hash names the pack (5.2 case 7).
+void APackRefusalNamesThePack() {
+  RegistrarFakes f;
+  f.refuse_one = true;
+  f.refuse_name = 0x1;
+  f.reason = "pack_hash";
+  f.pack = "cat-pack";
+  const nc::ScriptRegistration r = f.Run(TwoLabelScripts(), nc::kAndroidArm64);
+  QCHECK(r.refused.size() == 1 && r.refused[0].reason == "pack_hash" && r.refused[0].pack == "cat-pack");
+}
+
+// A script the registrar already holds (a boot pass before a fetch pass) is kept without a second claim, which the registrar would refuse
+// as a duplicate of its own copy.
+void AScriptAlreadyHeldIsKeptWithoutAClaim() {
+  RegistrarFakes f;
+  f.held_already = {"combat_content/1"};
+  const nc::ScriptRegistration r = f.Run(TwoLabelScripts(), nc::kAndroidArm64);
+  QCHECK(f.asked == std::vector<std::string>({"combat_content/2", "combat_content/3", "other/4"}));
+  QCHECK(r.refused.empty() && r.held.size() == 4 && r.held[0] == std::make_pair(std::string(kCombat), std::uint64_t{1}));
+}
+
+// A refusal drops the label's copies the earlier pass held as well: the withdraw takes them away, so they are not reported held.
+void AHeldCopyOfALabelRefusedLaterIsNotReportedHeld() {
+  RegistrarFakes f;
+  f.held_already = {"combat_content/1"};
+  f.refuse_one = true;
+  f.refuse_name = 0x2;
+  const nc::ScriptRegistration r = f.Run(TwoLabelScripts(), nc::kAndroidArm64);
+  QCHECK(f.withdrawn == std::vector<std::string>({kCombat}));
+  QCHECK(r.refused.size() == 1 && r.held.size() == 1 && r.held[0].first == "other");
+}
+
+// The registrar through the real mount (5.2 cases 5 and 7 over the core): a claim the content pack refuses keeps the label unpublished and
+// names the pack; a stock refusal keeps it unpublished with no pack; every claim accepted publishes the label with its script held.
+void TheCoreRegistrarKeepsARefusedLabelUnpublishedAndNamesThePack() {
+  World w = CombatWorld();
+  w.script_list.push_back(ListedScriptJson());
+  const std::shared_ptr<cdn_test::Fs> fs = StoredBeforeTheGate(w);
+  const auto configured = [&w](bool ok, const char* reason, const char* pack) {
+    nc::RunConfig c = GatedConfig(w);
+    c.registrar = [ok, reason, pack](const nc::Manifest& m, const nc::Platform& p) {
+      const auto held = [](const std::string&, std::uint64_t) { return false; };
+      const auto claim = [ok, reason, pack](const std::string&, const nc::ScriptEntry&) {
+        nc::ScriptClaim c;
+        c.ok = ok;
+        c.reason = reason;
+        c.pack = pack;
+        return c;
+      };
+      const auto withdraw = [](const std::string&) {};
+      return nc::RegisterScriptLabels(m, p, held, claim, withdraw);
+    };
+    return c;
+  };
+
+  FakeEnv packEnv(fs);
+  Captured packCap;
+  QCHECK(!nc::MountFromCache(packEnv, configured(false, "pack_hash", "cat-pack"), packCap.Sink()) && packCap.sets.empty());
+  auto lines = packEnv.EventsNamed("cdn_mount");
+  QCHECK(lines.size() == 1 && FakeEnv::Value(lines[0], "reason") == "pack_hash" && FakeEnv::Value(lines[0], "pack") == "cat-pack");
+
+  FakeEnv stockEnv(fs);
+  Captured stockCap;
+  QCHECK(!nc::MountFromCache(stockEnv, configured(false, "stock_hash", ""), stockCap.Sink()) && stockCap.sets.empty());
+  lines = stockEnv.EventsNamed("cdn_mount");
+  QCHECK(lines.size() == 1 && FakeEnv::Value(lines[0], "reason") == "stock_hash" && FakeEnv::Value(lines[0], "pack") == "<absent>");
+
+  FakeEnv okEnv(fs);
+  Captured okCap;
+  QCHECK(nc::MountFromCache(okEnv, configured(true, "ok", ""), okCap.Sink()) && okCap.sets.size() == 1 && Serves(okCap.sets[0], kScriptType, kScriptHash));
+  QCHECK(okEnv.EventsNamed("cdn_mount").empty());
+}
+
 // ── the boot-only labels (docs/adr/0045 decision 7; R6-b) ───────────────────────────────────────────────────────────────────
 
 nc::Entry Ent(const std::string& label, std::uint64_t name, const std::string& sha, const char* platform = "android-arm64") {
@@ -1488,6 +1680,15 @@ int main() {
   AFileOnDiskUnderAListedNameIsShadowingAndRefusesTheLabel();
   TheRegistrarSeamRunsBeforeTheGateAndItsRefusalsTurnTheLabelOff();
   ARegistrarRefusalTurnsOffALabelWithNoScriptRecord();
+  AListedNameOnDiskRefusesTheLabelThroughTheMount();
+  ScriptLabelsNamesEachLabelOfThePlatformOnceInManifestOrder();
+  ListsScriptIsTrueOnlyForTheLabelPlatformAndName();
+  AllClaimsOkHoldsEachScriptInOrderAndWithdrawsNothing();
+  OneRefusalWithdrawsTheLabelsOthersAndClaimsNoMore();
+  APackRefusalNamesThePack();
+  AScriptAlreadyHeldIsKeptWithoutAClaim();
+  AHeldCopyOfALabelRefusedLaterIsNotReportedHeld();
+  TheCoreRegistrarKeepsARefusedLabelUnpublishedAndNamesThePack();
   KeepBootOnlyReplacesTheBootOnlyLabelsRecordsWithTheBootSets();
   KeepBootOnlyDropsALabelTheBootSetLacks();
   BootOnlyLabelsAddsEveryLabelWithScriptsOfThisPlatform();

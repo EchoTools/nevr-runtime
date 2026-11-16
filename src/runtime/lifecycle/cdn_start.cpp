@@ -14,6 +14,8 @@
 #include "cdn/env_windows.h"
 #include "core/logging.h"
 #include "core/nevr_root.h"
+#include "runtime/content/cdn_scripts_install.h"
+#include "runtime/ext/plugin_trust.h"
 #include "runtime/content/content_pack.h"
 #include "runtime/patch/plugin_assets.h"
 #include "runtime/combat/announcer_callouts.h"
@@ -78,9 +80,10 @@ bool Start() noexcept {
   const std::string dir = nevr_root::Join(nevr_root::CacheDir(root), kCdnCacheName);
   const nevr_cdn::Settings settings{};
   nevr_cdn::RunConfig config = nevr_cdn::MakeRunConfig(settings, dir, nevr_cdn::kWindowsX64);
-  // The script gate (cdn_script_gate.h) reads the game's script folder. The registrar of the `scripts` copies is wired by PLAN-v5 R10b:
-  // until then none is set, so no script is held and no label lists one.
+  // The script gate (cdn_script_gate.h) reads the game's script folder, and the registrar claims each label's `scripts` copies before it
+  // (cdn_scripts_install.h, PLAN-v5 R10b). Both are set here: the boot mount and the fetch both run the gate.
   config.script_dir = GameScriptDir();
+  config.registrar = nevr_cdn_scripts::PcRegistrar(dir, nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly);
   // The Env holds no state, so one object for the process lifetime (the fetch thread outlives every caller) is all it needs.
   static nevr_cdn::WindowsEnv env;
   // The boot mount publishes on this thread inside Start; the fetch thread it spawns is another thread.

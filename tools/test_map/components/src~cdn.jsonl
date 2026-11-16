@@ -17,6 +17,8 @@
 {"file":"src/cdn/cdn_run.h","tests":["build","just:test-android","just:test-quest-data"]}
 {"file":"src/cdn/cdn_script_gate.cpp","tests":["build","just:test-android","just:test-quest-data"]}
 {"file":"src/cdn/cdn_script_gate.h","tests":["build","just:test-android","just:test-quest-data"]}
+{"file":"src/cdn/cdn_scripts.cpp","tests":["build","gtest:test_map_scripts","just:test-android","just:test-quest-data"]}
+{"file":"src/cdn/cdn_scripts.h","tests":["build","gtest:test_map_scripts","just:test-android","just:test-quest-data"]}
 {"file":"src/cdn/cdn_service.cpp","tests":["build","just:test-android","just:test-quest-data"]}
 {"file":"src/cdn/cdn_service.h","tests":["build","just:test-android","just:test-quest-data"]}
 {"file":"src/cdn/cdn_store.cpp","tests":["build","just:test-android","just:test-quest-data"]}

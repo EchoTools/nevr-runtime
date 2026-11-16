@@ -37,7 +37,7 @@ nevr_ht_test(pack_test GROUP data HOST ENV ${_data_env}
 # The CDN texture delivery (docs/adr/0045-cdn-texture-delivery.md): the shared pure core in src/cdn (and the shadow builder in src/core), built here as the sentinel builds
 # it (no exceptions; nlohmann::json is used through its non-throwing calls only).
 nevr_ht_obj(o_cdn_resource_shadow GROUP data NOEXC HOST SRC src/core/resource_shadow.cpp)
-foreach(f cdn_limits cdn_validate cdn_manifest cdn_plan cdn_script_gate cdn_store cdn_run cdn_resolver cdn_service)
+foreach(f cdn_limits cdn_validate cdn_manifest cdn_plan cdn_script_gate cdn_scripts cdn_store cdn_run cdn_resolver cdn_service)
   nevr_ht_obj(o_cdn_${f} GROUP data NOEXC HOST SRC src/cdn/${f}.cpp)
 endforeach()
 nevr_ht_test(resource_shadow_test GROUP data HOST NOEXC
@@ -47,7 +47,7 @@ nevr_ht_test(resource_shadow_test GROUP data HOST NOEXC
 nevr_ht_obj(o_cdn_cdn_prefetch GROUP data NOEXC HOST SRC src/cdn/cdn_prefetch.cpp)
 # The demand resolve (docs/adr/0045 decision 9, PLAN-v7 R6-a-1): the server's per-session set, built on cdn_run and the prefetch.
 nevr_ht_obj(o_cdn_cdn_demand GROUP data NOEXC HOST SRC src/cdn/cdn_demand.cpp)
-set(_cdn_objs o_cdn_device_memory o_cdn_resource_shadow o_cdn_cdn_limits o_cdn_cdn_validate o_cdn_cdn_manifest o_cdn_cdn_plan o_cdn_cdn_script_gate o_cdn_cdn_store o_cdn_cdn_run o_cdn_cdn_prefetch o_cdn_cdn_demand o_data_sha256)
+set(_cdn_objs o_cdn_device_memory o_cdn_resource_shadow o_cdn_cdn_limits o_cdn_cdn_validate o_cdn_cdn_manifest o_cdn_cdn_plan o_cdn_cdn_script_gate o_cdn_cdn_scripts o_cdn_cdn_store o_cdn_cdn_run o_cdn_cdn_prefetch o_cdn_cdn_demand o_data_sha256)
 nevr_ht_test(device_memory_test GROUP data HOST
   SRC src/quest/tests/device_memory_test.cpp OBJS o_cdn_device_memory)
 nevr_ht_test(cdn_limits_test GROUP data HOST

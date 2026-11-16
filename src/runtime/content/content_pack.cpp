@@ -345,6 +345,11 @@ bool CarriesScript(const wchar_t* lower_path) {
   return pack->scripts.count(Canonical(lower_path)) != 0;
 }
 
+std::string ServedPackId() {
+  const Pack* pack = g_pack;
+  return pack == nullptr ? std::string() : pack->id;
+}
+
 std::uint64_t OpenThrough(CFileOpenFn original, const char* path, std::uint32_t flags, HANDLE* out) {
   const Served* served = FindOpen(path, flags);
   if (served == nullptr) return original(path, flags, out);

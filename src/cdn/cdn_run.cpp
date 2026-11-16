@@ -1,6 +1,7 @@
 #include "cdn/cdn_run.h"
 
 #include "cdn/cdn_prefetch.h"
+#include "cdn/cdn_scripts.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -133,8 +134,10 @@ Policy GatedPolicy(Env& env, const RunConfig& config, const Manifest& manifest, 
   const auto held = [&registration](const std::string& label, std::uint64_t hash) {
     return std::find(registration.held.begin(), registration.held.end(), std::make_pair(label, hash)) != registration.held.end();
   };
-  // The labels the registrar listed for each label's `scripts` are R10b's to wire (PLAN-v5 5.3): until then no label lists one.
-  const auto listed = [](const std::string&, std::uint64_t) { return false; };
+  // A name in the label's own `scripts` list must be held, a file on disk under it does not count (cdn_script_gate.h, X8).
+  const auto listed = [&manifest, &config](const std::string& label, std::uint64_t name) {
+    return ListsScript(manifest, config.platform, label, name);
+  };
   std::vector<GatedLabel> gated = GateRefusals(registration.refused);
   for (GatedLabel& g : GateScripts(manifest, config.platform, present, held, listed)) {
     const bool refusedAlready = std::any_of(gated.begin(), gated.end(), [&g](const GatedLabel& r) { return r.label == g.label; });
