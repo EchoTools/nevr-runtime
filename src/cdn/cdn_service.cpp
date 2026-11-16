@@ -1,6 +1,7 @@
 #include "cdn/cdn_service.h"
 
 #include <atomic>
+#include <cstring>
 #include <memory>
 #include <thread>
 
@@ -24,6 +25,9 @@ RunConfig MakeRunConfig(const Settings& settings, const std::string& cache_dir, 
   }
   c.policy.required_only = settings.required_only;
   c.source = settings.from_config ? "config" : "default";
+  if (std::strcmp(platform.name, kWindowsX64.name) == 0) {
+    for (const char* label : kClientBootOnlyLabels) c.boot_only.push_back(label);
+  }
   return c;
 }
 
@@ -52,8 +56,11 @@ RunResult RunOnce(Env& env, const RunConfig& config, PublishFn publish, const st
   // The publisher keeps the set for the life of the process: the engine may be filling a request from its shadow.
   const Publish give = [publish](std::unique_ptr<Mounted> set) { publish(set.release()); };
   env.MakeDirs(config.dir);  // as Start does: the device's free space is asked of a directory that exists
-  MountFromCache(env, config, give);
-  return FetchAndMount(env, ResolveManifestPath(env, config, keep_going), give, keep_going);
+  Manifest boot;
+  MountFromCache(env, config, give, &boot);
+  RunConfig fetch = ResolveManifestPath(env, config, keep_going);
+  fetch.boot = std::move(boot);  // the set the boot mount published: the fetch keeps its boot-only labels
+  return FetchAndMount(env, fetch, give, keep_going);
 }
 
 FirstRunResult FirstRun(Env& env, const RunConfig& config, PublishFn publish, const std::function<bool()>& keep_going) {
@@ -113,9 +120,11 @@ bool Start(Env* env, const RunConfig& config, PublishFn publish) noexcept {
     return true;
   }
   const Publish give = [publish](std::unique_ptr<Mounted> set) { publish(set.release()); };
-  MountFromCache(*env, config, give);
+  Manifest boot;
+  MountFromCache(*env, config, give, &boot);
   // Never freed: the detached thread reads it for the life of the process.
-  const RunConfig* const held = new RunConfig(config);
+  RunConfig* const held = new RunConfig(config);
+  held->boot = std::move(boot);
   std::thread([env, held, give]() {
     const auto keepGoing = [] { return true; };
     FetchAndMount(*env, ResolveManifestPath(*env, *held, keepGoing), give, keepGoing);

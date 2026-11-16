@@ -5,6 +5,7 @@
 //
 // Built and run by `just test-quest-data`.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -1122,6 +1123,323 @@ void ARegistrarRefusalTurnsOffALabelWithNoScriptRecord() {
 }
 }  // namespace
 
+// ── the boot-only labels (docs/adr/0045 decision 7; R6-b) ───────────────────────────────────────────────────────────────────
+
+nc::Entry Ent(const std::string& label, std::uint64_t name, const std::string& sha, const char* platform = "android-arm64") {
+  nc::Entry e;
+  e.label = label;
+  e.platform = platform;
+  e.type = 0x2a;
+  e.name = name;
+  e.sha256 = sha;
+  e.size = 10;
+  e.bytes = 20;
+  e.align = 16;
+  return e;
+}
+nc::EmptyRecord Empty(const std::string& label, std::uint64_t name) {
+  nc::EmptyRecord z;
+  z.label = label;
+  z.platform = "android-arm64";
+  z.type = 0x2a;
+  z.name = name;
+  z.align = 16;
+  return z;
+}
+nc::ScriptEntry Script(const std::string& label, std::uint64_t name, const char* platform = "android-arm64") {
+  nc::ScriptEntry s;
+  s.label = label;
+  s.platform = platform;
+  s.name = name;
+  s.stock_source = 0x77;
+  s.stock_sha256 = std::string(64, 'c');
+  return s;
+}
+bool HasEntry(const nc::Manifest& m, const std::string& label, const std::string& sha) {
+  for (const nc::Entry& e : m.entries) {
+    if (e.label == label && e.sha256 == sha) return true;
+  }
+  return false;
+}
+bool HasEmpty(const nc::Manifest& m, const std::string& label, std::uint64_t name) {
+  for (const nc::EmptyRecord& z : m.empties) {
+    if (z.label == label && z.name == name) return true;
+  }
+  return false;
+}
+bool HasScript(const nc::Manifest& m, const std::string& label, std::uint64_t name) {
+  for (const nc::ScriptEntry& s : m.scripts) {
+    if (s.label == label && s.name == name) return true;
+  }
+  return false;
+}
+// World with `n` objects, their bytes, sizes and fills from the given bases, named by `name_base`.
+World WithObjects(int n, std::uint64_t bytes_base, std::size_t size_base, char fill, std::uint64_t name_base) {
+  World w(0);
+  for (int i = 0; i < n; ++i) {
+    w.Add(bytes_base + static_cast<std::uint64_t>(i), size_base + 7 * static_cast<std::size_t>(i), static_cast<char>(fill + i), kArchive,
+          "0x" + std::to_string(name_base + static_cast<std::uint64_t>(i)));
+  }
+  return w;
+}
+// The newest cdn_mounted record of a source, or null.
+const cdn_test::Record* LastMounted(const FakeEnv& env, const std::string& source) {
+  const cdn_test::Record* found = nullptr;
+  for (const cdn_test::Record& r : env.records) {
+    if (r.name == "cdn_mounted" && r.Get("source") == source) found = &r;
+  }
+  return found;
+}
+nc::Limits LimitsOf(FakeEnv& env) {
+  nc::DeviceFacts facts;
+  env.QueryDevice(kDir, &facts);
+  return nc::ComputeLimits(facts, nc::ManifestEntryMemoryBytes());
+}
+
+// Pure: the fetched records of a boot-only label are replaced by the boot set's, its scripts and empties too.
+void KeepBootOnlyReplacesTheBootOnlyLabelsRecordsWithTheBootSets() {
+  nc::Manifest fetched;
+  fetched.entries = {Ent("combat_content", 1, "b1"), Ent("lobby_posters", 2, "p2")};
+  fetched.empties = {Empty("combat_content", 5)};
+  fetched.scripts = {Script("combat_content", 7)};
+  nc::Manifest boot;
+  boot.entries = {Ent("combat_content", 1, "a1"), Ent("lobby_posters", 2, "p1")};
+  boot.empties = {Empty("combat_content", 6)};
+  boot.scripts = {Script("combat_content", 8)};
+  const nc::Manifest out = nc::KeepBootOnly(fetched, boot, {"combat_content"});
+  QCHECK(HasEntry(out, "lobby_posters", "p2"));
+  QCHECK(HasEntry(out, "combat_content", "a1"));
+  QCHECK(HasEmpty(out, "combat_content", 6));
+  QCHECK(HasScript(out, "combat_content", 8));
+  QCHECK(!HasEntry(out, "combat_content", "b1"));
+  QCHECK(!HasEmpty(out, "combat_content", 5));
+  QCHECK(!HasScript(out, "combat_content", 7));
+}
+
+// Pure: a boot-only label the boot set lacks keeps no record; another label is kept as fetched.
+void KeepBootOnlyDropsALabelTheBootSetLacks() {
+  nc::Manifest fetched;
+  fetched.entries = {Ent("combat_content", 1, "b1"), Ent("lobby_posters", 2, "p2")};
+  const nc::Manifest out = nc::KeepBootOnly(fetched, nc::Manifest(), {"combat_content"});
+  QCHECK(out.entries.size() == 1 && HasEntry(out, "lobby_posters", "p2"));
+}
+
+// Pure: the scripted labels of this platform join the fixed list; another platform's do not; no fixed list means none.
+void BootOnlyLabelsAddsEveryLabelWithScriptsOfThisPlatform() {
+  nc::Manifest fetched;
+  fetched.scripts = {Script("x", 1), Script("z", 2, "windows-x86_64")};
+  nc::Manifest boot;
+  boot.scripts = {Script("y", 3)};
+  const std::vector<std::string> got = nc::BootOnlyLabels({"combat_content"}, boot, fetched, nc::kAndroidArm64);
+  QCHECK((got == std::vector<std::string>{"combat_content", "x", "y"}));
+  QCHECK(nc::BootOnlyLabels({}, boot, fetched, nc::kAndroidArm64).empty());
+}
+
+// Pure: SameMountRecords compares what Mount reads of this platform, not order, labels, refusals or stock_size.
+void SameMountRecordsComparesWhatMountReads() {
+  nc::Manifest a;
+  a.entries = {Ent("combat_content", 1, "a1"), Ent("lobby_posters", 2, "p1")};
+  a.empties = {Empty("combat_content", 6)};
+  a.scripts = {Script("combat_content", 8)};
+  nc::Manifest reordered = a;
+  std::reverse(reordered.entries.begin(), reordered.entries.end());
+  QCHECK(nc::SameMountRecords(a, reordered, nc::kAndroidArm64));
+  nc::Manifest other = a;
+  other.labels = {"x"};
+  other.refused.push_back(nc::Refusal{"x", 0, 0, 0, nc::Rule::kNone});
+  other.entries[0].has_stock_size = true;
+  other.entries[0].stock_size = 99;
+  QCHECK(nc::SameMountRecords(a, other, nc::kAndroidArm64));
+  nc::Manifest sha = a;
+  sha.entries[0].sha256 = "zz";
+  QCHECK(!nc::SameMountRecords(a, sha, nc::kAndroidArm64));
+  nc::Manifest extra = a;
+  extra.empties.push_back(Empty("combat_content", 9));
+  QCHECK(!nc::SameMountRecords(a, extra, nc::kAndroidArm64));
+  nc::Manifest script = a;
+  script.scripts[0].stock_sha256 = std::string(64, 'd');
+  QCHECK(!nc::SameMountRecords(a, script, nc::kAndroidArm64));
+  nc::Manifest windows = a;
+  windows.entries.push_back(Ent("combat_content", 3, "w3", "windows-x86_64"));
+  QCHECK(nc::SameMountRecords(a, windows, nc::kAndroidArm64));
+}
+
+// A boot-only label keeps the boot set when the fetch brings a new set of it: the objects are stored, nothing is published, and the
+// saved manifest is the new one.
+void ABootOnlyLabelKeepsTheBootSetWhenTheFetchBringsANewOne() {
+  World a = WithObjects(4, 300, 120, 'a', 100);
+  a.label = "combat_content";
+  FakeEnv env;
+  a.Serve(env);
+  Captured run1;
+  nc::FetchAndMount(env, a.config, run1.Sink(), kGo);
+  QCHECK(run1.sets.size() == 1);
+  World b = WithObjects(4, 500, 130, 'p', 200);
+  b.label = "combat_content";
+  b.Serve(env);
+  nc::RunConfig c = b.config;
+  c.boot_only = {"combat_content"};
+  Captured cap;
+  nc::Manifest boot;
+  QCHECK(nc::MountFromCache(env, c, cap.Sink(), &boot));
+  QCHECK(cap.sets.size() == 1);
+  const std::size_t getsBefore = GetsOfBlobs(env);
+  c.boot = boot;
+  const nc::RunResult r = nc::FetchAndMount(env, c, cap.Sink(), kGo);
+  QCHECK(r.fetched == 4 && !r.published);
+  QCHECK(GetsOfBlobs(env) == getsBefore + 4);
+  QCHECK(cap.sets.size() == 1);
+  const cdn_test::Record* unchanged = LastMounted(env, "fetch");
+  QCHECK(unchanged != nullptr && unchanged->Get("result") == "unchanged" && unchanged->Get("reason") == "boot_only" &&
+         unchanged->Get("boot_only_kept") == "1");
+  std::string saved;
+  QCHECK(env.ReadSmallFile(nc::ManifestCopyPath(kDir), &saved, std::size_t{1} << 20));
+  nc::Manifest savedManifest;
+  QCHECK(nc::ParseManifestBody(saved, LimitsOf(env), &savedManifest).status == nc::ParseStatus::kOk);
+  QCHECK(!savedManifest.entries.empty() && savedManifest.entries[0].sha256 == b.objs[0].sha);
+}
+
+// A boot-only label with no boot set: its objects are stored and the manifest saved, and no set is published.
+void ABootOnlyLabelWithNoBootSetIsStoredNotPublished() {
+  World w = WithObjects(4, 300, 120, 'a', 100);
+  w.label = "combat_content";
+  FakeEnv env;
+  w.Serve(env);
+  Captured cap;
+  nc::RunConfig c = w.config;
+  c.boot_only = {"combat_content"};
+  const nc::RunResult r = nc::FetchAndMount(env, c, cap.Sink(), kGo);
+  QCHECK(r.fetched == 4 && !r.published && cap.sets.empty());
+  QCHECK(GetsOfBlobs(env) == 4);
+  std::string saved;
+  QCHECK(env.ReadSmallFile(nc::ManifestCopyPath(kDir), &saved, std::size_t{1} << 20));
+  const cdn_test::Record* unchanged = LastMounted(env, "fetch");
+  QCHECK(unchanged != nullptr && unchanged->Get("reason") == "boot_only" && unchanged->Get("boot_only_kept") == "1");
+}
+
+// A non-boot-only label still publishes beside a kept one: the set holds the boot set's combat records and the new lobby record.
+void ANonBootOnlyLabelStillPublishesBesideAKeptOne() {
+  World a = WithObjects(4, 300, 120, 'a', 100);
+  a.label = "combat_content";
+  a.other_label = "lobby_posters";
+  a.other_objs = WithObjects(1, 700, 140, 'm', 300).objs;
+  FakeEnv env;
+  a.Serve(env);
+  Captured run1;
+  nc::FetchAndMount(env, a.config, run1.Sink(), kGo);
+  nc::RunConfig c = a.config;
+  c.boot_only = {"combat_content"};
+  Captured cap;
+  nc::Manifest boot;
+  QCHECK(nc::MountFromCache(env, c, cap.Sink(), &boot));
+  World b = WithObjects(4, 500, 130, 'p', 200);
+  b.label = "combat_content";
+  b.other_label = "lobby_posters";
+  b.other_objs = WithObjects(1, 800, 150, 'q', 400).objs;
+  b.Serve(env);
+  nc::RunConfig c2 = b.config;
+  c2.boot_only = {"combat_content"};
+  c2.boot = boot;
+  const nc::RunResult r = nc::FetchAndMount(env, c2, cap.Sink(), kGo);
+  QCHECK(r.published && cap.sets.size() == 2);
+  if (cap.sets.size() == 2) {
+    QCHECK(cap.sets[1]->records == 5 && cap.sets[1]->labels.size() == 2);
+  }
+  const cdn_test::Record* published = LastMounted(env, "fetch");
+  QCHECK(published != nullptr && published->Get("boot_only_kept") == "1");
+}
+
+// A new object of a label that is not boot-only publishes even when the boot-only label is unchanged; boot_only_kept is 0.
+void AnUnchangedBootOnlyLabelWithNewObjectsOfAnotherLabelPublishes() {
+  World a = WithObjects(4, 300, 120, 'a', 100);
+  a.label = "combat_content";
+  a.other_label = "lobby_posters";
+  a.other_objs = WithObjects(1, 700, 140, 'm', 300).objs;
+  FakeEnv env;
+  a.Serve(env);
+  env.server.erase(std::string(kBase) + "blobs/sha256/" + a.other_objs[0].sha);  // the lobby object is not had at the first run
+  Captured cap;
+  nc::FetchAndMount(env, a.config, cap.Sink(), kGo);
+  nc::RunConfig c = a.config;
+  c.boot_only = {"combat_content"};
+  nc::Manifest boot;
+  QCHECK(nc::MountFromCache(env, c, cap.Sink(), &boot));
+  QCHECK(cap.sets.size() == 2);
+  a.Serve(env);  // the object is served now
+  c.boot = boot;
+  const nc::RunResult r = nc::FetchAndMount(env, c, cap.Sink(), kGo);
+  QCHECK(r.fetched == 1 && r.published);
+  QCHECK(cap.sets.size() == 3);
+  const cdn_test::Record* published = LastMounted(env, "fetch");
+  QCHECK(published != nullptr && published->Get("boot_only_kept") == "0");
+}
+
+// No boot-only label: the fetch publishes what it fetched, as the Quest's path does, and the line carries no boot_only_kept.
+void AnEmptyListFetchesAndPublishesAsBefore() {
+  World a = WithObjects(4, 300, 120, 'a', 100);
+  a.label = "combat_content";
+  FakeEnv env;
+  a.Serve(env);
+  Captured cap;
+  nc::FetchAndMount(env, a.config, cap.Sink(), kGo);
+  QCHECK(nc::MountFromCache(env, a.config, cap.Sink()));
+  World b = WithObjects(4, 500, 130, 'p', 200);
+  b.label = "combat_content";
+  b.Serve(env);
+  const nc::RunResult r = nc::FetchAndMount(env, b.config, cap.Sink(), kGo);
+  QCHECK(r.published && cap.sets.size() == 3);
+  const cdn_test::Record* fetch = LastMounted(env, "fetch");
+  QCHECK(fetch != nullptr && fetch->Get("boot_only_kept").empty());
+}
+
+// MountFromCache gives back the manifest it published, and nothing when it published none.
+void MountFromCacheHandsBackTheManifestItPublished() {
+  World a = WithObjects(4, 300, 120, 'a', 100);
+  a.label = "combat_content";
+  FakeEnv env;
+  a.Serve(env);
+  Captured run1;
+  nc::FetchAndMount(env, a.config, run1.Sink(), kGo);
+  Captured cap;
+  nc::Manifest boot;
+  QCHECK(nc::MountFromCache(env, a.config, cap.Sink(), &boot));
+  QCHECK(boot.labels == std::vector<std::string>{"combat_content"} && boot.entries.size() == 4);
+  nc::Manifest parsed;
+  QCHECK(nc::ParseManifestBody(cdn_test::ZstdFrameOf(a.ManifestText()), LimitsOf(env), &parsed).status == nc::ParseStatus::kOk);
+  QCHECK(nc::SameMountRecords(boot, parsed, nc::kAndroidArm64));
+
+  // Every name missing: nothing is published, and the handed-back manifest is empty (the junk label is cleared).
+  World w = WithObjects(4, 300, 120, 'a', 100);
+  w.label = "combat_content";
+  FakeEnv first;
+  w.Serve(first);
+  Captured cap1;
+  nc::FetchAndMount(first, w.config, cap1.Sink(), kGo);
+  World other(2);
+  other.label = "combat_content";
+  other.objs[0].name = "0x9001";
+  other.objs[1].name = "0x9002";
+  for (std::size_t i = 0; i < other.objs.size(); ++i) {
+    other.objs[i].frame = MakeFrame(900 + i, 150 + i, static_cast<char>('m' + i));
+    other.objs[i].bytes = 900 + i;
+    other.objs[i].sha = Sha256Of(other.objs[i].frame);
+  }
+  first.fs_->files[nc::ManifestCopyPath(kDir)] = cdn_test::ZstdFrameOf(other.ManifestText());
+  FakeEnv second(first.fs_);
+  Captured cap2;
+  nc::Manifest none;
+  none.labels.push_back("junk");
+  QCHECK(!nc::MountFromCache(second, w.config, cap2.Sink(), &none) && cap2.sets.empty());
+  QCHECK(none.labels.empty() && none.entries.empty());
+
+  // An empty store: nothing to hand back either.
+  FakeEnv empty;
+  Captured cap3;
+  nc::Manifest nothing;
+  nothing.labels.push_back("junk");
+  QCHECK(!nc::MountFromCache(empty, w.config, cap3.Sink(), &nothing) && nothing.labels.empty());
+}
+
 int main() {
   AManifestIsReadByItsBytesNotByItsName();
   APlainManifestOverTheTextLimitEndsAtTheLimitAsItArrives();
@@ -1170,6 +1488,16 @@ int main() {
   AFileOnDiskUnderAListedNameIsShadowingAndRefusesTheLabel();
   TheRegistrarSeamRunsBeforeTheGateAndItsRefusalsTurnTheLabelOff();
   ARegistrarRefusalTurnsOffALabelWithNoScriptRecord();
+  KeepBootOnlyReplacesTheBootOnlyLabelsRecordsWithTheBootSets();
+  KeepBootOnlyDropsALabelTheBootSetLacks();
+  BootOnlyLabelsAddsEveryLabelWithScriptsOfThisPlatform();
+  SameMountRecordsComparesWhatMountReads();
+  ABootOnlyLabelKeepsTheBootSetWhenTheFetchBringsANewOne();
+  ABootOnlyLabelWithNoBootSetIsStoredNotPublished();
+  ANonBootOnlyLabelStillPublishesBesideAKeptOne();
+  AnUnchangedBootOnlyLabelWithNewObjectsOfAnotherLabelPublishes();
+  AnEmptyListFetchesAndPublishesAsBefore();
+  MountFromCacheHandsBackTheManifestItPublished();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "cdn_run_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

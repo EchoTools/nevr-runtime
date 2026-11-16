@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <map>
+#include <optional>
 #include <set>
 #include <utility>
 
@@ -58,8 +59,10 @@ std::string ChunkBaseText(const Mounted& m) {
   return buf;
 }
 
-// `ms` is the mount's own time. It reads no object: the boot mount is the saved manifest and the blob index.
-void SayMounted(Env& env, const char* source, const Mounted& m, std::uint64_t ms) {
+// `ms` is the mount's own time. It reads no object: the boot mount is the saved manifest and the blob index. `bootOnlyKept` is set on a
+// fetch whose run has boot-only labels (RunConfig::boot_only); unset, the line has no such field.
+void SayMounted(Env& env, const char* source, const Mounted& m, std::uint64_t ms,
+                const std::optional<std::size_t>& bootOnlyKept = std::nullopt) {
   std::vector<Field> none;
   if (!m.shadow) {
     none.push_back({"result", "none"});
@@ -76,6 +79,7 @@ void SayMounted(Env& env, const char* source, const Mounted& m, std::uint64_t ms
              {"missing", m.missing},
              {"refused", m.refused},
              {"ms", ms}};
+  if (bootOnlyKept) fields.push_back({"boot_only_kept", *bootOnlyKept});
   fields.insert(fields.end(), none.begin(), none.end());
   env.Event(m.refused != 0 ? EventLevel::kWarn : EventLevel::kInfo, "cdn_mounted", fields);
 }
@@ -364,9 +368,87 @@ bool ReadSavedManifest(Env& env, const std::string& dir, const Limits& limits, s
   return env.ReadSmallFile(ManifestCopyPath(dir), frame, static_cast<std::size_t>(MaxManifestFrameBytes(limits.manifest_text_bytes)));
 }
 
+// The records Mount reads for `platform` and the labels `wanted` accepts, one text key each, sorted (SameMountRecords). A record of 0
+// bytes of no platform (a top-level record) belongs to the platform the plan is made for, so it is kept for every platform.
+std::vector<std::string> MountKeys(const Manifest& m, const Platform& platform, const std::function<bool(const std::string&)>& wanted) {
+  std::vector<std::string> keys;
+  for (const Entry& e : m.entries) {
+    if (e.platform != platform.name || !wanted(e.label)) continue;
+    keys.push_back("e|" + e.label + "|" + FormatHex64(e.type) + "|" + FormatHex64(e.name) + "|" + e.sha256 + "|" +
+                   std::to_string(e.size) + "|" + std::to_string(e.bytes) + "|" + std::to_string(e.align));
+  }
+  for (const EmptyRecord& z : m.empties) {
+    if ((z.platform != platform.name && !z.platform.empty()) || !wanted(z.label)) continue;
+    keys.push_back("z|" + z.label + "|" + FormatHex64(z.type) + "|" + FormatHex64(z.name) + "|" + std::to_string(z.align));
+  }
+  for (const ScriptEntry& s : m.scripts) {
+    if (s.platform != platform.name || !wanted(s.label)) continue;
+    keys.push_back("s|" + s.label + "|" + FormatHex64(s.name) + "|" + FormatHex64(s.stock_source) + "|" + s.stock_sha256);
+  }
+  std::sort(keys.begin(), keys.end());
+  return keys;
+}
+
+// Whether the records of one label differ between two manifests, for `platform`.
+bool LabelRecordsDiffer(const Manifest& a, const Manifest& b, const Platform& platform, const std::string& label) {
+  const auto only = [&label](const std::string& l) { return l == label; };
+  return MountKeys(a, platform, only) != MountKeys(b, platform, only);
+}
+
 }  // namespace
 
-bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish) {
+Manifest KeepBootOnly(const Manifest& fetched, const Manifest& boot, const std::vector<std::string>& boot_only) {
+  const std::set<std::string> held(boot_only.begin(), boot_only.end());
+  const auto isHeld = [&held](const std::string& label) { return held.count(label) != 0; };
+  Manifest out = fetched;
+  out.entries.erase(std::remove_if(out.entries.begin(), out.entries.end(), [&isHeld](const Entry& e) { return isHeld(e.label); }),
+                    out.entries.end());
+  out.empties.erase(std::remove_if(out.empties.begin(), out.empties.end(), [&isHeld](const EmptyRecord& z) { return isHeld(z.label); }),
+                    out.empties.end());
+  out.scripts.erase(std::remove_if(out.scripts.begin(), out.scripts.end(), [&isHeld](const ScriptEntry& s) { return isHeld(s.label); }),
+                    out.scripts.end());
+  out.refused.erase(std::remove_if(out.refused.begin(), out.refused.end(), [&isHeld](const Refusal& r) { return isHeld(r.label); }),
+                    out.refused.end());
+  for (const Entry& e : boot.entries) {
+    if (isHeld(e.label)) out.entries.push_back(e);
+  }
+  for (const EmptyRecord& z : boot.empties) {
+    if (isHeld(z.label)) out.empties.push_back(z);
+  }
+  for (const ScriptEntry& s : boot.scripts) {
+    if (isHeld(s.label)) out.scripts.push_back(s);
+  }
+  for (const Refusal& r : boot.refused) {
+    if (isHeld(r.label)) out.refused.push_back(r);
+  }
+  for (const std::string& label : boot.labels) {
+    if (isHeld(label) && std::find(out.labels.begin(), out.labels.end(), label) == out.labels.end()) out.labels.push_back(label);
+  }
+  return out;
+}
+
+std::vector<std::string> BootOnlyLabels(const std::vector<std::string>& fixed, const Manifest& boot, const Manifest& fetched,
+                                        const Platform& platform) {
+  std::vector<std::string> out;
+  if (fixed.empty()) return out;
+  std::set<std::string> labels(fixed.begin(), fixed.end());
+  const Manifest* const sets[] = {&boot, &fetched};
+  for (const Manifest* m : sets) {
+    for (const ScriptEntry& s : m->scripts) {
+      if (s.platform == platform.name) labels.insert(s.label);
+    }
+  }
+  out.assign(labels.begin(), labels.end());
+  return out;
+}
+
+bool SameMountRecords(const Manifest& a, const Manifest& b, const Platform& platform) {
+  const auto all = [](const std::string&) { return true; };
+  return MountKeys(a, platform, all) == MountKeys(b, platform, all);
+}
+
+bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish, Manifest* boot) {
+  if (boot != nullptr) *boot = Manifest();
   const Limits limits = LoadLimits(env, config.dir);
   if (!limits.ok) return false;
   std::unique_ptr<Store> store = OpenStoreLogged(env, config.dir, limits, "boot");
@@ -400,6 +482,7 @@ bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish) {
   const std::uint64_t mountMs = env.NowMs() - mountStarted;
   SayMounted(env, "boot", *mounted, mountMs);
   if (!mounted->shadow) return false;
+  if (boot != nullptr) *boot = std::move(manifest);  // the set published: the fetch's boot-only labels keep its records
   publish(std::move(mounted));
   return true;
 }
@@ -577,6 +660,11 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
     }
   }
 
+  // The boot-only labels of this run (docs/adr/0045 decision 7): the fixed list and every label with scripts of this platform. With an
+  // empty list the fetch mounts what it fetched, as it always has.
+  const std::vector<std::string> bootOnly = BootOnlyLabels(config.boot_only, config.boot, manifest, config.platform);
+  std::size_t fetchedOutside = 0;  // objects stored this run under a label that is not boot-only
+
   // Step 3: fetch what the store does not hold, an object once however many entries name it.
   FetchProgress progress;
   progress.total_bytes = plan.fetch_bytes;
@@ -603,6 +691,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
     result.fetched = fetched.fetched;
     result.cached = fetched.held;
     result.bytes = fetched.bytes_fetched;
+    fetchedOutside = result.fetched;  // the labels are not told apart here: the publish rule below then publishes (the safe side)
     if (fetched.status != PrefetchStatus::kComplete) {
       // What was stored stays and the next launch resumes from it; the manifest is not saved and nothing new is mounted.
       result.failed = 1;
@@ -636,6 +725,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
       if (d.ok) {
         fetchedShas.insert(e.sha256);
         ++result.fetched;
+        if (std::find(bootOnly.begin(), bootOnly.end(), e.label) == bootOnly.end()) ++fetchedOutside;
         result.bytes += e.size;
         progress.done_bytes += e.size;
         ++progress.done_blobs;
@@ -694,16 +784,38 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
     env.Event(EventLevel::kError, "cdn_manifest",
               {{"result", "save_failed"}, {"consequence", "the next launch mounts the manifest saved before this one, or none"}});
   }
-  if (changed || result.fetched != 0) {
+  // With boot-only labels the set mounted gives each of them the boot set's records (KeepBootOnly), so the set changes only for what is not
+  // boot-only. It is published when it differs from the boot set, or when the fetch stored an object of another label: a new object of
+  // a label that is not boot-only must show. What arrived for a boot-only label waits for the next start (`boot_only_kept`).
+  const Manifest keptSet = bootOnly.empty() ? Manifest() : KeepBootOnly(manifest, config.boot, bootOnly);
+  const Manifest& mountSet = bootOnly.empty() ? manifest : keptSet;
+  bool publishSet = changed || result.fetched != 0;
+  std::optional<std::size_t> bootOnlyKept;
+  if (!bootOnly.empty()) {
+    std::size_t kept = 0;
+    for (const std::string& label : bootOnly) {
+      if (LabelRecordsDiffer(manifest, config.boot, config.platform, label)) ++kept;
+    }
+    bootOnlyKept = kept;
+    publishSet = publishSet && (!SameMountRecords(mountSet, config.boot, config.platform) || fetchedOutside != 0);
+  }
+  if (publishSet) {
     store->EndWrites();  // the mount opens the store files this run appended to; on the PC an open append handle refuses that open
     const std::uint64_t mountStarted = env.NowMs();
-    std::unique_ptr<Mounted> mounted(new Mounted(Mount(env, *store, manifest, config.platform, GatedPolicy(env, config, manifest, "fetch"))));
+    std::unique_ptr<Mounted> mounted(new Mounted(Mount(env, *store, mountSet, config.platform, GatedPolicy(env, config, mountSet, "fetch"))));
     const std::uint64_t mountMs = env.NowMs() - mountStarted;
-    if (mounted->shadow || mounted->refused != 0 || mounted->missing != 0) SayMounted(env, "fetch", *mounted, mountMs);
+    if (mounted->shadow || mounted->refused != 0 || mounted->missing != 0) SayMounted(env, "fetch", *mounted, mountMs, bootOnlyKept);
     if (mounted->shadow) {
       publish(std::move(mounted));
       result.published = true;
     }
+  } else if (bootOnlyKept && *bootOnlyKept != 0) {
+    env.Event(EventLevel::kInfo, "cdn_mounted",
+              {{"source", "fetch"},
+               {"result", "unchanged"},
+               {"reason", "boot_only"},
+               {"boot_only_kept", *bootOnlyKept},
+               {"consequence", "the labels fixed at boot keep the boot set's records this run; what arrived is mounted at the next start"}});
   }
   done("ok");
   return result;

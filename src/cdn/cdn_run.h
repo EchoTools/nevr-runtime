@@ -11,6 +11,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "cdn/cdn_env.h"
 #include "cdn/cdn_manifest.h"
@@ -51,7 +52,16 @@ struct RunConfig {
   // Runs before the gate, for the manifest of each mount: it registers the `scripts` copies of every label and reports what it
   // held and refused (cdn_script_gate.h). Unset: nothing is held and nothing is refused.
   ScriptRegistrar registrar;
+  // The labels fixed at boot (docs/adr/0045 decision 7): a fetch mounts each of them only as the boot set had it. BootOnlyLabels adds
+  // every label with a `scripts` entry of this platform. Empty: none, and the fetch mounts what it fetched (the Quest's).
+  std::vector<std::string> boot_only;
+  // The manifest of the set the boot mount published; empty when it published none (MountFromCache fills it).
+  Manifest boot;
 };
+
+// The client's boot-only labels, the fixed part of RunConfig::boot_only: the EchoCombat data a combat session simulates. MakeRunConfig
+// gives them to the windows-x86_64 client only.
+inline constexpr const char* kClientBootOnlyLabels[] = {"combat_content"};
 
 // Receives a mounted set. The set is never freed by the worker: a request being filled from its shadow must stay valid.
 using Publish = std::function<void(std::unique_ptr<Mounted>)>;
@@ -72,8 +82,24 @@ struct RunResult {
   bool published = false;    // a set was published by the fetch half
 };
 
-// Boot half: no network. Reads the index and mounts it. Event cdn_mounted source=boot when anything was mounted or refused.
-bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish);
+// Boot half: no network. Reads the index and mounts it. Event cdn_mounted source=boot when anything was mounted or refused. `boot`, when
+// not null, receives the manifest of the set it published, and is left empty on every return that publishes nothing.
+bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish, Manifest* boot = nullptr);
+
+// The manifest a fetch mounts for the boot-only labels: a copy of `fetched` in which every entry, record of 0 bytes, script and refusal
+// of a label in `boot_only` is replaced by the boot set's items of that label. A label of `boot_only` the boot set lacks keeps no record.
+Manifest KeepBootOnly(const Manifest& fetched, const Manifest& boot, const std::vector<std::string>& boot_only);
+
+// The boot-only labels of a run: `fixed` (sorted, no duplicates), plus every label with a `scripts` entry of `platform` in `boot` or
+// `fetched`. Empty when `fixed` is empty.
+std::vector<std::string> BootOnlyLabels(const std::vector<std::string>& fixed, const Manifest& boot, const Manifest& fetched,
+                                        const Platform& platform);
+
+// Whether two manifests give Mount the same records for `platform`: the same entries of this platform (label, type, name, sha256,
+// size, bytes, align), the same records of 0 bytes of this platform or of none (label, type, name, align) and the same `scripts`
+// entries of this platform (label, name, stock_source, stock_sha256), each compared as a multiset. Document order, `labels`, `refused`,
+// `unknown_fields` and `stock_size` are not compared: they do not change what Mount builds.
+bool SameMountRecords(const Manifest& a, const Manifest& b, const Platform& platform);
 
 // Worker half. `keep_going` returning false ends it at the next boundary (shutdown).
 RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publish, const std::function<bool()>& keep_going);

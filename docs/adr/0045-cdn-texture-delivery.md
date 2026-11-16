@@ -73,7 +73,7 @@ process.
    held for the life of the process, and serves every object in it. On Quest the directory is `<internalDataPath>/nevr/cache/`.
 7. **Never block the boot.** The runtime mounts what the cache holds at boot with no network, fetches in the background on a
    client only, and mounts what arrives. A first launch may show the stock texture; a second launch shows the CDN texture from its
-   first load with no request. Every request of a CDN key reads the CDN file; there is no served-once latch.
+   first load with no request. Every request of a CDN key reads the CDN file; there is no served-once latch. A label in the run's boot-only list (a client: `combat_content` and every label with `scripts`) is mounted only as the boot set had it: a later set carries the boot set's records for it, and what arrives is stored and mounted at the next start, because its records decide what a session simulates.
 8. **Limits come from the device and the manifest, never from a constant** (`src/cdn/cdn_limits.h`). The manifest text, the entry
    count, one object's size, the storage a plan may add and the store files held open are each a share of the device's free memory,
    free space and free descriptors, read when the run starts; a missing fact stops the run with its name. What remains constant is

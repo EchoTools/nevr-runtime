@@ -466,6 +466,95 @@ void AnOutageOnV2IsTheFailedFetchAndNeverFallsBack() {
 
 }  // namespace
 
+// ── the boot-only labels through RunOnce and MakeRunConfig (R6-b) ──────────────────────────────────────────────────────────
+
+const char* const kSvcBase = "https://cargo.echo.taxi/";
+const char* const kSvcManifest = "v1/allassets/test/manifest.json.zst";
+constexpr std::uint64_t kSvcType = 0x2a41cf1c1d9e5d32ULL;
+
+struct SvcObject {
+  std::string frame;
+  std::string sha;
+  std::uint64_t name = 0;
+  std::uint64_t bytes = 0;
+};
+
+SvcObject SvcMake(std::uint64_t bytes, std::size_t size, char fill, std::uint64_t name) {
+  SvcObject o;
+  o.frame = cdn_test::MakeFrame(bytes, size, fill);
+  o.sha = cdn_test::Sha256Of(o.frame);
+  o.name = name;
+  o.bytes = bytes;
+  return o;
+}
+
+// The entries of `objects` as the manifest states them.
+nlohmann::ordered_json SvcEntries(const std::vector<SvcObject>& objects) {
+  nlohmann::ordered_json entries = nlohmann::ordered_json::array();
+  for (const SvcObject& o : objects) {
+    entries.push_back({{"platform", "android-arm64"}, {"type", "0x2a41cf1c1d9e5d32"}, {"name", nc::FormatHex64(o.name)},
+                       {"format", "zstd-frame"}, {"sha256", o.sha}, {"size", o.frame.size()}, {"bytes", o.bytes}, {"align", 16}});
+  }
+  return entries;
+}
+
+// The manifest of `objects` (combat_content) and, when given, `lobby` (lobby_posters), as the CDN publishes it (one zstd frame).
+std::string SvcManifestBody(const std::vector<SvcObject>& objects, const std::vector<SvcObject>& lobby = {}) {
+  nlohmann::ordered_json labels = {{"combat_content", {{"entries", SvcEntries(objects)}}}};
+  if (!lobby.empty()) labels["lobby_posters"] = {{"entries", SvcEntries(lobby)}};
+  return cdn_test::ZstdFrameOf(nlohmann::ordered_json{{"schema", "nevr-cargo-manifest"}, {"schema_version", 1}, {"labels", labels},
+                                                      {"empty", nlohmann::ordered_json::array()}}
+                                   .dump());
+}
+
+void ServeSvcSet(cdn_test::FakeEnv& env, const std::vector<SvcObject>& objects, const std::vector<SvcObject>& lobby = {}) {
+  env.server[std::string(kSvcBase) + kSvcManifest] = cdn_test::Response{200, SvcManifestBody(objects, lobby), std::string::npos, ""};
+  for (const SvcObject& o : objects) env.server[std::string(kSvcBase) + "blobs/sha256/" + o.sha] = cdn_test::Response{200, o.frame, std::string::npos, ""};
+  for (const SvcObject& o : lobby) env.server[std::string(kSvcBase) + "blobs/sha256/" + o.sha] = cdn_test::Response{200, o.frame, std::string::npos, ""};
+}
+
+bool SetHoldsName(const nc::Mounted* m, std::uint64_t name) {
+  nevr_shadow::Found f;
+  return m->shadow != nullptr && m->shadow->Find(kSvcType, name, &f);
+}
+
+// RunOnce's boot mount hands the fetch the set it published, so the fetch keeps the boot set's combat records: the set the fetch
+// publishes (for its new lobby object) holds A's combat records and never B's.
+void RunOnceHandsTheBootManifestToTheFetch() {
+  g_published.clear();
+  const std::vector<SvcObject> a = {SvcMake(300, 120, 'a', 0x100), SvcMake(301, 127, 'b', 0x101)};
+  const std::vector<SvcObject> b = {SvcMake(500, 130, 'p', 0x200), SvcMake(501, 137, 'q', 0x201)};
+  const std::vector<SvcObject> lobby = {SvcMake(700, 140, 'm', 0x300)};
+  cdn_test::FakeEnv env;
+  nc::RunConfig c;
+  c.dir = "/cache";
+  c.base_url = kSvcBase;
+  c.manifest_path = kSvcManifest;
+  c.platform = nc::kAndroidArm64;
+  const auto keepGoing = [] { return true; };
+  ServeSvcSet(env, a);
+  nc::RunOnce(env, c, &Publish, keepGoing);  // the first launch: A is fetched and published
+  QCHECK(g_published.size() == 1);
+  ServeSvcSet(env, b, lobby);
+  c.boot_only = {"combat_content"};
+  nc::RunOnce(env, c, &Publish, keepGoing);  // the boot mount publishes A; the fetch brings B, which waits, and publishes its lobby
+  QCHECK(g_published.size() == 3);
+  if (g_published.size() == 3) {
+    const nc::Mounted* boot = g_published[1];
+    QCHECK(boot->records == 2 && SetHoldsName(boot, 0x100) && SetHoldsName(boot, 0x101));
+    const nc::Mounted* fetched = g_published[2];
+    QCHECK(fetched->records == 3 && SetHoldsName(fetched, 0x100) && SetHoldsName(fetched, 0x101) && SetHoldsName(fetched, 0x300));
+    QCHECK(!SetHoldsName(fetched, 0x200) && !SetHoldsName(fetched, 0x201));
+  }
+}
+
+// The Windows client's boot-only labels; the Quest's list stays empty.
+void MakeRunConfigGivesTheWindowsClientItsBootOnlyLabels() {
+  const nc::RunConfig windows = nc::MakeRunConfig(nc::Settings{}, "/c", nc::kWindowsX64);
+  QCHECK((windows.boot_only == std::vector<std::string>{"combat_content"}));
+  QCHECK(nc::MakeRunConfig(nc::Settings{}, "/c", nc::kAndroidArm64).boot_only.empty());
+}
+
 int main() {
   sentinel::SetLogSink(&Sink);
   ThePosixEnvWorksOnRealFiles();
@@ -482,6 +571,8 @@ int main() {
   TheWholeGameLaunchFallsBackToV1TooWhenTheCdnHasNoV2Key();
   WithBothKeysV2IsReadAndV1IsNeverAsked();
   AnOutageOnV2IsTheFailedFetchAndNeverFallsBack();
+  RunOnceHandsTheBootManifestToTheFetch();
+  MakeRunConfigGivesTheWindowsClientItsBootOnlyLabels();
   if (std::getenv("NEVR_CDN_PRINT_LOG") != nullptr) {  // the sentinel's own JSON lines of the last run, for a commit message or a person
     for (const std::string& line : g_lines) std::printf("%s\n", line.c_str());
   }
