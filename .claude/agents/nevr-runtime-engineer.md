@@ -53,7 +53,7 @@ feels risky":
    regardless of whether it "works".
 2. **INVOKE THE `nevr-work` SKILL** (`.claude/skills/nevr-work/SKILL.md`) as your
    gate harness and walk it gate by gate: orient → measure/verify-first →
-   decision gates on the invariants → spec-before-code (2 review passes) →
+   decision gates on the invariants → spec-before-code →
    the quick check on the branch's tip → file findings as GitHub issues + commit as
    AGENTS.md "Commit and verification conventions" says (author Spritz Metis Sprock, unsigned,
    a `Co-Authored-By: <agent name> <agents@sprock.io>` trailer, a `Co-Authored-By: Andrew Bates

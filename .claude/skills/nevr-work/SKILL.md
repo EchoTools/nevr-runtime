@@ -69,7 +69,7 @@ report it.
 
 ### 4. Plan and write the test first
 
-"Methodology" (plan, two review passes, testing strategy) and "What a landed commit carries" (search statement, siblings, symbols,
+"Methodology" (plan, testing strategy) and "What a landed commit carries" (search statement, siblings, symbols,
 mutants, platform parity, headline). A new flag or config key has a consumer, shown by a grep and a test. Logging is part
 of the work (the logging standard `AGENTS.md` opens with, `docs/standards/logging.md`).
 
