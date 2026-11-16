@@ -4,6 +4,7 @@
 #include <map>
 #include <set>
 
+#include "core/combat_level_class.h"
 #include "cdn/cdn_format.h"
 #include "cdn/cdn_prefetch.h"
 #include "cdn/cdn_store.h"
@@ -18,7 +19,7 @@ constexpr std::size_t kBlobRecordBytes = kU64Bytes + 2 * kU32Bytes;  // an M rec
 constexpr std::size_t kBitsPerByte = 8;
 constexpr std::size_t kFirstByte = 0;
 
-constexpr const char* kNoLevel = "no_level";
+constexpr const char* kNoMode = "no_mode";
 constexpr const char* kArchiveUnavailable = "archive_unavailable";
 constexpr const char* kBadArchive = "bad_archive";
 constexpr const char* kOverStorage = "over_storage";
@@ -45,7 +46,35 @@ std::vector<std::uint8_t> BytesOf(const std::string& text) {
   return out;
 }
 
-// One demand record (R6-a-1 section 5): Info when the set is had and mounted, Warning when a needed object could not be had.
+// The service's game types and what each takes (PLAN-v7 R6-a-2a, the table of R6-a-2a 1.3). One row per game type of
+// nevr_game_type_table::kGameTypes; a row's levels are the class lists its kind names in LevelsOfMode.
+enum class ModeKind : std::uint8_t { kArena, kCombat, kSocial, kSocialNpe };
+struct ModeRow {
+  const char* game_type;
+  ModeKind kind;
+};
+inline constexpr ModeRow kModeRows[] = {
+    {"echo_arena", ModeKind::kArena},
+    {"echo_arena_private", ModeKind::kArena},
+    {"echo_arena_tournament", ModeKind::kArena},
+    {"echo_arena_public_ai", ModeKind::kArena},
+    {"echo_arena_practice", ModeKind::kArena},
+    {"echo_combat", ModeKind::kCombat},
+    {"echo_combat_private", ModeKind::kCombat},
+    {"echo_combat_tournament", ModeKind::kCombat},
+    {"social_2.0", ModeKind::kSocial},
+    {"social_2.0_private", ModeKind::kSocial},
+    {"social_2.0_npe", ModeKind::kSocialNpe},
+};
+
+// The levels of one kind, added to `out`.
+template <std::size_t N>
+void AddAll(const std::uint64_t (&levels)[N], std::set<std::uint64_t>* out) {
+  for (const std::uint64_t level : levels) out->insert(level);
+}
+
+// One demand record (R6-a-1 section 5, R6-a-2a 1.7): Info when the set is had and mounted; Error when a needed object could not be had
+// (Warning when the caller asked to stop, reason cancelled).
 void SayDemand(Env& env, const DemandResult& r, std::uint64_t level, const std::string& gameType) {
   const std::string levelText = FormatHex64(level);
   if (r.ok) {
@@ -69,6 +98,7 @@ void SayDemand(Env& env, const DemandResult& r, std::uint64_t level, const std::
                                {"level", levelText},
                                {"game_type", gameType},
                                {"reason", r.reason}};
+  const bool cancelled = std::string(r.reason) == kCancelled;
   if (!r.label.empty()) {
     fields.push_back({"label", r.label});
     fields.push_back({"name", r.name});
@@ -78,7 +108,7 @@ void SayDemand(Env& env, const DemandResult& r, std::uint64_t level, const std::
   fields.push_back({"fetched", r.fetched});
   fields.push_back({"ms", r.ms});
   fields.push_back({"consequence", "no set is mounted: this session does not start"});
-  env.Event(EventLevel::kWarn, "cdn_demand", fields);
+  env.Event(cancelled ? EventLevel::kWarn : EventLevel::kError, "cdn_demand", fields);
 }
 
 }  // namespace
@@ -121,12 +151,46 @@ std::vector<std::string> LabelsOfMode(std::string_view game_type) {
   return out;
 }
 
+std::vector<std::uint64_t> LevelsOfMode(std::string_view game_type) {
+  std::set<std::uint64_t> out;
+  for (const ModeRow& row : kModeRows) {
+    if (game_type != row.game_type) continue;
+    switch (row.kind) {
+      case ModeKind::kArena:
+        AddAll(nevr_combat_level::kEchoArenaLevels, &out);
+        AddAll(nevr_combat_level::kLobbyLevels, &out);
+        break;
+      case ModeKind::kCombat:
+        AddAll(nevr_combat_level::kCombatMaps, &out);
+        out.insert(nevr_combat_level::kCombatLobby);
+        AddAll(nevr_combat_level::kLobbyLevels, &out);
+        break;
+      case ModeKind::kSocial:
+        AddAll(nevr_combat_level::kLobbyLevels, &out);
+        break;
+      case ModeKind::kSocialNpe:
+        AddAll(nevr_combat_level::kLobbyLevels, &out);
+        out.insert(nevr_combat_level::kTutorialLobbyLevel);
+        break;
+    }
+  }
+  return std::vector<std::uint64_t>(out.begin(), out.end());
+}
+
+std::vector<std::uint64_t> RootLevels(const DemandInput& input) {
+  std::set<std::uint64_t> roots;
+  if (input.level != 0) roots.insert(input.level);
+  for (const std::uint64_t level : LevelsOfMode(input.game_type)) roots.insert(level);
+  return std::vector<std::uint64_t>(roots.begin(), roots.end());
+}
+
 bool ComputeNeeded(const Manifest& manifest, const Platform& platform, const Policy& policy, const DemandInput& input,
                    const ReadArchiveFn& read_archive, Needed* out, const char** reason, const Entry** failed) {
   *out = Needed();
   if (failed != nullptr) *failed = nullptr;
-  if (input.level == 0) {
-    *reason = kNoLevel;
+  const std::vector<std::uint64_t> roots = RootLevels(input);
+  if (roots.empty()) {
+    *reason = kNoMode;
     return false;
   }
   // The entries of the labels the policy serves, of this platform, by their key.
@@ -145,7 +209,8 @@ bool ComputeNeeded(const Manifest& manifest, const Platform& platform, const Pol
   };
   // Archive closure: each archive key is visited once. A key the manifest has no entry for is not expanded.
   std::set<Key> visited;
-  std::vector<Key> pending = {{kArchiveType, input.level}};
+  std::vector<Key> pending;
+  for (const std::uint64_t root : roots) pending.push_back({kArchiveType, root});
   while (!pending.empty()) {
     const Key key = pending.back();
     pending.pop_back();
@@ -210,8 +275,8 @@ DemandResult ResolveDemand(Env& env, const RunConfig& base, const DemandInput& i
     SayDemand(env, res, input.level, input.game_type);
     return res;
   };
-  if (input.level == 0) {
-    r.reason = kNoLevel;
+  if (RootLevels(input).empty()) {
+    r.reason = kNoMode;
     return finish(std::move(r));
   }
   // The deadline ends the resolve at the next boundary; any other stop is the caller's (shutdown).

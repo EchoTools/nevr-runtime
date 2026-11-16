@@ -37,6 +37,12 @@ struct ArchiveBody {
 // False when a count would pass the end of the body, or bytes remain after the final u32 0.
 bool ParseArchiveBody(const std::vector<std::uint8_t>& body, ArchiveBody* out);
 
+// The levels a game type takes (PLAN-v7 R6-a-2a, docs/adr/0045 decision 9): arena types take the arena levels and the lobbies, combat
+// types the four combat maps, the combat lobby and the lobbies, social types the lobbies, and the NPE social type also the tutorial
+// lobby. The order of the service's game types is the table in cdn_demand.cpp, one row per game type the service places. A name the
+// table does not place has no levels. Sorted, unique.
+std::vector<std::uint64_t> LevelsOfMode(std::string_view game_type);
+
 // The labels a game type takes whole. Proposed, not measured: the tree does not say which modes need which label (open question Q-B2).
 // The EchoCombat modes take the combat label, which no stock arena archive lists. Every other game type takes none.
 struct ModeLabels {
@@ -66,6 +72,10 @@ struct DemandInput {
   std::string game_type;    // the mode's name, e.g. "echo_arena"
 };
 
+// The roots of a session's closure: its level, when it names one, and the levels of its mode. Sorted, unique; empty when neither
+// names a level, which is a named failure ("no_mode").
+std::vector<std::uint64_t> RootLevels(const DemandInput& input);
+
 // What a session needs from the manifest: the closure's entries, the mode labels' entries, records of 0 bytes and scripts, and the labels
 // that contribute at least one entry (sorted).
 struct Needed {
@@ -78,7 +88,8 @@ struct Needed {
 // Reads an archive's decompressed body (places 1 to 3). False when it cannot be had.
 using ReadArchiveFn = std::function<bool(const Entry& archive, std::vector<std::uint8_t>* body)>;
 
-// The closure and the mode labels over `manifest`, for the labels `policy` serves. False, with *reason, on "no_level" (level 0),
+// The closure and the mode labels over `manifest`, for the labels `policy` serves. The closure starts from every root (RootLevels).
+// False, with *reason, on "no_mode" (no root),
 // "archive_unavailable" (read_archive refused an archive) or "bad_archive" (a body that does not parse). `failed`, when given, names the
 // archive that ended it.
 bool ComputeNeeded(const Manifest& manifest, const Platform& platform, const Policy& policy, const DemandInput& input,

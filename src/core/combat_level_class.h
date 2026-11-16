@@ -24,6 +24,12 @@ inline constexpr const char* kCombatMapNames[kCombatMapCount] = {"mpl_combat_dys
 inline constexpr std::uint64_t kCombatLobby = 0xcb9977f7fc2b4526ULL;  // mpl_lobby_b_combat
 inline constexpr std::uint64_t kEchoArenaLevels[4] = {0x576ed3f8428ebc4bULL, 0x7691d78d414c5701ULL, 0x576ed3f8428ebc48ULL,
                                                       0x3f20b99c97955721ULL};
+// The lobby levels a session returns to (src/quest/combat/combat_level.cpp), the combat lobby among them (kCombatLobby).
+inline constexpr std::size_t kLobbyLevelCount = 6;
+inline constexpr std::uint64_t kLobbyLevels[kLobbyLevelCount] = {0x5763ceff4e96bc48ULL, 0xd09afd15b1c75c04ULL, 0x05361c73bb73db19ULL,
+                                                                 0x6daa00a6d33d44b7ULL, 0xcb9967f7f220453eULL, kCombatLobby};
+// mpl_tutorial_lobby, the lobby an NPE social session loads (symbol_corpus.cpp).
+inline constexpr std::uint64_t kTutorialLobbyLevel = 0x3c8d74713ced8c3fULL;
 
 namespace detail {
 template <std::size_t N>

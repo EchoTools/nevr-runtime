@@ -17,10 +17,12 @@
 
 #include "cdn/cdn_demand.h"
 #include "cdn/cdn_run.h"
+#include "core/combat_level_class.h"
 #include "core/resource_shadow.h"
 #include "quest/tests/cdn_fake_env.h"
 #include "quest/tests/cdn_zstd_support.h"
 #include "quest/tests/test_check.h"
+#include "runtime/server/game_type_table.h"
 
 namespace {
 
@@ -39,6 +41,7 @@ constexpr const char* kGame = "game";
 constexpr const char* kCombat = "combat_content";
 constexpr const char* kEchoArena = "echo_arena";
 constexpr const char* kEchoCombat = "echo_combat";
+constexpr const char* kEchoDemo = "echo_demo";  // a game type the service does not place
 constexpr const char* kArenaPrivate = "echo_arena_private";
 constexpr const char* kSocial = "social_2.0";
 constexpr const char* kSchemaName = "nevr-cargo-manifest";
@@ -48,7 +51,7 @@ constexpr const char* kStatusHashMismatch = "hash_mismatch";
 constexpr const char* kStatusOverStorage = "over_storage";
 constexpr const char* kStatusDeadline = "deadline";
 constexpr const char* kStatusBadArchive = "bad_archive";
-constexpr const char* kStatusNoLevel = "no_level";
+constexpr const char* kStatusNoMode = "no_mode";
 constexpr const char* kStatusCancelled = "cancelled";
 constexpr const char* kStatusHeldSizeMismatch = "held_size_mismatch";  // PrefetchStatusName(kHeldWrongSize), cdn_prefetch.cpp
 constexpr const char* kRoleServer = "server";
@@ -66,6 +69,13 @@ constexpr std::uint64_t kName12 = 0x12;
 constexpr std::uint64_t kName13 = 0x13;
 constexpr std::uint64_t kName30 = 0x30;
 constexpr std::uint64_t kName31 = 0x31;
+constexpr std::uint64_t kName40 = 0x40;
+constexpr std::uint64_t kName41 = 0x41;
+constexpr std::uint64_t kName42 = 0x42;
+constexpr std::uint64_t kName50 = 0x50;  // kName50 + k: the asset of combat map k
+constexpr std::uint64_t kEchoArenaLevel0 = nevr_combat_level::kEchoArenaLevels[0];  // mpl_arena_a
+constexpr std::uint64_t kEchoArenaLevel1 = nevr_combat_level::kEchoArenaLevels[1];  // mpl_arena_a_lowspec
+constexpr std::uint64_t kLobbyLevel0 = nevr_combat_level::kLobbyLevels[0];          // mpl_lobby_b
 constexpr std::uint64_t kName99 = 0x99;
 constexpr std::uint64_t kAssetBytes = 300;     // decompressed bytes of an asset
 constexpr std::size_t kAssetFrameBytes = 120;  // stored bytes of an asset's frame
@@ -397,20 +407,90 @@ void ALabelThatIsOffContributesNothing() {
   QCHECK(rec != nullptr && rec->Get("needed") == "0" && rec->Get("role") == kRoleServer);
 }
 
-// Level 0 is a named failure, found before any object or the manifest is asked for.
-void NoLevelIsANamedFailure() {
+// A game type no level and no mode places is a named failure, found before any object or the manifest is asked for.
+void NoModeIsANamedFailure() {
   const Set s;
   nc::Needed needed;
   const char* reason = "";
-  QCHECK(!nc::ComputeNeeded(s.Parsed(), nc::kWindowsX64, ServerPolicy(), Input(kLevelZero, kEchoArena), ReadFrom(s), &needed, &reason));
-  QCHECK(std::string(reason) == kStatusNoLevel);
+  QCHECK(!nc::ComputeNeeded(s.Parsed(), nc::kWindowsX64, ServerPolicy(), Input(kLevelZero, kEchoDemo), ReadFrom(s), &needed, &reason));
+  QCHECK(std::string(reason) == kStatusNoMode);
+  FakeEnv env;
+  s.Serve(env);
+  Captured got;
+  const nc::DemandResult r = nc::ResolveDemand(env, s.config, Input(kLevelZero, kEchoDemo), nullptr, got.Sink(), [] { return true; });
+  QCHECK(!r.ok && std::string(r.reason) == kStatusNoMode);
+  QCHECK(got.sets.empty());
+  QCHECK(env.requests.empty());
+}
+
+// The label of a level-0 session is the union of its mode's levels: two arena levels and one lobby, each archive with its asset.
+void NoLevelResolvesTheUnionOfTheModesLevels() {
+  Set s;
+  s.items.push_back(ArchiveItem(kEchoArenaLevel0, ArchiveBody({}, {{kAssetType, kName40}})));
+  s.items.push_back(AssetItem(kGame, kName40, 'h'));
+  s.items.push_back(ArchiveItem(kEchoArenaLevel1, ArchiveBody({}, {{kAssetType, kName41}})));
+  s.items.push_back(AssetItem(kGame, kName41, 'i'));
+  s.items.push_back(ArchiveItem(kLobbyLevel0, ArchiveBody({}, {{kAssetType, kName42}})));
+  s.items.push_back(AssetItem(kGame, kName42, 'j'));
+  nc::Needed needed;
+  const char* reason = "";
+  QCHECK(nc::ComputeNeeded(s.Parsed(), nc::kWindowsX64, ServerPolicy(), Input(kLevelZero, kEchoArena), ReadFrom(s), &needed, &reason));
+  QCHECK(Holds(needed, nc::kArchiveType, kEchoArenaLevel0) && Holds(needed, nc::kArchiveType, kEchoArenaLevel1));
+  QCHECK(Holds(needed, nc::kArchiveType, kLobbyLevel0));
+  QCHECK(Holds(needed, kAssetType, kName40) && Holds(needed, kAssetType, kName41) && Holds(needed, kAssetType, kName42));
   FakeEnv env;
   s.Serve(env);
   Captured got;
   const nc::DemandResult r = nc::ResolveDemand(env, s.config, Input(kLevelZero, kEchoArena), nullptr, got.Sink(), [] { return true; });
-  QCHECK(!r.ok && std::string(r.reason) == kStatusNoLevel);
-  QCHECK(got.sets.empty());
-  QCHECK(env.requests.empty());
+  QCHECK(r.ok && got.sets.size() == kOne);
+}
+
+// A combat session with one map still needs all four combat maps: the closure starts from each mode level.
+void ACombatSessionWithALevelStillNeedsAllFourMaps() {
+  Set s;
+  for (std::size_t k = 0; k < nevr_combat_level::kCombatMapCount; ++k) {
+    const std::uint64_t name = kName50 + k;
+    s.items.push_back(ArchiveItem(nevr_combat_level::kCombatMaps[k], ArchiveBody({}, {{kAssetType, name}})));
+    s.items.push_back(AssetItem(kGame, name, static_cast<char>('k' + k)));
+  }
+  nc::Needed needed;
+  const char* reason = "";
+  QCHECK(nc::ComputeNeeded(s.Parsed(), nc::kWindowsX64, ServerPolicy(), Input(nevr_combat_level::kCombatMaps[0], kEchoCombat), ReadFrom(s),
+                           &needed, &reason));
+  for (const std::uint64_t map : nevr_combat_level::kCombatMaps) QCHECK(Holds(needed, nc::kArchiveType, map));
+  QCHECK(Holds(needed, kAssetType, kName30) && Holds(needed, kAssetType, kName31));
+}
+
+// A level the mode does not name resolves that level's closure alone, the mode placing nothing.
+void AnUnknownModeWithALevelResolvesOnlyThatClosure() {
+  const Set s;
+  nc::Needed needed;
+  const char* reason = "";
+  QCHECK(nc::ComputeNeeded(s.Parsed(), nc::kWindowsX64, ServerPolicy(), Input(kLevelA, kEchoDemo), ReadFrom(s), &needed, &reason));
+  QCHECK(needed.entries.size() == kFive);
+  QCHECK(!Holds(needed, nc::kArchiveType, kLevelC));
+}
+
+// A failed resolve is an Error record naming the object, and a cancel is a Warning.
+void AFailedResolveIsAnErrorRecordAndACancelIsAWarning() {
+  const Set s;
+  const Item* asset = s.Find(kAssetType, kName12);
+  FakeEnv env;
+  s.Serve(env);
+  env.server.erase(s.BlobUrl(asset->sha));
+  Captured got;
+  const nc::DemandResult r = nc::ResolveDemand(env, s.config, Input(kLevelA, kEchoArena), nullptr, got.Sink(), [] { return true; });
+  QCHECK(!r.ok);
+  const cdn_test::Record* rec = env.FindRecord("cdn_demand", "result", "failed");
+  QCHECK(rec != nullptr && rec->level == nc::EventLevel::kError);
+  QCHECK(rec != nullptr && rec->Get("label") == kGame && rec->Get("name") == nc::FormatHex64(kName12));
+  QCHECK(rec != nullptr && rec->Get("sha256") == asset->sha && rec->Get("reason") == kStatusHttpFailed);
+  FakeEnv cancelled;
+  s.Serve(cancelled);
+  const nc::DemandResult c = nc::ResolveDemand(cancelled, s.config, Input(kLevelA, kEchoArena), nullptr, got.Sink(), [] { return false; });
+  QCHECK(!c.ok && std::string(c.reason) == kStatusCancelled);
+  const cdn_test::Record* crec = cancelled.FindRecord("cdn_demand", "result", "failed");
+  QCHECK(crec != nullptr && crec->level == nc::EventLevel::kWarn);
 }
 
 // An archive whose body has a trailing byte fails the resolve, names the archive, and publishes nothing.
@@ -526,7 +606,7 @@ void TheWaitIsNamedAndEndsTheResolve() {
   QCHECK(!r.ok && std::string(r.reason) == kStatusDeadline);
   QCHECK(got.sets.empty());
   const cdn_test::Record* rec = env.FindRecord("cdn_demand", "result", "failed");
-  QCHECK(rec != nullptr && rec->level == nc::EventLevel::kWarn);
+  QCHECK(rec != nullptr && rec->level == nc::EventLevel::kError);
   QCHECK(CountNamed(env, "cdn_demand") == kOne);
 }
 
@@ -636,6 +716,54 @@ void TheSecondSessionPublishesItsOwnSet() {
   QCHECK(got.sets[0]->shadow->Find(kAssetType, kName10, &found));
 }
 
+// ── the modes' levels (LevelsOfMode, RootLevels) ───────────────────────────────────────────────────────────────────────────
+
+bool Contains(const std::vector<std::uint64_t>& v, std::uint64_t x) {
+  for (const std::uint64_t e : v) {
+    if (e == x) return true;
+  }
+  return false;
+}
+
+// Combat is the four maps and the lobbies; the combat lobby is one of the six lobbies, so it is counted once: 4 + 6 = 10.
+void LevelsOfModeCombatIsFourMapsLobbyAndLobbies() {
+  const std::vector<std::uint64_t> levels = nc::LevelsOfMode(kEchoCombat);
+  QCHECK(levels.size() == nevr_combat_level::kCombatMapCount + nevr_combat_level::kLobbyLevelCount);
+  for (const std::uint64_t map : nevr_combat_level::kCombatMaps) QCHECK(Contains(levels, map));
+  QCHECK(Contains(levels, nevr_combat_level::kCombatLobby));
+  for (const std::uint64_t arena : nevr_combat_level::kEchoArenaLevels) QCHECK(!Contains(levels, arena));
+}
+
+void LevelsOfModeArenaHasArenaLevelsAndLobbies() {
+  const std::vector<std::uint64_t> levels = nc::LevelsOfMode(kEchoArena);
+  QCHECK(Contains(levels, kEchoArenaLevel0));
+  QCHECK(Contains(levels, nevr_combat_level::kLobbyLevels[3]));
+  for (const std::uint64_t map : nevr_combat_level::kCombatMaps) QCHECK(!Contains(levels, map));
+}
+
+void LevelsOfModeSocialIsLobbiesOnlyAndNpeAddsTheTutorialLobby() {
+  const std::vector<std::uint64_t> social = nc::LevelsOfMode(kSocial);
+  QCHECK(social.size() == nevr_combat_level::kLobbyLevelCount);
+  QCHECK(!Contains(social, nevr_combat_level::kTutorialLobbyLevel));
+  const std::vector<std::uint64_t> npe = nc::LevelsOfMode("social_2.0_npe");
+  QCHECK(Contains(npe, nevr_combat_level::kTutorialLobbyLevel));
+  QCHECK(npe.size() == social.size() + 1);
+}
+
+// Every service game type is placed: an unplaced one would resolve no mode roots.
+void EveryServiceGameTypeIsPlaced() {
+  for (const nevr_game_type_table::GameType& t : nevr_game_type_table::kGameTypes) {
+    QCHECK(!nc::LevelsOfMode(t.name).empty());
+  }
+}
+
+void AnUnplacedModeHasNoRoots() {
+  QCHECK(nc::LevelsOfMode(kEchoDemo).empty());
+  QCHECK(nc::RootLevels(Input(kLevelZero, kEchoDemo)).empty());
+  const std::vector<std::uint64_t> one = nc::RootLevels(Input(kLevelA, kEchoDemo));
+  QCHECK(one.size() == kOne && one[0] == kLevelA);
+}
+
 // ── the archive body (ParseArchiveBody) ────────────────────────────────────────────────────────────────────────────────────
 
 void ParseArchiveBodyReadsTheFormatExactly() {
@@ -671,7 +799,16 @@ int main() {
   ACombatModeTakesTheWholeCombatLabelToo();
   AnArchiveTheManifestLacksIsNotExpanded();
   ALabelThatIsOffContributesNothing();
-  NoLevelIsANamedFailure();
+  NoModeIsANamedFailure();
+  NoLevelResolvesTheUnionOfTheModesLevels();
+  ACombatSessionWithALevelStillNeedsAllFourMaps();
+  AnUnknownModeWithALevelResolvesOnlyThatClosure();
+  AFailedResolveIsAnErrorRecordAndACancelIsAWarning();
+  LevelsOfModeCombatIsFourMapsLobbyAndLobbies();
+  LevelsOfModeArenaHasArenaLevelsAndLobbies();
+  LevelsOfModeSocialIsLobbiesOnlyAndNpeAddsTheTutorialLobby();
+  EveryServiceGameTypeIsPlaced();
+  AnUnplacedModeHasNoRoots();
   ABadArchiveFailsTheResolve();
   ACacheThatHoldsEverythingFetchesNothing();
   OnlyWhatTheCacheLacksIsFetched();

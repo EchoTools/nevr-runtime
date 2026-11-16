@@ -43,6 +43,15 @@ TEST(CombatLevelClass, TheOtherClassesAreTheHashesOfTheirNames) {
   }
 }
 
+TEST(CombatLevelClass, LobbyAndTutorialConstantsAreTheHashesOfTheirNames) {
+  constexpr const char* kLobbies[cl::kLobbyLevelCount] = {"mpl_lobby_b",       "mpl_lobby_b2",     "mpl_lobby_b2_lowspec",
+                                                          "mpl_lobby_b_arena", "mpl_lobby_b_social", "mpl_lobby_b_combat"};
+  for (std::size_t i = 0; i < cl::kLobbyLevelCount; ++i) {
+    EXPECT_EQ(cl::kLobbyLevels[i], CSymbol64Hash(kLobbies[i])) << "index " << i;
+  }
+  EXPECT_EQ(cl::kTutorialLobbyLevel, CSymbol64Hash("mpl_tutorial_lobby"));
+}
+
 TEST(CombatLevelClass, EachLevelIsInItsOwnClassOnly) {
   for (const char* name : cl::kCombatMapNames) {
     const std::uint64_t id = CSymbol64Hash(name);
