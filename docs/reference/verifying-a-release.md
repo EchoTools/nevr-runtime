@@ -1471,6 +1471,7 @@ file, `nevr-runtime.dll`, that the host loads. What a player's machine does befo
 - Any host check of the runtime against `manifest.json`: nothing in `src/runtime/host/` reads it. No ADR in the tree
   decides it. Do not rely on the host to compare the runtime with the manifest: on PC the installer is the only party
   that checks the manifest today.
+- The parts of ADR 0012 (`docs/adr/0012-static-install-root.md`, status proposed) that its status line does not name as built are not built. This page describes only the built parts.
 
 What this means for an installer on PC: verify steps 1 to 8 yourself, including every zip member, before you copy a
 file into the player's folders. The host's check is an Authenticode check of `nevr-runtime.dll` at every start. It does
