@@ -111,12 +111,14 @@ class SkipReasonTest(unittest.TestCase):
         other.add_marker.assert_not_called()
         self.assertIn("shelved", shelved.add_marker.call_args.args[0].kwargs["reason"])
 
-    def test_the_file_the_load_disable_covered_that_remains_shelved_is_skipped_through_the_shelf(self):
+    def test_the_pwsh_class_split_out_of_the_load_disable_stays_shelved_and_the_rest_of_the_file_runs(self):
+        # #2242: the pwsh install-script class is its own file and stays shelved; the rest of test_package_release runs.
         shelf = shelf_reader.load()
-        reason = shelf_reader.skip_reason(shelf, "test_package_release", "AnyClass", "test_any")
-        self.assertIsNotNone(reason, "test_package_release")
+        reason = shelf_reader.skip_reason(shelf, "test_package_release_pwsh", "InstallScriptsTest", "test_any")
+        self.assertIsNotNone(reason, "test_package_release_pwsh")
         self.assertIn("shelved", reason)
-        self.assertIn("pytest:test_package_release", reason)
+        self.assertIn("pytest:test_package_release_pwsh", reason)
+        self.assertIsNone(shelf_reader.skip_reason(shelf, "test_package_release", "LocalDevPackageTest", "test_any"))
 
 
 class GTestFilterTest(unittest.TestCase):

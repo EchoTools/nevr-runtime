@@ -2,6 +2,6 @@
 {"file":"tools/package-release/README.template.txt","tests":["pytest:test_installer_name","pytest:test_installer_scripts","pytest:test_package_release","pytest:test_quest_diagnose"]}
 {"file":"tools/package-release/RELEASE-BODY.template.md","tests":["pytest:test_installer_scripts","pytest:test_package_release"]}
 {"file":"tools/package-release/RELEASE-NOTES.template.md","tests":["pytest:test_installer_name","pytest:test_installer_scripts","pytest:test_package_release"]}
-{"file":"tools/package-release/install.ps1","tests":["pytest:test_installer_scripts","pytest:test_installers_use_core","pytest:test_package_release","pytest:test_verify_symbols"]}
+{"file":"tools/package-release/install.ps1","tests":["pytest:test_installer_scripts","pytest:test_installers_use_core","pytest:test_package_release","pytest:test_package_release_pwsh","pytest:test_verify_symbols"]}
 {"file":"tools/package-release/quest-diagnose.ps1","tests":["pytest:test_installer_scripts","pytest:test_package_release","pytest:test_quest_diagnose","pytest:test_quest_diagnose_cleanup"]}
-{"file":"tools/package-release/uninstall.ps1","tests":["pytest:test_installer_scripts","pytest:test_package_release"]}
+{"file":"tools/package-release/uninstall.ps1","tests":["pytest:test_installer_scripts","pytest:test_package_release","pytest:test_package_release_pwsh"]}

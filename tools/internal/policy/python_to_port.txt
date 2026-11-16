@@ -146,6 +146,7 @@ tools/tests/test_next_release_version.py	ported by its unit of #2132
 tools/tests/test_no_conflict_markers.py	ported by its unit of #2132
 tools/tests/test_noovr_waiver_wiring.py	ported by its unit of #2132
 tools/tests/test_package_release.py	ported by its unit of #2132
+tools/tests/test_package_release_pwsh.py	ported by its unit of #2132 (split out of test_package_release.py, which that unit ports)
 tools/tests/test_patch_detour_logging.py	ported by its unit of #2132
 tools/tests/test_pc_frame_summary.py	ported by its unit of #2132
 tools/tests/test_pe_exports.py	ported by its unit of #2132

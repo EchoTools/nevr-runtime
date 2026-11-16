@@ -9,7 +9,7 @@
 {"file":"installer/tests/nevr_root.rs","tests":["just:test-installer"]}
 {"file":"installer/tests/pc_find.rs","tests":["just:test-installer"]}
 {"file":"installer/tests/pc_package.rs","tests":["just:test-installer"]}
-{"file":"installer/tests/pc_plan.rs","tests":["just:test-installer","pytest:test_package_release"]}
+{"file":"installer/tests/pc_plan.rs","tests":["just:test-installer","pytest:test_package_release","pytest:test_package_release_pwsh"]}
 {"file":"installer/tests/pc_stage.rs","tests":["just:test-installer"]}
 {"file":"installer/tests/pc_uninstall.rs","tests":["just:test-installer"]}
 {"file":"installer/tests/pc_uninstall_cli.rs","tests":["just:test-installer"]}

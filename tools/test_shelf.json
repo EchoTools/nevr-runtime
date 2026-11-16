@@ -10,9 +10,9 @@
   "ceiling_s": 30,
   "entries": [
     {
-      "id": "pytest:test_package_release",
-      "reason": "Its pwsh install-script tests fail with System.IO.FileLoadException under machine load: the file's median in 46 test-changed runs is 27.0 s and its max 40.9 s, the failing run took 22.8 s and failed 2 tests. It was disabled by a skip on every class; the shelf replaces those skips.",
-      "measured": "test-changed.jsonl (46 runs) and the land log of 2026-11-16, 2026-11-16",
+      "id": "pytest:test_package_release_pwsh",
+      "reason": "The install-script class split out of test_package_release.py (#2242, lane B) failed in a full-suite run with System.IO.FileLoadException (\"The given assembly name was invalid\"): pwsh aborted (exit -6) in two of its tests, the uninstall test that starts pwsh without LOCALAPPDATA among them. Not reproduced since: 4 parallel full-class runs passed (78 s each), 480 parallel pwsh starts and exits passed, and the file's 65 tests passed under the runner in 12.4 s. The cause is not found. Each test's pwsh profile cache now lives in its own directory (XDG_CACHE_HOME), which removes the one writable file the workers shared, but that is not shown to be the cause. Stays shelved until a whole-class run under load is clean.",
+      "measured": "unittest serial 82.6 s (64 tests, 1 run); unittest 4 parallel 78.4 s each (4 runs, all OK); 480 parallel pwsh starts (16 loops x 30): 0 failures; runner on the split file: 65 passed in 12.39 s; the original entry's measure: median 27.0 s and max 40.9 s over 46 test-changed runs of the whole file",
       "date": "2026-11-16"
     },
     {
