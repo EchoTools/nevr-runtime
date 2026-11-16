@@ -25,11 +25,7 @@ namespace {
 
 constexpr const char* kEnvTag = "[NEVR.CDN]";
 constexpr std::size_t kPackTextBytes = 120;  // a pack id in a line: cut at this many bytes
-// KNOWN-WRONG #2242: the manifest verifier (the 6.19 signature check, PLAN-v5 5.6, piece R10c) is not in this client, so no manifest is
-// official and, under -require-signed-plugins, every cargo copy is refused signed_only. The fact is the one ManifestVerified will give.
-constexpr bool kManifestVerified = false;
 constexpr const char* kConsequenceServed = "the copies are served from this device; no script byte travels";
-constexpr const char* kConsequenceRefused = "this label is not mounted; its levels run on the game's own data";
 constexpr const char* kConsequencePack = "the installed content pack serves this script; remove the pack to get this label";
 
 // The owner a label's copies are held under (map_script_check.h): "cargo:" and the label, which the manifest checked as a label name.
@@ -65,7 +61,7 @@ void LogLabels(const nevr_cdn::Manifest& manifest, const nevr_cdn::Platform& pla
           listed, kConsequenceServed);
     } else if (refusal->pack.empty()) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.CDN] cdn_scripts label=%s result=refused scripts=%zu reason=%s consequence=\"%s\"",
-          label.c_str(), listed, refusal->reason.c_str(), kConsequenceRefused);
+          label.c_str(), listed, refusal->reason.c_str(), nevr_cdn::RefusalConsequence(refusal->reason).c_str());
     } else {
       Log(EchoVR::LogLevel::Warning, "[NEVR.CDN] cdn_scripts label=%s result=refused scripts=%zu reason=%s pack=%s consequence=\"%s\"",
           label.c_str(), listed, refusal->reason.c_str(), nevr_log_text::Printable(refusal->pack.c_str(), kPackTextBytes).c_str(),
@@ -87,9 +83,9 @@ nevr_cdn::ScriptRegistrar PcRegistrar(const std::string& cache_dir, bool signed_
     const nevr_cdn::HeldScriptFn held = [](const std::string& label, std::uint64_t name) {
       return nevr_map_scripts::Holds(OwnerOf(label), name);
     };
-    const nevr_cdn::ClaimScriptFn claim = [copyDir](const std::string& label, const nevr_cdn::ScriptEntry& s) {
+    const nevr_cdn::ClaimScriptFn claim = [copyDir](const std::string& label, const nevr_cdn::ScriptEntry& s, bool official) {
       const nevr_map_scripts::Outcome o =
-          nevr_map_scripts::RegisterRekey(OwnerOf(label), s.name, s.stock_source, s.stock_sha256, kManifestVerified, copyDir);
+          nevr_map_scripts::RegisterRekey(OwnerOf(label), s.name, s.stock_source, s.stock_sha256, official, copyDir);
       nevr_cdn::ScriptClaim c;
       c.ok = o.ok();
       c.reason = o.reason;
@@ -102,7 +98,8 @@ nevr_cdn::ScriptRegistrar PcRegistrar(const std::string& cache_dir, bool signed_
     };
     const nevr_cdn::WithdrawLabelFn withdraw = [](const std::string& label) { nevr_map_scripts::Withdraw(OwnerOf(label)); };
 
-    const nevr_cdn::ScriptRegistration result = nevr_cdn::RegisterScriptLabels(manifest, platform, held, claim, withdraw);
+    const nevr_cdn::ScriptRegistration result =
+        nevr_cdn::RegisterScriptLabels(manifest, platform, held, claim, withdraw, nevr_cdn::ManifestVerified(manifest));
     LogLabels(manifest, platform, result);
     return result;
   };

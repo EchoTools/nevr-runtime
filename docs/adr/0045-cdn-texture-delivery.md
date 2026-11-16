@@ -52,8 +52,8 @@ process.
    text limit (`src/cdn/cdn_manifest.h` ParseManifestBody). A path in `assets.manifest` is checked only as a path (relative, plain
    characters, no `..`); its name says nothing about the format. A blob is one stock-format chunk: one zstd frame whose decompressed
    bytes are the buffer.
-   The runtime never decompresses a blob; the SHA-256 of the stored frame proves it is the published one. The manifest is unsigned in
-   this decision (see Not claimed).
+   The runtime never decompresses a blob; the SHA-256 of the stored frame proves it is the published one. The manifest is part of the
+   signed chain; the client's check lands in 6.19 (see Not claimed).
    A label may list `scripts`: entries `{name, platform, stock_source, stock_sha256}`, each a script served from a copy of the player's own stock file made on the device under the new name. No script byte travels. A `scripts` entry that carries `edits` (`rekey_edits`), a frame's fields (`image_entry`), its own stock source as its name (`stock_hash`), anything but the four fields in their forms (`bad_script`), or a platform and name another entry of the label has (`duplicate`) refuses its label whole (`ParseManifest`, `cdn_refused`).
    A label whose CScriptResource records, entries or records of 0 bytes, name a script that is neither on the device nor held from its own
    `scripts` list is not mounted (`script_undelivered`), at the boot mount and at a fetch alike, because the game has no existence check
@@ -137,8 +137,8 @@ process.
 
 ## Not claimed
 
-- **Manifest authenticity.** The manifest is not signed. A holder of the publish token controls what a client mounts. Signing is
-  security work with its own order.
+- **Manifest authenticity in 6.18.** The CDN manifest is part of the signed chain; the client's check lands in 6.19
+  (`KNOWN-WRONG #2242`). Until it does, `ManifestVerified` answers false, so a signed-only run mounts no label with `scripts`.
 - **That the engine builds a texture whose buffer 1 differs in size from stock.** The first test keeps buffer 1 at the stock size.
 - **Raw disassembly of the Quest chunk-index arithmetic.** The shadow's base keeps both multiplies equal; the headset run decides.
 - **The headset descriptor limit.** A mount holds one descriptor per store file, and the budget is read from the device (Decision 8); the value on a headset is not recorded here.

@@ -26,7 +26,9 @@ struct ScriptClaim {
   std::string pack;
 };
 
-using ClaimScriptFn = std::function<ScriptClaim(const std::string& label, const ScriptEntry& script)>;
+// `official` is the pass's verifier answer (ManifestVerified): the claim passes it to the provider, which refuses an unofficial copy
+// under -require-signed-plugins.
+using ClaimScriptFn = std::function<ScriptClaim(const std::string& label, const ScriptEntry& script, bool official)>;
 using HeldScriptFn = std::function<bool(const std::string& label, std::uint64_t name)>;
 using WithdrawLabelFn = std::function<void(const std::string& label)>;
 
@@ -36,11 +38,20 @@ std::vector<std::string> ScriptLabels(const Manifest& manifest, const Platform& 
 // True when the label's own `scripts` list, for `platform`, names the script `name` (the gate's listed rule, 5.2 case 6).
 bool ListsScript(const Manifest& manifest, const Platform& platform, const std::string& label, std::uint64_t name);
 
+// The one verifier's answer for `manifest` (PLAN-v7 5.6): true when the manifest is part of the signed chain and its signature checks.
+// KNOWN-WRONG #2242: the manifest verifier (the 6.19 signature check) is not in this client, so this answers false, and under
+// -require-signed-plugins every copy of a label with scripts is refused signed_only.
+bool ManifestVerified(const Manifest& manifest);
+
+// The consequence a refused label's Warning states (PLAN-v7 5.6): the signed-only refusal names its cause and the action.
+std::string RefusalConsequence(const std::string& reason);
+
 // The registrar. Labels are taken in ScriptLabels order and, within one label, the scripts of its `scripts` list in manifest order.
-// A script `held` already (an earlier pass of this run) is kept without a claim. Any other is claimed. The first refusal ends its
-// label: the label is withdrawn once, every copy of the label is left out of `held` (the withdraw drops those the earlier pass held
-// too), the refusal is recorded, and the label's later scripts are not claimed. Other labels are unaffected.
+// A script `held` already (an earlier pass of this run) is kept without a claim. Any other is claimed with the pass's `official`
+// fact. The first refusal ends its label: the label is withdrawn once, every copy of the label is left out of `held` (the withdraw
+// drops those the earlier pass held too), the refusal is recorded, and the label's later scripts are not claimed. Other labels are
+// unaffected.
 ScriptRegistration RegisterScriptLabels(const Manifest& manifest, const Platform& platform, const HeldScriptFn& held,
-                                        const ClaimScriptFn& claim, const WithdrawLabelFn& withdraw);
+                                        const ClaimScriptFn& claim, const WithdrawLabelFn& withdraw, bool official);
 
 }  // namespace nevr_cdn

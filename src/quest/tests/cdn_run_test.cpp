@@ -1181,23 +1181,71 @@ struct RegistrarFakes {
   std::string reason = "stock_hash";
   std::string pack;
   std::vector<std::string> held_already;  // "<label>/<name>" the registrar holds from an earlier pass
+  bool official = false;                  // the manifest's verifier answer, passed to the registrar pass (PLAN-v7 5.6)
+  bool signed_only = false;               // -require-signed-plugins: a copy the manifest does not verify is refused signed_only
+  std::vector<bool> official_asked;       // the `official` fact each claim was asked with, in claim order
 
   nc::ScriptRegistration Run(const nc::Manifest& m, const nc::Platform& p) {
     const auto held = [this](const std::string& label, std::uint64_t name) {
       return std::find(held_already.begin(), held_already.end(), label + "/" + std::to_string(name)) != held_already.end();
     };
-    const auto claim = [this](const std::string& label, const nc::ScriptEntry& s) {
+    const auto claim = [this](const std::string& label, const nc::ScriptEntry& s, bool official_claim) {
       asked.push_back(label + "/" + std::to_string(s.name));
+      official_asked.push_back(official_claim);
+      const bool signed_refused = signed_only && !official_claim;
       nc::ScriptClaim c;
-      c.ok = !(refuse_one && s.name == refuse_name);
-      c.reason = reason;
+      c.ok = !signed_refused && !(refuse_one && s.name == refuse_name);
+      c.reason = signed_refused ? "signed_only" : reason;
       c.pack = pack;
       return c;
     };
     const auto withdraw = [this](const std::string& label) { withdrawn.push_back(label); };
-    return nc::RegisterScriptLabels(m, p, held, claim, withdraw);
+    return nc::RegisterScriptLabels(m, p, held, claim, withdraw, official);
   }
 };
+
+// The manifest's verifier answer is the `official` fact of every claim of the pass (PLAN-v7 5.6): a verified manifest asks each claim
+// with true, an unverified one with false.
+void TheVerifierAnswerIsTheOfficialFactOfEveryClaim() {
+  RegistrarFakes verified;
+  verified.official = true;
+  verified.Run(TwoLabelScripts(), nc::kAndroidArm64);
+  QCHECK(verified.official_asked == std::vector<bool>({true, true, true, true}));
+  RegistrarFakes unverified;
+  unverified.official = false;
+  unverified.Run(TwoLabelScripts(), nc::kAndroidArm64);
+  QCHECK(unverified.official_asked == std::vector<bool>({false, false, false, false}));
+}
+
+// Under -require-signed-plugins an unverified manifest refuses the first copy of each label signed_only: each label is withdrawn once
+// with its refusal named, and nothing is held (the label is off, PLAN-v7 5.6).
+void AnUnverifiedManifestUnderSignedOnlyWithdrawsEachLabelWithScripts() {
+  RegistrarFakes f;
+  f.signed_only = true;
+  f.official = false;
+  const nc::ScriptRegistration r = f.Run(TwoLabelScripts(), nc::kAndroidArm64);
+  QCHECK(f.asked == std::vector<std::string>({"combat_content/1", "other/4"}));
+  QCHECK(f.withdrawn == std::vector<std::string>({kCombat, "other"}));
+  QCHECK(r.refused.size() == 2 && r.refused[0].reason == "signed_only" && r.refused[1].reason == "signed_only");
+  QCHECK(r.held.empty());
+}
+
+// The same run with a verified manifest serves every copy: each is claimed and held, and nothing is withdrawn.
+void AVerifiedManifestUnderSignedOnlyServesEveryLabel() {
+  RegistrarFakes f;
+  f.signed_only = true;
+  f.official = true;
+  const nc::ScriptRegistration r = f.Run(TwoLabelScripts(), nc::kAndroidArm64);
+  QCHECK(f.withdrawn.empty() && r.refused.empty() && r.held.size() == 4);
+}
+
+// The Warning's consequence names the signed-only cause and the action; any other refusal keeps the generic consequence.
+void ARefusalConsequenceNamesTheSignedOnlyCause() {
+  const std::string signed_only = nc::RefusalConsequence("signed_only");
+  QCHECK(signed_only.find("-require-signed-plugins") != std::string::npos);
+  QCHECK(signed_only.find("not mounted this run") != std::string::npos);
+  QCHECK(nc::RefusalConsequence("stock_hash") == "this label is not mounted; its levels run on the game's own data");
+}
 
 // The labels of a platform are the labels whose `scripts` list names it, in manifest order, each once.
 void ScriptLabelsNamesEachLabelOfThePlatformOnceInManifestOrder() {
@@ -1284,7 +1332,7 @@ void TheCoreRegistrarKeepsARefusedLabelUnpublishedAndNamesThePack() {
     nc::RunConfig c = GatedConfig(w);
     c.registrar = [ok, reason, pack](const nc::Manifest& m, const nc::Platform& p) {
       const auto held = [](const std::string&, std::uint64_t) { return false; };
-      const auto claim = [ok, reason, pack](const std::string&, const nc::ScriptEntry&) {
+      const auto claim = [ok, reason, pack](const std::string&, const nc::ScriptEntry&, bool) {
         nc::ScriptClaim c;
         c.ok = ok;
         c.reason = reason;
@@ -1292,7 +1340,7 @@ void TheCoreRegistrarKeepsARefusedLabelUnpublishedAndNamesThePack() {
         return c;
       };
       const auto withdraw = [](const std::string&) {};
-      return nc::RegisterScriptLabels(m, p, held, claim, withdraw);
+      return nc::RegisterScriptLabels(m, p, held, claim, withdraw, true);
     };
     return c;
   };
@@ -1688,6 +1736,10 @@ int main() {
   APackRefusalNamesThePack();
   AScriptAlreadyHeldIsKeptWithoutAClaim();
   AHeldCopyOfALabelRefusedLaterIsNotReportedHeld();
+  TheVerifierAnswerIsTheOfficialFactOfEveryClaim();
+  AnUnverifiedManifestUnderSignedOnlyWithdrawsEachLabelWithScripts();
+  AVerifiedManifestUnderSignedOnlyServesEveryLabel();
+  ARefusalConsequenceNamesTheSignedOnlyCause();
   TheCoreRegistrarKeepsARefusedLabelUnpublishedAndNamesThePack();
   KeepBootOnlyReplacesTheBootOnlyLabelsRecordsWithTheBootSets();
   KeepBootOnlyDropsALabelTheBootSetLacks();

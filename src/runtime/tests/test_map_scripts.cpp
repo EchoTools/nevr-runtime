@@ -920,8 +920,8 @@ TEST_F(MapScripts, ThePcRegistrarSetsTheSignedOnlyPolicyWhenItIsTheFirstCaller) 
   maps::Forget();
 }
 
-// KNOWN-WRONG #2242: this pins the refusal that exists only because no manifest verifier is in this client (cdn_scripts_install.cpp
-// kManifestVerified = false). With official = false, the signed-only gate refuses the copy with reason signed_only, and the label's
+// KNOWN-WRONG #2242: this pins the refusal that exists only because no manifest verifier is in this client (cdn_scripts.cpp
+// ManifestVerified answers false). With official = false, the signed-only gate refuses the copy with reason signed_only, and the label's
 // refusal says so. The policy is applied signed-only first, so the registrar's call is kept with the same fact. The assertion pins the
 // gate's behaviour for official = false; it does not assert the absence of the verifier.
 TEST_F(MapScripts, ThePcRegistrarRefusesACopyUnderSignedOnlyWhileNoManifestIsVerified) {
