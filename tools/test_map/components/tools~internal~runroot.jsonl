@@ -1,0 +1,3 @@
+{"component":"tools/internal/runroot","dir":"tools/internal/runroot"}
+{"file":"tools/internal/runroot/runroot.go","tests":["go:cmd/run-copy","go:cmd/run-root","go:cmd/suite-run","go:cmd/test-changed","go:cmd/test-go-tools","go:cmd/test-map","go:internal/questwiring","go:internal/runroot"]}
+{"file":"tools/internal/runroot/runroot_test.go","tests":["go:cmd/run-copy","go:cmd/run-root","go:cmd/suite-run","go:cmd/test-changed","go:cmd/test-go-tools","go:cmd/test-map","go:internal/questwiring","go:internal/runroot"]}

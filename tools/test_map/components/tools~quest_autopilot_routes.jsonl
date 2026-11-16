@@ -1,0 +1,2 @@
+{"component":"tools/quest_autopilot_routes","dir":"tools/quest_autopilot_routes"}
+{"file":"tools/quest_autopilot_routes/lobby_loop.txt","tests":["just:test-quest-autopilot","pytest:test_quest_autopilot_run"]}

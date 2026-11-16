@@ -1,0 +1,3 @@
+{"component":"src/scripting/vm/luau/tests","dir":"src/scripting/vm/luau/tests"}
+{"file":"src/scripting/vm/luau/tests/luau_memory_test.cpp","tests":["just:test-scripting"]}
+{"file":"src/scripting/vm/luau/tests/shared_state_test.cpp","tests":["just:test-scripting"]}

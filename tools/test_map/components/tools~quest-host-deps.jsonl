@@ -1,0 +1,2 @@
+{"component":"tools/quest-host-deps","dir":"tools/quest-host-deps"}
+{"file":"tools/quest-host-deps/vcpkg.json","tests":["pytest:test_quest_attach_wiring","pytest:test_quest_store_wiring","pytest:test_verify_parallel"]}

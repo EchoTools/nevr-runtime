@@ -1,0 +1,4 @@
+{"component":"installer","dir":"installer"}
+{"file":"installer/Cargo.lock","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer","pytest:test_verifying_a_release_doc"]}
+{"file":"installer/Cargo.toml","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer","go:internal/updatewiring","pytest:test_installer_name","pytest:test_remove_worktree","pytest:test_verifying_a_release_doc"]}
+{"file":"installer/pinned-keys.txt","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer","pytest:test_verifying_a_release_doc"]}

@@ -1,0 +1,3 @@
+{"component":"tools/cmd/suite-run","dir":"tools/cmd/suite-run"}
+{"file":"tools/cmd/suite-run/main.go","tests":["go:cmd/guard-proof","go:cmd/suite-run"]}
+{"file":"tools/cmd/suite-run/main_test.go","tests":["go:cmd/guard-proof","go:cmd/suite-run"]}

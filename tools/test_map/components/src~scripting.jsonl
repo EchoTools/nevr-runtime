@@ -1,0 +1,13 @@
+{"component":"src/scripting","dir":"src/scripting"}
+{"file":"src/scripting/CMakeLists.txt","tests":["just:test-scripting"]}
+{"file":"src/scripting/CMakePresets.json","tests":["just:test-scripting","pytest:test_compile_checks_use_cmake"]}
+{"file":"src/scripting/host_registry.cpp","tests":["just:test-scripting"]}
+{"file":"src/scripting/host_registry.h","tests":["just:test-scripting"]}
+{"file":"src/scripting/memory_policy.h","tests":["just:test-scripting"]}
+{"file":"src/scripting/script_host.cpp","tests":["just:test-scripting"]}
+{"file":"src/scripting/script_host.h","tests":["just:test-scripting"]}
+{"file":"src/scripting/script_manifest.cpp","tests":["just:test-scripting"]}
+{"file":"src/scripting/script_manifest.h","tests":["just:test-scripting"]}
+{"file":"src/scripting/script_stubs.cpp","tests":["just:test-scripting"]}
+{"file":"src/scripting/script_stubs.h","tests":["just:test-scripting"]}
+{"file":"src/scripting/script_vm.h","tests":["just:test-scripting"]}

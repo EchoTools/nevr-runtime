@@ -49,7 +49,6 @@ var fixedRules = []fixedRule{
 	{"AGENTS.md", []string{"agents-imports"}, "the instructions agents-imports checks"},
 	{"tools/verify_agents_imports.py", []string{"agents-imports"}, "the check agents-imports runs"},
 	{"tools/verify_log_rules.py", []string{"log-rules"}, "the check log-rules runs"},
-	{"tools/test_map.json", []string{testmap.KindGo + ":internal/testmap"}, "the map, read and checked by its package"},
 }
 
 // scanners are the checks that read every file their globs match, wherever it lives.

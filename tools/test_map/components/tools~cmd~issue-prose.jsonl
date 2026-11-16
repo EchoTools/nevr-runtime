@@ -1,0 +1,3 @@
+{"component":"tools/cmd/issue-prose","dir":"tools/cmd/issue-prose"}
+{"file":"tools/cmd/issue-prose/main.go","tests":["go:cmd/guard-proof","go:cmd/issue-prose"]}
+{"file":"tools/cmd/issue-prose/main_test.go","tests":["go:cmd/guard-proof","go:cmd/issue-prose"]}

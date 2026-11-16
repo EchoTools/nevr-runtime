@@ -1,0 +1,2 @@
+{"component":".github/actions/setup-ndk","dir":".github/actions/setup-ndk"}
+{"file":".github/actions/setup-ndk/action.yml","tests":["pytest:test_android_workflow","pytest:test_vcpkg_pin","pytest:test_workflow_action_runtimes","pytest:test_workflows_ndk"]}

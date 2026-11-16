@@ -1,0 +1,3 @@
+{"component":"tools/cmd/quest-apk-label","dir":"tools/cmd/quest-apk-label"}
+{"file":"tools/cmd/quest-apk-label/main.go","tests":["go:cmd/guard-proof","go:cmd/quest-apk-label"]}
+{"file":"tools/cmd/quest-apk-label/main_test.go","tests":["go:cmd/guard-proof","go:cmd/quest-apk-label"]}

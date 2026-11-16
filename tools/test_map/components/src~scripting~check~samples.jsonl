@@ -1,0 +1,6 @@
+{"component":"src/scripting/check/samples","dir":"src/scripting/check/samples"}
+{"file":"src/scripting/check/samples/bad_hook.lua","tests":["just:test-scripting"]}
+{"file":"src/scripting/check/samples/bad_key.lua","tests":["just:test-scripting"]}
+{"file":"src/scripting/check/samples/bad_read_only.lua","tests":["just:test-scripting"]}
+{"file":"src/scripting/check/samples/bad_skip_in_post.lua","tests":["just:test-scripting"]}
+{"file":"src/scripting/check/samples/bad_value.lua","tests":["just:test-scripting"]}

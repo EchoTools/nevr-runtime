@@ -1,0 +1,2 @@
+{"component":".github/ISSUE_TEMPLATE","dir":".github/ISSUE_TEMPLATE"}
+{"file":".github/ISSUE_TEMPLATE/beta-bug.yml","tests":["pytest:test_release_assets"]}

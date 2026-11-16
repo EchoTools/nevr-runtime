@@ -17,6 +17,9 @@ const rootName = "(root)"
 func buildMap(tracked []string, cov cover) (*testmap.Map, error) {
 	byDir := map[string][]string{}
 	for _, f := range tracked {
+		if testmap.IsMapFile(f) {
+			continue // the loader covers the map's own files (testmap.Lookup), so no component holds them
+		}
 		d := path.Dir(f)
 		if d == "." {
 			d = ""

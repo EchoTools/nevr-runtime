@@ -1,0 +1,2 @@
+{"component":"tools/perf","dir":"tools/perf"}
+{"file":"tools/perf/pc_frame_summary.py","tests":["pytest:test_pc_frame_summary"]}

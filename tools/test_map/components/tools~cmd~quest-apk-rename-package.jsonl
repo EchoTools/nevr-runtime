@@ -1,0 +1,3 @@
+{"component":"tools/cmd/quest-apk-rename-package","dir":"tools/cmd/quest-apk-rename-package"}
+{"file":"tools/cmd/quest-apk-rename-package/main.go","tests":["go:cmd/guard-proof","go:cmd/quest-apk-rename-package"]}
+{"file":"tools/cmd/quest-apk-rename-package/main_test.go","tests":["go:cmd/guard-proof","go:cmd/quest-apk-rename-package"]}

@@ -1,0 +1,2 @@
+{"component":"src/quest/vcpkg-overlay-ports","dir":"src/quest/vcpkg-overlay-ports"}
+{"file":"src/quest/vcpkg-overlay-ports/README.md","tests":["go:internal/questwiring","pytest:test_quest_attach_wiring","pytest:test_quest_crash_dir_wiring","pytest:test_quest_crash_first_wiring","pytest:test_quest_hand_pose_log_wiring","pytest:test_quest_hook_budget","pytest:test_quest_no_code_writes","pytest:test_quest_quit_path","pytest:test_quest_sentinel_link","pytest:test_quest_shared_redirect_sources"]}

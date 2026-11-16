@@ -1,0 +1,11 @@
+{"component":"tools/internal/testkit","dir":"tools/internal/testkit"}
+{"file":"tools/internal/testkit/doc.go","tests":["go:cmd/test-go-tools","go:internal/questapkfix","go:internal/questrepack/repackfixture","go:internal/questwiring","go:internal/testkit"]}
+{"file":"tools/internal/testkit/env.go","tests":["go:cmd/test-go-tools","go:internal/questapkfix","go:internal/questrepack/repackfixture","go:internal/questwiring","go:internal/testkit"]}
+{"file":"tools/internal/testkit/env_test.go","tests":["go:cmd/test-go-tools","go:internal/questapkfix","go:internal/questrepack/repackfixture","go:internal/questwiring","go:internal/testkit"]}
+{"file":"tools/internal/testkit/fake.go","tests":["go:cmd/test-go-tools","go:internal/questapkfix","go:internal/questrepack/repackfixture","go:internal/questwiring","go:internal/testkit"]}
+{"file":"tools/internal/testkit/fake_t_test.go","tests":["go:cmd/test-go-tools","go:internal/questapkfix","go:internal/questrepack/repackfixture","go:internal/questwiring","go:internal/testkit"]}
+{"file":"tools/internal/testkit/fake_test.go","tests":["go:cmd/test-go-tools","go:internal/questapkfix","go:internal/questrepack/repackfixture","go:internal/questwiring","go:internal/testkit"]}
+{"file":"tools/internal/testkit/git.go","tests":["go:cmd/test-go-tools","go:internal/questapkfix","go:internal/questrepack/repackfixture","go:internal/questwiring","go:internal/testkit"]}
+{"file":"tools/internal/testkit/t.go","tests":["go:cmd/test-go-tools","go:internal/questapkfix","go:internal/questrepack/repackfixture","go:internal/questwiring","go:internal/testkit"]}
+{"file":"tools/internal/testkit/wait.go","tests":["go:cmd/test-go-tools","go:internal/questapkfix","go:internal/questrepack/repackfixture","go:internal/questwiring","go:internal/testkit"]}
+{"file":"tools/internal/testkit/wait_test.go","tests":["go:cmd/test-go-tools","go:internal/questapkfix","go:internal/questrepack/repackfixture","go:internal/questwiring","go:internal/testkit"]}

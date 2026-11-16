@@ -1,0 +1,40 @@
+{"component":"docs/quest/combat","dir":"docs/quest/combat"}
+{"file":"docs/quest/combat/aibots.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/bullet_velocity_guard.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/bvh.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/custctx.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/decals.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/drone_explosion.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/droneguard.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/dronekill.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/dronemuzzle.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/ec.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/frozen_frame_exit.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/fxtrail.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/gunconnect.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/headset_gates.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/heaps.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/hudmeter.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/impactsnd.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/instmodel.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/levelname.md","tests":["go:internal/questwiring"]}
+{"file":"docs/quest/combat/memsys.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/meshstep.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/music.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/peerclamp.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/pfx.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/pfxtev.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/powerboost.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/resolution.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/script_markers.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/sendguard.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/sensorwd.md","tests":["go:internal/questwiring"]}
+{"file":"docs/quest/combat/shaderstep.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/shieldgamma.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/sound_symbol_guard.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/tablestep.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/texel_buffer_guard.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/texture_quest2.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/voipdrop.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/wallfire.md","none":"documentation: only the scanners read it"}
+{"file":"docs/quest/combat/weapon_arm.md","tests":["go:internal/questwiring"]}

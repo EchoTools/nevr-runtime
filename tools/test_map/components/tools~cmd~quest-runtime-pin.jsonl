@@ -1,0 +1,3 @@
+{"component":"tools/cmd/quest-runtime-pin","dir":"tools/cmd/quest-runtime-pin"}
+{"file":"tools/cmd/quest-runtime-pin/main.go","tests":["go:cmd/guard-proof","go:cmd/quest-runtime-pin"]}
+{"file":"tools/cmd/quest-runtime-pin/main_test.go","tests":["go:cmd/guard-proof","go:cmd/quest-runtime-pin"]}

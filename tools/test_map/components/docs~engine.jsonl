@@ -1,0 +1,4 @@
+{"component":"docs/engine","dir":"docs/engine"}
+{"file":"docs/engine/asset-system.md","tests":["go:cmd/cargo-extract","go:cmd/content-pack-build","go:cmd/levelpack","go:internal/radpack"]}
+{"file":"docs/engine/early-quit.md","none":"documentation: only the scanners read it"}
+{"file":"docs/engine/remote-log.md","none":"documentation: only the scanners read it"}

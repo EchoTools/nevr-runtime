@@ -1,0 +1,4 @@
+{"component":"third_party/monocypher","dir":"third_party/monocypher"}
+{"file":"third_party/monocypher/AUTHORS.md","none":"documentation: only the scanners read it"}
+{"file":"third_party/monocypher/LICENCE.md","none":"documentation: only the scanners read it"}
+{"file":"third_party/monocypher/UPSTREAM.txt","none":"a vendored third-party notice: no test reads it"}

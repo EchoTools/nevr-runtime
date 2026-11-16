@@ -91,7 +91,7 @@ of the work (the logging standard `AGENTS.md` opens with, `docs/standards/loggin
 ### 6. Prove it: just test-changed
 
 The gate before landing is "A branch runs `just test-changed`, once, before it lands, and nothing else" in `AGENTS.md`
-"Builds": the command picks the tests from `tools/test_map.json`, so no agent picks them, and no agent runs a whole suite.
+"Builds": the command picks the tests from the map in `tools/test_map/`, so no agent picks them, and no agent runs a whole suite.
 Run it as the plain recipe on the branch's tip and quote its output in the commit message. A path it reports as not
 covered gets a map entry in the same branch. A server outcome is read from the run's own log, on a game copy
 (`verify-server.sh`, "The game install"). A runtime or auth change's PC login runs on main after the release cut

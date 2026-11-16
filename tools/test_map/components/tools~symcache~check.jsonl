@@ -1,0 +1,3 @@
+{"component":"tools/symcache/check","dir":"tools/symcache/check"}
+{"file":"tools/symcache/check/CMakeLists.txt","tests":["pytest:test_compile_checks_use_cmake"]}
+{"file":"tools/symcache/check/CMakePresets.json","tests":["pytest:test_compile_checks_use_cmake"]}

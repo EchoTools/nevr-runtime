@@ -1,0 +1,5 @@
+{"component":"tools/internal/questruntimepin","dir":"tools/internal/questruntimepin"}
+{"file":"tools/internal/questruntimepin/doc.go","tests":["go:cmd/quest-repack-libs","go:cmd/quest-runtime-pin","go:internal/questrepack","go:internal/questruntimepin","go:internal/questwiring"]}
+{"file":"tools/internal/questruntimepin/pin.go","tests":["go:cmd/quest-repack-libs","go:cmd/quest-runtime-pin","go:internal/questrepack","go:internal/questruntimepin","go:internal/questwiring"]}
+{"file":"tools/internal/questruntimepin/pin_test.go","tests":["go:cmd/quest-repack-libs","go:cmd/quest-runtime-pin","go:internal/questrepack","go:internal/questruntimepin","go:internal/questwiring"]}
+{"file":"tools/internal/questruntimepin/scan_test.go","tests":["go:cmd/quest-repack-libs","go:cmd/quest-runtime-pin","go:internal/questrepack","go:internal/questruntimepin","go:internal/questwiring"]}

@@ -1,0 +1,3 @@
+{"component":"docs/reference/release-verification/unpinned-key","dir":"docs/reference/release-verification/unpinned-key"}
+{"file":"docs/reference/release-verification/unpinned-key/manifest.json","tests":["pytest:test_verifying_a_release_doc"]}
+{"file":"docs/reference/release-verification/unpinned-key/manifest.json.sig","tests":["pytest:test_verifying_a_release_doc"]}

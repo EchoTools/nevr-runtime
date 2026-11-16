@@ -1,0 +1,4 @@
+{"component":"src/libovr-stub","dir":"src/libovr-stub"}
+{"file":"src/libovr-stub/CMakeLists.txt","tests":["build"]}
+{"file":"src/libovr-stub/exports.def","tests":["build"]}
+{"file":"src/libovr-stub/stub.cpp","tests":["build","pytest:test_dll_load_hook_casts"]}

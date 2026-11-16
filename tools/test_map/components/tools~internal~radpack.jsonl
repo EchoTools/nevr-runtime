@@ -1,0 +1,7 @@
+{"component":"tools/internal/radpack","dir":"tools/internal/radpack"}
+{"file":"tools/internal/radpack/chunks.go","tests":["go:cmd/cargo-extract","go:cmd/cargo-merge","go:cmd/cargo-pack","go:cmd/content-pack-build","go:internal/questwiring","go:internal/radpack","go:internal/scriptgate"]}
+{"file":"tools/internal/radpack/radpack.go","tests":["go:cmd/cargo-extract","go:cmd/cargo-merge","go:cmd/cargo-pack","go:cmd/content-pack-build","go:internal/questwiring","go:internal/radpack","go:internal/scriptgate"]}
+{"file":"tools/internal/radpack/radpack_test.go","tests":["go:cmd/cargo-extract","go:cmd/cargo-merge","go:cmd/cargo-pack","go:cmd/content-pack-build","go:internal/questwiring","go:internal/radpack","go:internal/scriptgate"]}
+{"file":"tools/internal/radpack/rowtable.go","tests":["go:cmd/cargo-extract","go:cmd/cargo-merge","go:cmd/cargo-pack","go:cmd/content-pack-build","go:internal/questwiring","go:internal/radpack","go:internal/scriptgate"]}
+{"file":"tools/internal/radpack/stock_data_test.go","tests":["go:cmd/cargo-extract","go:cmd/cargo-merge","go:cmd/cargo-pack","go:cmd/content-pack-build","go:internal/questwiring","go:internal/radpack","go:internal/scriptgate"]}
+{"file":"tools/internal/radpack/stockset.go","tests":["go:cmd/cargo-extract","go:cmd/cargo-merge","go:cmd/cargo-pack","go:cmd/content-pack-build","go:internal/questwiring","go:internal/radpack","go:internal/scriptgate"]}

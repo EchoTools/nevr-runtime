@@ -1,0 +1,7 @@
+{"component":"tests/plugins","dir":"tests/plugins"}
+{"file":"tests/plugins/auth_groundtruth_test.go","tests":["just:test-plugins-groundtruth"]}
+{"file":"tests/plugins/combat_mod_test.go","tests":["just:test-plugins-groundtruth"]}
+{"file":"tests/plugins/go.mod","tests":["just:test-plugins-groundtruth"]}
+{"file":"tests/plugins/go.sum","tests":["just:test-plugins-groundtruth"]}
+{"file":"tests/plugins/groundtruth_test.go","tests":["just:test-plugins-groundtruth"]}
+{"file":"tests/plugins/plugin_helpers_test.go","tests":["just:test-plugins-groundtruth"]}

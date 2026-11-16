@@ -1,0 +1,3 @@
+{"component":"tools/internal/bc7","dir":"tools/internal/bc7"}
+{"file":"tools/internal/bc7/bc7.go","tests":["go:internal/bc7","go:internal/questwiring"]}
+{"file":"tools/internal/bc7/bc7_test.go","tests":["go:internal/bc7","go:internal/questwiring"]}

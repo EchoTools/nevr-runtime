@@ -1,0 +1,4 @@
+{"component":"docs/quest/combat/adr","dir":"docs/quest/combat/adr"}
+{"file":"docs/quest/combat/adr/0001-match-refresh-rate.md","tests":["go:internal/questwiring"]}
+{"file":"docs/quest/combat/adr/0002-level-refresh-rate-default.md","tests":["go:internal/questwiring"]}
+{"file":"docs/quest/combat/adr/0003-weapon-arm-new-profile.md","tests":["go:internal/questwiring"]}

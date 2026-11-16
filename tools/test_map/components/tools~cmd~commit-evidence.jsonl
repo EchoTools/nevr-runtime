@@ -1,0 +1,3 @@
+{"component":"tools/cmd/commit-evidence","dir":"tools/cmd/commit-evidence"}
+{"file":"tools/cmd/commit-evidence/main.go","tests":["go:cmd/commit-evidence","go:cmd/guard-proof"]}
+{"file":"tools/cmd/commit-evidence/main_test.go","tests":["go:cmd/commit-evidence","go:cmd/guard-proof"]}

@@ -1,0 +1,6 @@
+{"component":"tools/internal/logwiring","dir":"tools/internal/logwiring"}
+{"file":"tools/internal/logwiring/doc.go","tests":["go:internal/logwiring","go:internal/questwiring"]}
+{"file":"tools/internal/logwiring/error_dialog_test.go","tests":["go:internal/logwiring","go:internal/questwiring"]}
+{"file":"tools/internal/logwiring/passthrough_forward_wiring_test.go","tests":["go:internal/logwiring","go:internal/questwiring"]}
+{"file":"tools/internal/logwiring/peer_timeout_log_wiring_test.go","tests":["go:internal/logwiring","go:internal/questwiring"]}
+{"file":"tools/internal/logwiring/score_log_s31_test.go","tests":["go:internal/logwiring","go:internal/questwiring"]}

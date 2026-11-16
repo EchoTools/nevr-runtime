@@ -1,0 +1,6 @@
+{"component":"tools/scenario","dir":"tools/scenario"}
+{"file":"tools/scenario/control.py","tests":["pytest:test_game_pids","pytest:test_launch_client","pytest:test_scenario_recipe_args","pytest:test_smoke_sync"]}
+{"file":"tools/scenario/run_all.py","tests":["pytest:test_game_pids","pytest:test_launch_client","pytest:test_scenario_recipe_args","pytest:test_smoke_sync"]}
+{"file":"tools/scenario/run_scenario.py","tests":["pytest:test_game_pids","pytest:test_launch_client","pytest:test_scenario_recipe_args","pytest:test_smoke_sync"]}
+{"file":"tools/scenario/smoke.sh","tests":["pytest:test_game_pids","pytest:test_launch_client","pytest:test_scenario_recipe_args","pytest:test_smoke_sync"]}
+{"file":"tools/scenario/smoke.yaml","tests":["pytest:test_game_pids","pytest:test_launch_client","pytest:test_run_scenario","pytest:test_scenario_recipe_args","pytest:test_smoke_sync"]}

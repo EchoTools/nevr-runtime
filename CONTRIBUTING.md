@@ -20,7 +20,7 @@ Presets are `mingw-debug`, `mingw-release` (Linux default), `debug` and `release
 
 ## Verify
 
-A branch runs `just test-changed` before it lands, and nothing else: it runs the tests `tools/test_map.json` gives for
+A branch runs `just test-changed` before it lands, and nothing else: it runs the tests the map in `tools/test_map/` gives for
 the paths the branch changed, each with its exit code (`AGENTS.md`, "Builds"). Quote its output in the commit message.
 The PC login test runs on main after the release cut, not on a branch.
 

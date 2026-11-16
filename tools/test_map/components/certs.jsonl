@@ -1,0 +1,5 @@
+{"component":"certs","dir":"certs"}
+{"file":"certs/code-signing.conf","none":"local signing CA scripts (just generate-certs, just sign): no test runs them"}
+{"file":"certs/generate-ca.sh","none":"local signing CA scripts (just generate-certs, just sign): no test runs them"}
+{"file":"certs/intermediate-ca.conf","none":"local signing CA scripts (just generate-certs, just sign): no test runs them"}
+{"file":"certs/root-ca.conf","none":"local signing CA scripts (just generate-certs, just sign): no test runs them"}

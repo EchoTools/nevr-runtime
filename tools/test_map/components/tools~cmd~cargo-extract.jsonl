@@ -1,0 +1,6 @@
+{"component":"tools/cmd/cargo-extract","dir":"tools/cmd/cargo-extract"}
+{"file":"tools/cmd/cargo-extract/extract.go","tests":["go:cmd/cargo-extract","go:cmd/guard-proof"]}
+{"file":"tools/cmd/cargo-extract/frame.go","tests":["go:cmd/cargo-extract","go:cmd/guard-proof"]}
+{"file":"tools/cmd/cargo-extract/main.go","tests":["go:cmd/cargo-extract","go:cmd/guard-proof"]}
+{"file":"tools/cmd/cargo-extract/main_test.go","tests":["go:cmd/cargo-extract","go:cmd/guard-proof"]}
+{"file":"tools/cmd/cargo-extract/verify.go","tests":["go:cmd/cargo-extract","go:cmd/guard-proof"]}

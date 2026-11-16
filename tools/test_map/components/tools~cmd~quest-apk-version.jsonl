@@ -1,0 +1,4 @@
+{"component":"tools/cmd/quest-apk-version","dir":"tools/cmd/quest-apk-version"}
+{"file":"tools/cmd/quest-apk-version/main.go","tests":["go:cmd/guard-proof","go:cmd/quest-apk-version"]}
+{"file":"tools/cmd/quest-apk-version/main_test.go","tests":["go:cmd/guard-proof","go:cmd/quest-apk-version"]}
+{"file":"tools/cmd/quest-apk-version/repack_test.go","tests":["go:cmd/guard-proof","go:cmd/quest-apk-version"]}

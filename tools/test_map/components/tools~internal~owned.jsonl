@@ -1,0 +1,5 @@
+{"component":"tools/internal/owned","dir":"tools/internal/owned"}
+{"file":"tools/internal/owned/dev_other.go","tests":["go:cmd/content-pack-build","go:internal/owned","go:internal/questwiring"]}
+{"file":"tools/internal/owned/dev_unix.go","tests":["go:cmd/content-pack-build","go:internal/owned","go:internal/questwiring"]}
+{"file":"tools/internal/owned/owned.go","tests":["go:cmd/content-pack-build","go:internal/owned","go:internal/questwiring"]}
+{"file":"tools/internal/owned/owned_test.go","tests":["go:cmd/content-pack-build","go:internal/owned","go:internal/questwiring"]}

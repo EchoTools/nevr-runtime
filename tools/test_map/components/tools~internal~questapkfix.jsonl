@@ -1,0 +1,2 @@
+{"component":"tools/internal/questapkfix","dir":"tools/internal/questapkfix"}
+{"file":"tools/internal/questapkfix/fixtures.go","tests":["go:internal/questapkfix","go:internal/questwiring"]}

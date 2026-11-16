@@ -1,0 +1,2 @@
+{"component":".claude/skills/file-or-close-issue","dir":".claude/skills/file-or-close-issue"}
+{"file":".claude/skills/file-or-close-issue/SKILL.md","none":"agent instructions: no test of its own; the Markdown scanners (one-home, doc-paths) read it"}

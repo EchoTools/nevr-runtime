@@ -1,5 +1,5 @@
-// Command test-map writes tools/test_map.json, the map `just test-changed` reads (tools/cmd/test-changed). For every
-// tracked file it records the test ids whose run compiles, reads or names it, and for a file no test covers, the reason:
+// Command test-map writes the directory tools/test_map, the map `just test-changed` reads (tools/cmd/test-changed): a
+// header and one file for each component (internal/testmap). For every tracked file it records the test ids whose run compiles, reads or names it, and for a file no test covers, the reason:
 //
 //	test-map [-repo dir] [-trees dir] [-out file] [-check]
 //
@@ -8,9 +8,9 @@
 // (default: the build checkout's build/ ($NEVR_BUILD_CHECKOUT, else <work root>/build-checkout/nevr-runtime), then the
 // main checkout's build/, then -repo's build/). A tree is <checkout>/build/<name>,
 // and its ninja paths name files of that checkout, so a tree of another checkout maps onto the files of -repo by their
-// repository paths. -out is the map (default:
-// <repo>/tools/test_map.json). -check writes nothing and exits 1 when the file on disk differs from what the generator
-// writes, naming the first differing component.
+// repository paths. -out is the map directory (default:
+// <repo>/tools/test_map). -check writes nothing and exits 1 when the directory on disk differs from what the generator
+// writes, naming the first differing file.
 //
 // Exit codes: 0 written, or -check found the same; 1 the map disagrees with the tree (a tracked file has no test and no
 // reason, or -check found a difference); 2 the map cannot be made (bad flags, a build tree that is missing, a command
@@ -18,9 +18,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -54,12 +52,6 @@ const (
 	buildCheckoutRepo = "nevr-runtime"
 )
 
-// fileMode and dirMode are the permissions of the map and of the directories made for it.
-const (
-	fileMode = 0o644
-	dirMode  = 0o755
-)
-
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -85,8 +77,8 @@ func run(ctx context.Context, args []string, env []string, stdout, stderr io.Wri
 	flags.SetOutput(stderr)
 	repo := flags.String("repo", "", "the checkout whose tracked files the map covers (default: the git top level of the working directory)")
 	trees := flags.String("trees", "", "the directories the build trees are looked for in, ':'-separated, first match wins (default: the build checkout's build/, the main checkout's build/, -repo's build/)")
-	out := flags.String("out", "", "the map to write (default: <repo>/"+testmap.DefaultPath+")")
-	check := flags.Bool("check", false, "write nothing; exit 1 when the map on disk differs from what the generator writes")
+	out := flags.String("out", "", "the map directory to write (default: <repo>/"+testmap.DefaultPath+")")
+	check := flags.Bool("check", false, "write nothing; exit 1 when the map directory on disk differs from what the generator writes")
 	if err := flags.Parse(args); err != nil {
 		return exitCannotMake
 	}
@@ -188,19 +180,19 @@ func (g *generator) do() int {
 	if err := testmap.Validate(mp, testmap.Measured); err != nil {
 		return g.fail(err)
 	}
-	var buf bytes.Buffer
-	if err := testmap.Encode(&buf, mp); err != nil {
+	want, err := testmap.Encode(mp)
+	if err != nil {
 		return g.fail(err)
 	}
 	g.log.Info("map", "repo", repo, "trees", trees, "out", out, "tracked", len(m.tracked),
 		"components", len(mp.Components), "gtest_from_sources", m.fallbacks)
 	if g.check {
-		return g.checkFile(out, buf.Bytes())
+		return g.checkDir(out, want)
 	}
-	if err := writeFile(out, buf.Bytes()); err != nil {
+	if err := testmap.Write(out, want); err != nil {
 		return g.fail(err)
 	}
-	g.say("wrote %s: %d components, %d tracked files", out, len(mp.Components), len(m.tracked))
+	g.say("wrote %s: %d component files, %d tracked files", out, len(mp.Components), len(m.tracked))
 	if len(m.fallbacks) > 0 {
 		g.say("gtest executables the trees do not have, covered by their sources: %s", strings.Join(m.fallbacks, ", "))
 	}
@@ -235,60 +227,24 @@ func (g *generator) defaultTrees(tc toolchain, repo string) (string, error) {
 	return strings.Join(out, string(filepath.ListSeparator)), nil
 }
 
-// checkFile is -check: it compares the map on disk with want and names the first component that differs.
-func (g *generator) checkFile(out string, want []byte) int {
-	have, err := os.ReadFile(out)
+// checkDir is -check: it compares the map directory on disk with want and names the first file that differs.
+func (g *generator) checkDir(out string, want map[string][]byte) int {
+	have, err := testmap.ReadFiles(out)
 	if errors.Is(err, fs.ErrNotExist) {
-		fmt.Fprintf(g.stderr, "%s: FAIL -check: %s does not exist; run just test-map\n", tool, out)
+		fmt.Fprintf(g.stderr, "%s: FAIL -check: %s is missing or incomplete; run just test-map\n", tool, out)
 		g.log.Error("check", "out", out, "result", "missing", "exit", exitUncovered)
 		return exitUncovered
 	}
 	if err != nil {
 		return g.fail(err)
 	}
-	if bytes.Equal(have, want) {
+	where := testmap.Diff(have, want)
+	if where == "" {
 		g.say("-check: %s is what the generator writes", out)
 		g.log.Info("check", "out", out, "result", "same")
 		return 0
 	}
-	where := firstDifference(string(have), string(want))
-	fmt.Fprintf(g.stderr, "%s: FAIL -check: %s differs from the generator; %s\n", tool, out, where)
+	fmt.Fprintf(g.stderr, "%s: FAIL -check: %s differs from the generator; first difference: %s\n", tool, out, where)
 	g.log.Error("check", "out", out, "result", "differs", "where", where, "exit", exitUncovered)
 	return exitUncovered
-}
-
-// firstDifference names the first line that differs between have and want: the component it belongs to when the line is
-// one (Encode writes one component to a line), else its number.
-func firstDifference(have, want string) string {
-	hl, wl := strings.Split(have, "\n"), strings.Split(want, "\n")
-	for i := 0; i < len(hl) || i < len(wl); i++ {
-		var h, w string
-		if i < len(hl) {
-			h = hl[i]
-		}
-		if i < len(wl) {
-			w = wl[i]
-		}
-		if h == w {
-			continue
-		}
-		var c testmap.Component
-		if json.Unmarshal([]byte(strings.TrimSuffix(strings.TrimSpace(w), ",")), &c) == nil && c.Name != "" {
-			return "first differing component: " + c.Name
-		}
-		return fmt.Sprintf("first difference is outside the components, at line %d", i+1)
-	}
-	return "the files differ only in their final newline"
-}
-
-// writeFile writes data to path through a temporary file beside it, so a reader never sees half a map.
-func writeFile(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, fileMode); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
 }

@@ -1,0 +1,6 @@
+{"component":"tools/internal/policy","dir":"tools/internal/policy"}
+{"file":"tools/internal/policy/policy.go","tests":["go:internal/policy","go:internal/questwiring"]}
+{"file":"tools/internal/policy/policy_test.go","tests":["go:internal/policy","go:internal/questwiring"]}
+{"file":"tools/internal/policy/python_to_port.txt","tests":["go:internal/policy","go:internal/questwiring"]}
+{"file":"tools/internal/policy/reason.go","tests":["go:internal/policy","go:internal/questwiring"]}
+{"file":"tools/internal/policy/reason_test.go","tests":["go:internal/policy","go:internal/questwiring"]}

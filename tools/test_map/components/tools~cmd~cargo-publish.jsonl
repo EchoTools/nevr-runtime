@@ -1,0 +1,3 @@
+{"component":"tools/cmd/cargo-publish","dir":"tools/cmd/cargo-publish"}
+{"file":"tools/cmd/cargo-publish/main.go","tests":["go:cmd/cargo-publish","go:cmd/guard-proof"]}
+{"file":"tools/cmd/cargo-publish/main_test.go","tests":["go:cmd/cargo-publish","go:cmd/guard-proof"]}

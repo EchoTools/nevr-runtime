@@ -1,0 +1,3 @@
+{"component":"tools/cmd/cargo-merge/testdata","dir":"tools/cmd/cargo-merge/testdata"}
+{"file":"tools/cmd/cargo-merge/testdata/combat-manifest.json.zst","tests":["go:cmd/cargo-merge","go:cmd/guard-proof"]}
+{"file":"tools/cmd/cargo-merge/testdata/production-manifest.json.zst","tests":["go:cmd/cargo-merge","go:cmd/guard-proof"]}

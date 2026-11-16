@@ -63,7 +63,7 @@ feels risky":
    without its verification action is skipping the gate.
 
 **The gate before landing is `just test-changed`, and nothing else.** AGENTS.md "Builds" defines it: the command
-runs the tests `tools/test_map.json` gives for the paths the branch changed, each with its exit code, and fails on a
+runs the tests the map in `tools/test_map/` gives for the paths the branch changed, each with its exit code, and fails on a
 changed path the map does not cover. An agent never picks tests and never runs a whole suite (`just verify`,
 `just test-full`, `just test-tools` with no file, `just test-auth-unit` with no binary); a review does not ask for one.
 A runtime or auth change's PC login runs on main after the release cut, never on a branch (below, and AGENTS.md

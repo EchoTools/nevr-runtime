@@ -1,0 +1,3 @@
+{"component":"src/reconstruction","dir":"src/reconstruction"}
+{"file":"src/reconstruction/CMakeLists.txt","tests":["build","go:internal/questwiring"]}
+{"file":"src/reconstruction/README.md","tests":["go:internal/questwiring"]}

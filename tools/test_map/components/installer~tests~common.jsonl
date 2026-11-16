@@ -1,0 +1,2 @@
+{"component":"installer/tests/common","dir":"installer/tests/common"}
+{"file":"installer/tests/common/mod.rs","tests":["just:test-installer"]}

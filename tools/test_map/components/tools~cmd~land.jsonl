@@ -1,0 +1,3 @@
+{"component":"tools/cmd/land","dir":"tools/cmd/land"}
+{"file":"tools/cmd/land/main.go","tests":["go:cmd/guard-proof","go:cmd/land"]}
+{"file":"tools/cmd/land/main_test.go","tests":["go:cmd/guard-proof","go:cmd/land"]}

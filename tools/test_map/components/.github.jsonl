@@ -1,0 +1,4 @@
+{"component":".github","dir":".github"}
+{"file":".github/CODEOWNERS","none":"GitHub configuration: no test reads this file"}
+{"file":".github/pull_request_template.md","tests":["pytest:test_pr_issue_link_check_workflow","pytest:test_pr_read_check_workflow"]}
+{"file":".github/release.yml","none":"GitHub configuration: no test reads this file"}

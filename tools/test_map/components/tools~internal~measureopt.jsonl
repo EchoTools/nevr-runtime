@@ -1,0 +1,3 @@
+{"component":"tools/internal/measureopt","dir":"tools/internal/measureopt"}
+{"file":"tools/internal/measureopt/doc.go","tests":["go:internal/measureopt","go:internal/questwiring"]}
+{"file":"tools/internal/measureopt/measureopt_test.go","tests":["go:internal/measureopt","go:internal/questwiring"]}

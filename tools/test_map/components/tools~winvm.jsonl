@@ -1,0 +1,8 @@
+{"component":"tools/winvm","dir":"tools/winvm"}
+{"file":"tools/winvm/CMakeLists.txt","tests":["pytest:test_fixtures_built_by_cmake","pytest:test_winvm_checks","pytest:test_winvm_dispatch","pytest:test_winvm_runtime_root"]}
+{"file":"tools/winvm/README.md","tests":["pytest:test_fixtures_built_by_cmake","pytest:test_winvm_checks","pytest:test_winvm_dispatch","pytest:test_winvm_runtime_root"]}
+{"file":"tools/winvm/checks.py","tests":["pytest:test_fixtures_built_by_cmake","pytest:test_winvm_checks","pytest:test_winvm_dispatch","pytest:test_winvm_runtime_root"]}
+{"file":"tools/winvm/dump_stacks.py","tests":["pytest:test_fixtures_built_by_cmake","pytest:test_winvm_checks","pytest:test_winvm_dispatch","pytest:test_winvm_runtime_root"]}
+{"file":"tools/winvm/enum_windows.ps1","tests":["pytest:test_fixtures_built_by_cmake","pytest:test_winvm_checks","pytest:test_winvm_dispatch","pytest:test_winvm_runtime_root"]}
+{"file":"tools/winvm/gai_probe.c","tests":["build","pytest:test_fixtures_built_by_cmake","pytest:test_winvm_checks","pytest:test_winvm_dispatch","pytest:test_winvm_runtime_root"]}
+{"file":"tools/winvm/systest.py","tests":["pytest:test_fixtures_built_by_cmake","pytest:test_winvm_checks","pytest:test_winvm_dispatch","pytest:test_winvm_runtime_root"]}

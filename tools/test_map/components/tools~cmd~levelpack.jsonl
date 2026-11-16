@@ -1,0 +1,5 @@
+{"component":"tools/cmd/levelpack","dir":"tools/cmd/levelpack"}
+{"file":"tools/cmd/levelpack/main.go","tests":["go:cmd/guard-proof","go:cmd/levelpack"]}
+{"file":"tools/cmd/levelpack/main_test.go","tests":["go:cmd/guard-proof","go:cmd/levelpack"]}
+{"file":"tools/cmd/levelpack/manifest.go","tests":["go:cmd/guard-proof","go:cmd/levelpack"]}
+{"file":"tools/cmd/levelpack/set.go","tests":["go:cmd/guard-proof","go:cmd/levelpack"]}

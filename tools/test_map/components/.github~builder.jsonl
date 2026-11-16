@@ -1,0 +1,2 @@
+{"component":".github/builder","dir":".github/builder"}
+{"file":".github/builder/Dockerfile","tests":["pytest:test_builder_image","pytest:test_vcpkg_pin"]}

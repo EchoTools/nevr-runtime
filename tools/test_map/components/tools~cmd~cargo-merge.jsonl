@@ -1,0 +1,5 @@
+{"component":"tools/cmd/cargo-merge","dir":"tools/cmd/cargo-merge"}
+{"file":"tools/cmd/cargo-merge/main.go","tests":["go:cmd/cargo-merge","go:cmd/guard-proof"]}
+{"file":"tools/cmd/cargo-merge/main_test.go","tests":["go:cmd/cargo-merge","go:cmd/guard-proof"]}
+{"file":"tools/cmd/cargo-merge/script_gate_test.go","tests":["go:cmd/cargo-merge","go:cmd/guard-proof"]}
+{"file":"tools/cmd/cargo-merge/scripts.go","tests":["go:cmd/cargo-merge","go:cmd/guard-proof"]}

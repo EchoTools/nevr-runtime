@@ -1,0 +1,5 @@
+{"component":"tools/lib","dir":"tools/lib"}
+{"file":"tools/lib/game_install.sh","tests":["pytest:test_game_pids","pytest:test_launch_client","pytest:test_smoke_sync"]}
+{"file":"tools/lib/owned.sh","tests":["pytest:test_launch_client","pytest:test_owned_sh","pytest:test_smoke_sync","pytest:test_vcpkg_root","pytest:test_worktree_setup"]}
+{"file":"tools/lib/run_root.sh","tests":["pytest:test_launch_client","pytest:test_quest_diagnose","pytest:test_smoke_sync"]}
+{"file":"tools/lib/work_root.sh","tests":["go:internal/runroot","pytest:test_launch_client","pytest:test_smoke_sync"]}

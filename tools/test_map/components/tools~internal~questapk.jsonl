@@ -1,0 +1,10 @@
+{"component":"tools/internal/questapk","dir":"tools/internal/questapk"}
+{"file":"tools/internal/questapk/axml.go","tests":["go:cmd/quest-apk-label","go:cmd/quest-apk-rename-package","go:cmd/quest-apk-version","go:internal/questapk","go:internal/questwiring"]}
+{"file":"tools/internal/questapk/cli.go","tests":["go:cmd/quest-apk-label","go:cmd/quest-apk-rename-package","go:cmd/quest-apk-version","go:internal/questapk","go:internal/questwiring"]}
+{"file":"tools/internal/questapk/helpers_test.go","tests":["go:cmd/quest-apk-label","go:cmd/quest-apk-rename-package","go:cmd/quest-apk-version","go:internal/questapk","go:internal/questwiring"]}
+{"file":"tools/internal/questapk/jsonline.go","tests":["go:cmd/quest-apk-label","go:cmd/quest-apk-rename-package","go:cmd/quest-apk-version","go:internal/questapk","go:internal/questwiring"]}
+{"file":"tools/internal/questapk/label.go","tests":["go:cmd/quest-apk-label","go:cmd/quest-apk-rename-package","go:cmd/quest-apk-version","go:internal/questapk","go:internal/questwiring"]}
+{"file":"tools/internal/questapk/rename.go","tests":["go:cmd/quest-apk-label","go:cmd/quest-apk-rename-package","go:cmd/quest-apk-version","go:internal/questapk","go:internal/questwiring"]}
+{"file":"tools/internal/questapk/rename_test.go","tests":["go:cmd/quest-apk-label","go:cmd/quest-apk-rename-package","go:cmd/quest-apk-version","go:internal/questapk","go:internal/questwiring","pytest:test_quest_release_base"]}
+{"file":"tools/internal/questapk/version.go","tests":["go:cmd/quest-apk-label","go:cmd/quest-apk-rename-package","go:cmd/quest-apk-version","go:internal/questapk","go:internal/questwiring"]}
+{"file":"tools/internal/questapk/version_test.go","tests":["go:cmd/quest-apk-label","go:cmd/quest-apk-rename-package","go:cmd/quest-apk-version","go:internal/questapk","go:internal/questwiring"]}

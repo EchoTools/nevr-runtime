@@ -882,7 +882,7 @@ test-tools *ARGS: go-tools
     exec build/go-tools/test-go-tools -C tools -- python3 tools/run_tool_tests.py "$@"
 
 # The tests that cover this branch's change, and nothing else: every path `git diff --name-only --no-renames
-# $(git merge-base origin/main HEAD)` names is looked up in tools/test_map.json, and the tests of the components that own
+# $(git merge-base origin/main HEAD)` names is looked up in the map, the directory tools/test_map, and the tests of the components that own
 # them run one at a time, the build first, each printed with its exit code (tools/cmd/test-changed). The gtest ids of the
 # run are one `just test-auth-unit` call. A path the map does not cover is fixed by `just test-map`, never by hand: the
 # run fails before anything starts, naming it. This is a branch's whole check before it lands (AGENTS.md, "Builds"); -n
@@ -891,7 +891,7 @@ test-tools *ARGS: go-tools
 test-changed *ARGS: go-tools
     build/go-tools/test-changed "$@"
 
-# Writes tools/test_map.json, schema 2, the map test-changed reads (tools/cmd/test-map). It reads the build trees
+# Writes tools/test_map/, schema 2, the map test-changed reads: a header and one file for each component (tools/cmd/test-map). It reads the build trees
 # (default $NEVR_BUILD_CHECKOUT/build, else <work root>/build-checkout/nevr-runtime/build): ninja's inputs and deps of
 # the test binaries and the shipped DLLs, the Quest preset targets, and go list over tools/; plus the tracked files and
 # the tests' own text. A tree it needs and cannot find fails it, naming the recipe that makes the tree. `just test-map

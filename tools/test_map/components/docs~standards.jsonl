@@ -1,0 +1,7 @@
+{"component":"docs/standards","dir":"docs/standards"}
+{"file":"docs/standards/guards.txt","tests":["go:cmd/guard-proof"]}
+{"file":"docs/standards/logging.md","tests":["log-rules","go:internal/patchwiring","go:internal/questwiring","go:internal/runlog","go:internal/serverwiring","pytest:test_info_log_no_pointers","pytest:test_quest_store_wiring","pytest:test_render_config_wiring"]}
+{"file":"docs/standards/naming.md","tests":["go:internal/questwiring","pytest:test_naming_inventory","pytest:test_runtime_dll_name"]}
+{"file":"docs/standards/planning.md","tests":["go:cmd/issue-prose","pytest:test_check_pr_issue_link","pytest:test_next_release_version"]}
+{"file":"docs/standards/procedure-homes.txt","tests":["go:cmd/one-home"]}
+{"file":"docs/standards/verification.md","tests":["go:internal/patchwiring","go:internal/questwiring","go:internal/updatewiring"]}

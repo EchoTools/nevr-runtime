@@ -1,0 +1,17 @@
+{"component":"installer/src","dir":"installer/src"}
+{"file":"installer/src/artifact.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer"]}
+{"file":"installer/src/device.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer"]}
+{"file":"installer/src/error.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer"]}
+{"file":"installer/src/fetch.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer","pytest:test_verifying_a_release_doc"]}
+{"file":"installer/src/ffi.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer"]}
+{"file":"installer/src/launcher.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer"]}
+{"file":"installer/src/lib.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer"]}
+{"file":"installer/src/log.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer"]}
+{"file":"installer/src/main.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer","pytest:test_verifying_a_release_doc"]}
+{"file":"installer/src/manifest.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer"]}
+{"file":"installer/src/pc.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer"]}
+{"file":"installer/src/quest.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer"]}
+{"file":"installer/src/session.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer"]}
+{"file":"installer/src/stage.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer","go:internal/updatewiring"]}
+{"file":"installer/src/update_state.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer"]}
+{"file":"installer/src/util.rs","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer","go:internal/owned"]}

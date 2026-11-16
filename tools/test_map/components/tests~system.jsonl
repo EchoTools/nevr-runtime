@@ -1,0 +1,15 @@
+{"component":"tests/system","dir":"tests/system"}
+{"file":"tests/system/deploy_paths_test.go","tests":["just:test-system-short"]}
+{"file":"tests/system/dll_test.go","tests":["just:test-system-short"]}
+{"file":"tests/system/go.mod","tests":["just:test-system-short"]}
+{"file":"tests/system/go.sum","tests":["just:test-system-short"]}
+{"file":"tests/system/helpers_test.go","tests":["just:test-system-short"]}
+{"file":"tests/system/login_test.go","tests":["just:test-system-short"]}
+{"file":"tests/system/mode_patches_test.go","tests":["just:test-system-short","pytest:test_server_bots_wiring","pytest:test_server_team_size_wiring","pytest:test_verify_mode_patch_ground_truth"]}
+{"file":"tests/system/plugin_test.go","tests":["just:test-system-short"]}
+{"file":"tests/system/pnsrad_patches_test.go","tests":["just:test-system-short"]}
+{"file":"tests/system/provider_test.go","tests":["just:test-system-short"]}
+{"file":"tests/system/server_timing_test.go","tests":["just:test-system-short"]}
+{"file":"tests/system/shutdown_test.go","tests":["just:test-system-short"]}
+{"file":"tests/system/social_test.go","tests":["just:test-system-short"]}
+{"file":"tests/system/telemetry_streaming_test.go","tests":["just:test-system-short"]}

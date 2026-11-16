@@ -1,0 +1,3 @@
+{"component":"src/modules/platform-compat/src","dir":"src/modules/platform-compat/src"}
+{"file":"src/modules/platform-compat/src/nt_path_log.h","tests":["build","gtest:test_nt_path_log","pytest:test_config_yaml_source"]}
+{"file":"src/modules/platform-compat/src/platform_compat.cpp","tests":["build","pytest:test_config_yaml_source","pytest:test_content_packs_doc","pytest:test_runtime_lifecycle_invariants"]}

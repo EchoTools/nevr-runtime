@@ -1,0 +1,3 @@
+{"component":"src/extension","dir":"src/extension"}
+{"file":"src/extension/host_api.h","tests":["just:test-scripting","pytest:test_config_yaml_source"]}
+{"file":"src/extension/module_interface.h","tests":["build","gtest:test_behavioral","gtest:test_service_config","gtest:test_token_auth","pytest:test_config_yaml_source"]}

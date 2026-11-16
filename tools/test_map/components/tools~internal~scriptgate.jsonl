@@ -1,0 +1,3 @@
+{"component":"tools/internal/scriptgate","dir":"tools/internal/scriptgate"}
+{"file":"tools/internal/scriptgate/scriptgate.go","tests":["go:cmd/cargo-merge","go:cmd/cargo-pack","go:internal/questwiring","go:internal/scriptgate"]}
+{"file":"tools/internal/scriptgate/scriptgate_test.go","tests":["go:cmd/cargo-merge","go:cmd/cargo-pack","go:internal/questwiring","go:internal/scriptgate"]}

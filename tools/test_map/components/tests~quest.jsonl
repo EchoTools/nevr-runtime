@@ -1,0 +1,7 @@
+{"component":"tests/quest","dir":"tests/quest"}
+{"file":"tests/quest/asm_entry_text_test.go","tests":["just:test-android","pytest:test_quest_sentinel_link"]}
+{"file":"tests/quest/elf_groundtruth_test.go","tests":["just:test-android","pytest:test_quest_sentinel_link"]}
+{"file":"tests/quest/frames_asm_probes_test.go","tests":["just:test-android","go:internal/questwiring","pytest:test_quest_sentinel_link"]}
+{"file":"tests/quest/frames_sensor_test.go","tests":["just:test-android","go:internal/questwiring","pytest:test_quest_sentinel_link"]}
+{"file":"tests/quest/go.mod","tests":["just:test-android","pytest:test_quest_sentinel_link"]}
+{"file":"tests/quest/login_hook_frames_test.go","tests":["just:test-android","pytest:test_quest_sentinel_link"]}

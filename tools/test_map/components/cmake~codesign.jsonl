@@ -1,0 +1,4 @@
+{"component":"cmake/codesign","dir":"cmake/codesign"}
+{"file":"cmake/codesign/sign.ps1","tests":["build"]}
+{"file":"cmake/codesign/sign.sh","tests":["build"]}
+{"file":"cmake/codesign/verify-authenticode.ps1","tests":["build"]}

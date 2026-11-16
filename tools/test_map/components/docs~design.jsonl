@@ -1,0 +1,7 @@
+{"component":"docs/design","dir":"docs/design"}
+{"file":"docs/design/2026-07-13-quest-crash-reporter-injection.md","none":"documentation: only the scanners read it"}
+{"file":"docs/design/2026-09-21-mic-provider-voip-fix.md","none":"documentation: only the scanners read it"}
+{"file":"docs/design/2026-10-01-social-features-test-plan.md","tests":["pytest:test_social_test_plan_docs"]}
+{"file":"docs/design/2026-10-01-social-nakama-proposal.md","none":"documentation: only the scanners read it"}
+{"file":"docs/design/2026-10-01-social-scenario-harness.md","none":"documentation: only the scanners read it"}
+{"file":"docs/design/2026-11-02-quest-hand-flip-toggle.md","tests":["pytest:test_quest_hand_pose_log_wiring"]}

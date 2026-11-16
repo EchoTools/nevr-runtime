@@ -56,7 +56,7 @@ func TestEveryMeasuredIdIsOverTheBoundAndClassifiedHeavy(t *testing.T) {
 func TestValidateRefusesADuplicateAnUnrunnableIdAnUnderBoundEntryAndARuleIdListedAgain(t *testing.T) {
 	t.Parallel()
 	over := HeavyBound.Milliseconds() + 1
-	m, err := Parse([]byte(`{"schema": 2, "about": [], "targets": {"build": ["just", "build"]}, "scanners": [], "components": []}`))
+	m, err := parseFixture(`{"schema": 2, "about": [], "targets": {"build": ["just", "build"]}, "scanners": [], "components": []}`)
 	if err != nil {
 		t.Fatal(err)
 	}

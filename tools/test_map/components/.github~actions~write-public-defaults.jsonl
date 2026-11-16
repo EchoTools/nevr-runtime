@@ -1,0 +1,2 @@
+{"component":".github/actions/write-public-defaults","dir":".github/actions/write-public-defaults"}
+{"file":".github/actions/write-public-defaults/action.yml","tests":["pytest:test_builtin_defaults_contract","pytest:test_vcpkg_pin","pytest:test_workflow_action_runtimes"]}

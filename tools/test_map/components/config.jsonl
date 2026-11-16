@@ -1,0 +1,3 @@
+{"component":"config","dir":"config"}
+{"file":"config/credits.json","tests":["build","just:test-android","pytest:test_credits","pytest:test_credits_text_wiring"]}
+{"file":"config/public-defaults.env.example","tests":["pytest:test_builtin_defaults_contract","pytest:test_quest_release_timer","pytest:test_remove_worktree","pytest:test_worktree_setup"]}

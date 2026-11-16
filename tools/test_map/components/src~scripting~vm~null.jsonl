@@ -1,0 +1,2 @@
+{"component":"src/scripting/vm/null","dir":"src/scripting/vm/null"}
+{"file":"src/scripting/vm/null/null_vm.cpp","tests":["just:test-scripting"]}

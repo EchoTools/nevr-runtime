@@ -1,0 +1,4 @@
+{"component":"docs/testing","dir":"docs/testing"}
+{"file":"docs/testing/quest-texture-quality-headset-sheet.md","none":"documentation: only the scanners read it"}
+{"file":"docs/testing/quest-verify-batch-headset-sheet.md","none":"documentation: only the scanners read it"}
+{"file":"docs/testing/smoke-checklist.md","tests":["pytest:test_loading_tips_wiring"]}

@@ -1,0 +1,6 @@
+{"component":"extern","dir":"extern"}
+{"file":"extern/CMakeLists.txt","tests":["build","go:cmd/test-map"]}
+{"file":"extern/breakpad","tests":["pytest:test_remove_worktree","pytest:test_worktree_setup"]}
+{"file":"extern/lss","tests":["pytest:test_worktree_setup"]}
+{"file":"extern/luau","tests":["pytest:test_gitenv","pytest:test_reap_merged","pytest:test_remove_worktree","pytest:test_worktree_setup"]}
+{"file":"extern/minhook","tests":["pytest:test_plugin_sdk_package","pytest:test_worktree_include_hook","pytest:test_worktree_setup"]}

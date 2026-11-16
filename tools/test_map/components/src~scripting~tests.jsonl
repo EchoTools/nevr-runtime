@@ -1,0 +1,5 @@
+{"component":"src/scripting/tests","dir":"src/scripting/tests"}
+{"file":"src/scripting/tests/conformance_test.cpp","tests":["just:test-scripting"]}
+{"file":"src/scripting/tests/host_registry_test.cpp","tests":["just:test-scripting"]}
+{"file":"src/scripting/tests/script_host_test.cpp","tests":["just:test-scripting"]}
+{"file":"src/scripting/tests/script_stubs_test.cpp","tests":["just:test-scripting"]}

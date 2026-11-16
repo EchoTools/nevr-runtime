@@ -1,0 +1,3 @@
+{"component":"installer/tests/c","dir":"installer/tests/c"}
+{"file":"installer/tests/c/abi_check.c","tests":["just:test-installer"]}
+{"file":"installer/tests/c/stage_check.c","tests":["just:test-installer"]}

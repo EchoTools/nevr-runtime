@@ -1,0 +1,5 @@
+{"component":"tools/cmd/quest-repack-libs","dir":"tools/cmd/quest-repack-libs"}
+{"file":"tools/cmd/quest-repack-libs/e2e_test.go","tests":["go:cmd/guard-proof","go:cmd/quest-repack-libs","pytest:test_quest_plugin_default_wiring"]}
+{"file":"tools/cmd/quest-repack-libs/helpers_test.go","tests":["go:cmd/guard-proof","go:cmd/quest-repack-libs","pytest:test_quest_plugin_default_wiring"]}
+{"file":"tools/cmd/quest-repack-libs/main.go","tests":["go:cmd/guard-proof","go:cmd/quest-repack-libs","pytest:test_quest_plugin_default_wiring"]}
+{"file":"tools/cmd/quest-repack-libs/main_test.go","tests":["go:cmd/guard-proof","go:cmd/quest-repack-libs","pytest:test_quest_plugin_default_wiring"]}

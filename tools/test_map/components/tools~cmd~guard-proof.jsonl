@@ -1,0 +1,3 @@
+{"component":"tools/cmd/guard-proof","dir":"tools/cmd/guard-proof"}
+{"file":"tools/cmd/guard-proof/main.go","tests":["go:cmd/guard-proof"]}
+{"file":"tools/cmd/guard-proof/main_test.go","tests":["go:cmd/guard-proof"]}

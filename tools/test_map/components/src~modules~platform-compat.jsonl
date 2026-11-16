@@ -1,0 +1,2 @@
+{"component":"src/modules/platform-compat","dir":"src/modules/platform-compat"}
+{"file":"src/modules/platform-compat/CMakeLists.txt","tests":["build","pytest:test_config_yaml_source"]}

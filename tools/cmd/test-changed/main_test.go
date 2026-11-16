@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/testkit"
+	"github.com/EchoTools/nevr-runtime/tools/internal/testmap"
 )
 
 // seqEnv names the file every fake appends its call to, so a test sees the order across the three programs.
@@ -127,7 +129,7 @@ func TestMain(m *testing.M) {
 	testkit.Main(m, testkit.Fakes{"just": fake, "go": fake, "python3": fake})
 }
 
-// testMap is the fixture's map, schema 2: component a holds two gtests, tools holds the map itself, and docs has no tests.
+// testMap is the fixture's map, schema 2: component a holds two gtests, and docs has no tests. writeMap writes it as the directory form.
 // The lines the tests edit are whole lines of it (oldSrcLine, scannersLine), so an edit is one exact replacement.
 const testMap = `{"schema": 2,
  "about": ["the fixture of tools/cmd/test-changed's tests"],
@@ -135,7 +137,7 @@ const testMap = `{"schema": 2,
  "scanners": [],
  "components": [
   {"name": "src/a", "dir": "src/a", "files": {"src/a/x.cpp": ["build", "gtest:test_a", "gtest:test_b", "seams"]}},
-  {"name": "tools", "dir": "tools", "files": {"tools/y.py": ["pytest:test_y", "go:cmd/x"], "tools/test_map.json": ["go:internal/testmap"]}},
+  {"name": "tools", "dir": "tools", "files": {"tools/y.py": ["pytest:test_y", "go:cmd/x"]}},
   {"name": "src/h", "dir": "src/h", "files": {"src/h/x.cpp": ["build", "gtest:test_h", "just:test-quest-foo", "just:test-android", "pytest:test_launch_client", "pytest:test_fast"]}},
   {"name": "src", "dir": "src", "files": {"src/old.cpp": ["gtest:test_old"]}},
   {"name": "docs", "dir": "docs", "none": {"docs/a.md": "no test reads it"}}
@@ -213,7 +215,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	f.git("init", "-q", "-b", "main")
-	f.write("tools/test_map.json", testMap)
+	f.writeMap(testMap)
 	f.write("src/a/x.cpp", "x\n")
 	f.write("src/old.cpp", "old\n")
 	f.write("src/h/x.cpp", "h\n")
@@ -223,6 +225,23 @@ func newFixture(t *testing.T) *fixture {
 	f.git("update-ref", "refs/remotes/origin/main", "HEAD")
 	f.git("checkout", "-q", "-b", "branch")
 	return f
+}
+
+// writeMap writes the map given as one JSON object (testMap's form) as the directory form, replacing the map there. A
+// text that is not a map of schema 2 is written as the header, so the loader's refusal of it can be tested.
+func (f *fixture) writeMap(text string) {
+	f.t.Helper()
+	var m testmap.Map
+	files := map[string][]byte{testmap.HeaderFile: []byte(text)}
+	if err := json.Unmarshal([]byte(text), &m); err == nil && m.Schema == testmap.Schema {
+		var err error
+		if files, err = testmap.Encode(&m); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	if err := testmap.Write(filepath.Join(f.dir, filepath.FromSlash(testmap.DefaultPath)), files); err != nil {
+		f.t.Fatal(err)
+	}
 }
 
 func (f *fixture) run(args ...string) (int, string, string) {
@@ -451,7 +470,7 @@ func TestAPathTheMapDoesNotCoverFailsBeforeAnythingRuns(t *testing.T) {
 	if code != exitUncovered {
 		t.Fatalf("exit %d, want %d\n%s\n%s", code, exitUncovered, out, errs)
 	}
-	if !strings.Contains(errs, "FAIL src/b/new.cpp is not in tools/test_map.json: run just test-map and commit the map it writes") {
+	if !strings.Contains(errs, "FAIL src/b/new.cpp is not in tools/test_map: run just test-map and commit the map it writes") {
 		t.Errorf("stderr does not name the path and the fix:\n%s", errs)
 	}
 	if c := f.calls(); len(c) != 0 {
@@ -472,7 +491,7 @@ func TestAGitMoveBetweenComponentsRunsBothComponentsTests(t *testing.T) {
 	f.git("mv", "src/old.cpp", "src/a/moved.cpp")
 	m := strings.Replace(schema2Map(), `"src/a/x.cpp": ["build", "gtest:test_a", "gtest:test_b", "seams"]`,
 		`"src/a/x.cpp": ["build", "gtest:test_a", "gtest:test_b", "seams"], "src/a/moved.cpp": ["gtest:test_c"]`, 1)
-	f.write("tools/test_map.json", m)
+	f.writeMap(m)
 	f.commit("move old.cpp into component a")
 	code, out, errs := f.run()
 	if code != 0 {
@@ -501,7 +520,7 @@ func TestADeletedPathIsLookedUpInTheMapAtTheMergeBase(t *testing.T) {
 	if err := os.Remove(filepath.Join(f.dir, "src/old.cpp")); err != nil {
 		t.Fatal(err)
 	}
-	f.write("tools/test_map.json", schema2Map())
+	f.writeMap(schema2Map())
 	f.commit("drop old.cpp and its entry")
 	code, out, errs := f.run()
 	if code != 0 {
@@ -537,7 +556,7 @@ func TestAScannerAddsItsTestsToEveryPathItMatches(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	m := strings.Replace(testMap, `"scanners": []`, `"scanners": [{"name": "doc-scan", "globs": ["docs/**"], "tests": ["go:cmd/doc"]}]`, 1)
-	f.write("tools/test_map.json", m)
+	f.writeMap(m)
 	f.commit("the map with a scanner")
 	f.git("update-ref", "refs/remotes/origin/main", "HEAD")
 	f.write("docs/a.md", "a2\n")
@@ -580,7 +599,7 @@ func TestAScannerOnAFileWithItsOwnTestsKeepsBothAndNamesWhatItAdds(t *testing.T)
 			t.Parallel()
 			f := newFixture(t)
 			m := strings.Replace(testMap, `"scanners": []`, `"scanners": [{"name": "a-scan", "globs": ["src/a/**"], "tests": [`+tc.tests+`]}]`, 1)
-			f.write("tools/test_map.json", m)
+			f.writeMap(m)
 			f.commit("the map with a scanner on component a")
 			f.git("update-ref", "refs/remotes/origin/main", "HEAD")
 			f.write("src/a/x.cpp", "x2\n")
@@ -592,7 +611,7 @@ func TestAScannerOnAFileWithItsOwnTestsKeepsBothAndNamesWhatItAdds(t *testing.T)
 			if got := f.calls(); !reflect.DeepEqual(got, tc.calls) {
 				t.Errorf("calls = %q, want %q", got, tc.calls)
 			}
-			line := "src/a/x.cpp -> src/a : build gtest:test_a gtest:test_b seams ; scanners a-scan: " + tc.newPart
+			line := "src/a/x.cpp -> src/a : build seams gtest:test_a gtest:test_b ; scanners a-scan: " + tc.newPart
 			if !strings.Contains(out, line) {
 				t.Errorf("output lacks %q:\n%s", line, out)
 			}
@@ -718,11 +737,11 @@ func TestDryRunPrintsThePlanAndRunsNothing(t *testing.T) {
 func TestABrokenMapOrABaseThatIsNotThereIsAUsageError(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	f.write("tools/test_map.json", `{"schema": 3}`)
+	f.writeMap(`{"schema": 3}`)
 	if code, _, errs := f.run(); code != exitUsage || !strings.Contains(errs, "FAIL") {
 		t.Errorf("broken map: exit %d, stderr %s", code, errs)
 	}
-	f.write("tools/test_map.json", testMap)
+	f.writeMap(testMap)
 	if code, _, errs := f.run("-base", "origin/nothing"); code != exitUsage || !strings.Contains(errs, "git merge-base origin/nothing HEAD") {
 		t.Errorf("missing base: exit %d, stderr %s", code, errs)
 	}

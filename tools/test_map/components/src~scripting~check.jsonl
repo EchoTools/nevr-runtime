@@ -1,0 +1,5 @@
+{"component":"src/scripting/check","dir":"src/scripting/check"}
+{"file":"src/scripting/check/CMakeLists.txt","tests":["just:test-scripting","pytest:test_compile_checks_use_cmake"]}
+{"file":"src/scripting/check/CMakePresets.json","tests":["just:test-scripting","pytest:test_compile_checks_use_cmake"]}
+{"file":"src/scripting/check/check_test.sh","tests":["just:test-scripting","pytest:test_check_fresh_test_programs"]}
+{"file":"src/scripting/check/nevr_script_check.cpp","tests":["just:test-scripting"]}

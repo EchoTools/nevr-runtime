@@ -1,0 +1,3 @@
+{"component":"tools/git-hooks","dir":"tools/git-hooks"}
+{"file":"tools/git-hooks/post-checkout","tests":["pytest:test_worktree_include_hook"]}
+{"file":"tools/git-hooks/pre-push","tests":["pytest:test_executable_scripts","pytest:test_pre_push_hook","pytest:test_worktree_include_hook"]}

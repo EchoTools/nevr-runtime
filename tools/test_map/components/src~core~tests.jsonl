@@ -1,0 +1,13 @@
+{"component":"src/core/tests","dir":"src/core/tests"}
+{"file":"src/core/tests/combat_level_class_test.cpp","tests":["build","gtest:test_combat_level_class","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/tests/config_alias_test.cpp","tests":["build","gtest:test_config_alias","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/tests/map_channel_test.cpp","tests":["just:test-quest-shared","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/tests/map_derive_test.cpp","tests":["build","gtest:test_map_derive","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/tests/map_index_test.cpp","tests":["build","gtest:test_map_index","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/tests/map_manifest_test.cpp","tests":["build","gtest:test_map_manifest","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/tests/map_run_test.cpp","tests":["build","gtest:test_map_run","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/tests/map_script_check_test.cpp","tests":["build","gtest:test_map_script_check","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/tests/map_server_hold_test.cpp","tests":["just:test-quest-shared","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/tests/map_session_pin_test.cpp","tests":["build","gtest:test_map_session_pin_core","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/tests/script_image_builders.h","tests":["build","gtest:test_map_scripts","gtest:test_script_image_rules","just:test-quest-shared","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/tests/script_image_rules_test.cpp","tests":["build","gtest:test_script_image_rules","go:cmd/test-map","pytest:test_config_yaml_source"]}

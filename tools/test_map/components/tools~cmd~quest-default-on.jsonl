@@ -1,0 +1,3 @@
+{"component":"tools/cmd/quest-default-on","dir":"tools/cmd/quest-default-on"}
+{"file":"tools/cmd/quest-default-on/main.go","tests":["go:cmd/guard-proof","go:cmd/quest-default-on"]}
+{"file":"tools/cmd/quest-default-on/main_test.go","tests":["go:cmd/guard-proof","go:cmd/quest-default-on"]}

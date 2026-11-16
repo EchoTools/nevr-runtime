@@ -1,7 +1,6 @@
 package testmap
 
 import (
-	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,11 +43,7 @@ const sampleMap = `{"schema": 2,
 
 func mustParseSample(t *testing.T) *Map {
 	t.Helper()
-	m, err := Parse([]byte(sampleMap))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return m
+	return mustParseFixture(t, sampleMap)
 }
 
 func TestParseRefusesAMapEveryLookupCouldNotTrust(t *testing.T) {
@@ -58,20 +53,20 @@ func TestParseRefusesAMapEveryLookupCouldNotTrust(t *testing.T) {
 		{"not JSON", `{"schema": 2,`, "unexpected EOF"},
 		{"unknown key", `{"schema": 2, "extra": 1, "components": []}`, "unknown field"},
 		{"unknown key in a scanner", `{"schema": 2, "scanners": [{"name": "s", "globs": ["*"], "tests": ["just:x"], "extra": 1}], "components": []}`, "unknown field"},
-		{"data after the object", `{"schema": 2, "components": []} {}`, "after its object"},
+		{"data after the object", `{"schema": 2} {}`, "data after the object"},
 		{"target name with a colon", `{"schema": 2, "targets": {"go:x": ["true"]}, "components": []}`, "no ':'"},
 		{"target with no name", `{"schema": 2, "targets": {"": ["true"]}, "components": []}`, "name is not empty"},
 		{"target with no argv", `{"schema": 2, "targets": {"t": []}, "components": []}`, "has no command"},
 		{"component with no name", `{"schema": 2, "components": [{"name": "", "dir": "x", "files": {"x/a": ["just:x"]}}]}`, "has no name"},
-		{"two components, one name", `{"schema": 2, "components": [{"name": "a", "dir": "a", "files": {"a/x": ["just:x"]}}, {"name": "a", "dir": "b", "files": {"b/y": ["just:x"]}}]}`, "used twice"},
-		{"two components, one dir", `{"schema": 2, "components": [{"name": "a", "dir": "a", "files": {"a/x": ["just:x"]}}, {"name": "a2", "dir": "a", "files": {"a/y": ["just:x"]}}]}`, "one component per directory"},
-		{"dir not clean", `{"schema": 2, "components": [{"name": "a/../b", "dir": "a/../b"}]}`, "not a clean"},
+		{"two components, one name", `{"schema": 2, "components": [{"name": "a", "dir": "a", "files": {"a/x": ["just:x"]}}, {"name": "a", "dir": "b", "files": {"b/y": ["just:x"]}}]}`, "a component is in one file"},
+		{"two components, one dir", `{"schema": 2, "components": [{"name": "a", "dir": "a", "files": {"a/x": ["just:x"]}}, {"name": "a2", "dir": "a", "files": {"a/y": ["just:x"]}}]}`, "name must be"},
+		{"dir not clean", `{"schema": 2, "components": [{"name": "a/../b", "dir": "a/../b", "files": {"a/../b/x": ["just:x"]}}]}`, "not a clean"},
 		{"name is not the dir", `{"schema": 2, "components": [{"name": "x", "dir": "a", "files": {"a/x": ["just:x"]}}]}`, "name must be"},
 		{"root named otherwise", `{"schema": 2, "components": [{"name": "root", "dir": "", "files": {"x": ["just:x"]}}]}`, "name must be"},
 		{"file outside the dir", `{"schema": 2, "components": [{"name": "a", "dir": "a", "files": {"b/x": ["just:x"]}}]}`, "is in directory"},
 		{"file path not clean", `{"schema": 2, "components": [{"name": "a", "dir": "a", "files": {"a/../a/x": ["just:x"]}}]}`, "not a clean"},
 		{"file with no tests", `{"schema": 2, "components": [{"name": "a", "dir": "a", "files": {"a/x": []}}]}`, "has no tests"},
-		{"file in files and none", `{"schema": 2, "components": [{"name": "a", "dir": "a", "files": {"a/x": ["just:x"]}, "none": {"a/x": "why"}}]}`, "in files and in none"},
+		{"file in files and none", `{"schema": 2, "components": [{"name": "a", "dir": "a", "files": {"a/x": ["just:x"]}, "none": {"a/x": "why"}}]}`, "is listed twice"},
 		{"file with an empty reason", `{"schema": 2, "components": [{"name": "a", "dir": "a", "none": {"a/x": ""}}]}`, "empty reason"},
 		{"test listed twice", `{"schema": 2, "components": [{"name": "a", "dir": "a", "files": {"a/x": ["just:x", "just:x"]}}]}`, "listed twice"},
 		{"unknown kind", `{"schema": 2, "components": [{"name": "a", "dir": "a", "files": {"a/x": ["cargo:x"]}}]}`, `kind "cargo"`},
@@ -86,26 +81,10 @@ func TestParseRefusesAMapEveryLookupCouldNotTrust(t *testing.T) {
 		{"scanner test listed twice", `{"schema": 2, "scanners": [{"name": "s", "globs": ["*"], "tests": ["just:x", "just:x"]}], "components": []}`, "listed twice"},
 	}
 	for _, c := range cases {
-		_, err := Parse([]byte(c.json))
+		_, err := parseFixture(c.json)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: Parse error = %v, want one containing %q", c.name, err, c.want)
 		}
-	}
-}
-
-func TestLoadNamesTheFileItRefuses(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	bad := filepath.Join(dir, "map.json")
-	if err := os.WriteFile(bad, []byte(`{"schema": 1, "components": []}`), testFileMode); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(bad); err == nil || !strings.Contains(err.Error(), bad) || !strings.Contains(err.Error(), "schema is 1") {
-		t.Errorf("Load(schema 1) = %v, want an error naming %s and the schema", err, bad)
-	}
-	missing := filepath.Join(dir, "absent.json")
-	if _, err := Load(missing); err == nil {
-		t.Errorf("Load(%s) = nil error, want the file's absence", missing)
 	}
 }
 
@@ -242,48 +221,77 @@ func TestOrderPutsTheBuildFirstThenTargetsThenEachKind(t *testing.T) {
 	}
 }
 
-// encodeString is Encode into a string, failing the test on an error.
-func encodeString(t *testing.T, m *Map) string {
+// encodeFiles is Encode into the files of the directory form, failing the test on an error.
+func encodeFiles(t *testing.T, m *Map) map[string][]byte {
 	t.Helper()
-	var b bytes.Buffer
-	if err := Encode(&b, m); err != nil {
+	files, err := Encode(m)
+	if err != nil {
 		t.Fatal(err)
 	}
-	return b.String()
+	return files
 }
 
 func TestEncodeWritesTheCanonicalFormAndParsesBackIdentically(t *testing.T) {
 	t.Parallel()
-	first := encodeString(t, mustParseSample(t))
-	again, err := Parse([]byte(first))
+	first := encodeFiles(t, mustParseSample(t))
+	again, err := ParseFiles(first)
 	if err != nil {
-		t.Fatalf("Parse(Encode(sample)): %v", err)
+		t.Fatalf("ParseFiles(Encode(sample)): %v", err)
 	}
-	if second := encodeString(t, again); second != first {
-		t.Errorf("Encode(Parse(Encode(m))) differs from Encode(m):\n%s\n--- against ---\n%s", first, second)
+	if d := Diff(first, encodeFiles(t, again)); d != "" {
+		t.Errorf("Encode(ParseFiles(Encode(m))) differs from Encode(m): %s", d)
 	}
-	if n := strings.Count(first, `{"name":"`); n != sampleComponents {
-		t.Errorf("%d component lines, want %d (one component per line)", n, sampleComponents)
+	if len(first) != sampleComponents+1 {
+		t.Errorf("%d files, want %d: the header and one for each component", len(first), sampleComponents+1)
 	}
-	root := strings.Index(first, `"dir":""`)
-	srcA := strings.Index(first, `"dir":"src/a"`)
-	tools := strings.Index(first, `"dir":"tools"`)
-	if root < 0 || srcA < 0 || tools < 0 || !(root < srcA && srcA < tools) {
-		t.Errorf("components are not sorted by dir: root=%d src/a=%d tools=%d", root, srcA, tools)
+	want := `{"component":"src/a","dir":"src/a"}
+{"file":"src/a/README.md","none":"documentation: only the scanners read it"}
+{"file":"src/a/x.cpp","tests":["build","gtest:test_a"]}
+{"file":"src/a/y.h","tests":["gtest:test_a"]}
+`
+	if got := string(first[ComponentFile("src/a")]); got != want {
+		t.Errorf("component file of src/a:\n%s\nwant:\n%s", got, want)
 	}
-	if !strings.HasPrefix(first, "{\n \"schema\": 2,\n") {
-		t.Errorf("header is not the canonical one: %.40q", first)
+	if _, ok := first["components/src~a~b.jsonl"]; !ok {
+		t.Errorf("no components/src~a~b.jsonl, the file of src/a/b: %v", sortedKeys(first))
+	}
+	if _, ok := first["components/(root).jsonl"]; !ok {
+		t.Errorf("no components/(root).jsonl, the file of the root: %v", sortedKeys(first))
+	}
+	if h := string(first[HeaderFile]); !strings.HasPrefix(h, "{\n \"schema\": 2,\n") || strings.Contains(h, "components") {
+		t.Errorf("header is not the canonical one, or names components: %.60q", h)
+	}
+}
+
+// The reason for the directory form: a test added for one file is one line of one component's file, so a change to
+// the tests of other code does not touch it.
+func TestEncodeAnAddedFileIsOneLineOfOneFile(t *testing.T) {
+	t.Parallel()
+	before := encodeFiles(t, mustParseSample(t))
+	m := mustParseSample(t)
+	i, _ := m.componentAt("src/a")
+	m.Components[i].Files["src/a/new.cpp"] = []string{"gtest:test_new"}
+	after := encodeFiles(t, m)
+	var changed []string
+	for name := range after {
+		if string(after[name]) != string(before[name]) {
+			changed = append(changed, name)
+		}
+	}
+	if !reflect.DeepEqual(changed, []string{ComponentFile("src/a")}) {
+		t.Fatalf("files changed by one added file = %q, want only %s", changed, ComponentFile("src/a"))
+	}
+	b, a := strings.Split(string(before[ComponentFile("src/a")]), "\n"), strings.Split(string(after[ComponentFile("src/a")]), "\n")
+	if len(a) != len(b)+1 {
+		t.Errorf("the component file has %d lines after, %d before: want one more", len(a), len(b))
 	}
 }
 
 func TestEncodeSortsTheListsWithoutChangingTheMap(t *testing.T) {
 	t.Parallel()
-	m, err := Parse([]byte(`{"schema": 2, "targets": {"build": ["just", "build"]}, "components": [{"name": "src/a", "dir": "src/a", "files": {"src/a/x.cpp": ["gtest:test_a", "build"]}}]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := encodeString(t, m)
-	if !strings.Contains(out, `"src/a/x.cpp":["build","gtest:test_a"]`) {
+	m := mustParseFixture(t, `{"schema": 2, "targets": {"build": ["just", "build"]}, "components": [{"name": "src/a", "dir": "src/a", "files": {"src/a/x.cpp": ["gtest:test_a", "build"]}}]}`)
+	out := string(encodeFiles(t, m)[ComponentFile("src/a")])
+	if !strings.Contains(out, `"tests":["build","gtest:test_a"]`) {
 		t.Errorf("Encode did not put the list in Order's order:\n%s", out)
 	}
 	if got := m.Components[0].Files["src/a/x.cpp"]; !reflect.DeepEqual(got, []string{"gtest:test_a", "build"}) {
@@ -302,29 +310,27 @@ func TestTheRepositoryMapCoversEveryTrackedFileAndNamesRealTests(t *testing.T) {
 	}
 	tracked := map[string]bool{}
 	direct := map[string]bool{}
+	var list []string
 	for _, f := range strings.Split(output(t, root, "git", "ls-files", "-z"), "\x00") {
 		if f == "" {
 			continue
 		}
 		tracked[f] = true
 		direct[dirOf(f)] = true
-		if _, ok := m.Lookup(f); !ok {
-			t.Errorf("tracked file %s is in neither files nor none of its directory's component: add it to %s", f, DefaultPath)
-		}
+		list = append(list, f)
+	}
+	for _, f := range m.Uncovered(list) {
+		t.Errorf("tracked file %s is in neither files nor none of its directory's component: run just test-map and commit %s", f, DefaultPath)
+	}
+	for _, f := range m.Stale(list) {
+		t.Errorf("%s is in the map and is not a tracked file: run just test-map and commit %s", f, DefaultPath)
 	}
 	for _, c := range m.Components {
 		if !direct[c.Dir] {
 			t.Errorf("component %q: its directory %q holds no tracked file", c.Name, c.Dir)
 		}
-		for f := range c.Files {
-			if !tracked[f] {
-				t.Errorf("component %q: files entry %s is not a tracked file", c.Name, f)
-			}
-		}
-		for f := range c.None {
-			if !tracked[f] {
-				t.Errorf("component %q: none entry %s is not a tracked file", c.Name, f)
-			}
+		if IsMapFile(c.Dir + pathSeparator) {
+			t.Errorf("component %q is the map's own directory, which the loader covers itself", c.Name)
 		}
 	}
 	var cmake []byte

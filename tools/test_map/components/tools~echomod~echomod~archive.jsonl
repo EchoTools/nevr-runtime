@@ -1,0 +1,6 @@
+{"component":"tools/echomod/echomod/archive","dir":"tools/echomod/echomod/archive"}
+{"file":"tools/echomod/echomod/archive/__init__.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/archive/extractor.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/archive/manifest.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/archive/package.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/archive/repacker.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}

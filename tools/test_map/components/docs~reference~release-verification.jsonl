@@ -1,0 +1,3 @@
+{"component":"docs/reference/release-verification","dir":"docs/reference/release-verification"}
+{"file":"docs/reference/release-verification/README.md","tests":["pytest:test_verifying_a_release_doc"]}
+{"file":"docs/reference/release-verification/test-key.pub","tests":["pytest:test_verifying_a_release_doc"]}

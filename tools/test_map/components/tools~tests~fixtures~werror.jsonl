@@ -1,0 +1,3 @@
+{"component":"tools/tests/fixtures/werror","dir":"tools/tests/fixtures/werror"}
+{"file":"tools/tests/fixtures/werror/clean.cpp","tests":["go:cmd/test-map","pytest:test_quest_apk_version","pytest:test_quest_store_build","pytest:test_quest_store_install","pytest:test_reap_merged","pytest:test_remove_worktree","pytest:test_run_tool_tests","pytest:test_run_tool_tests_memory","pytest:test_werror_live"]}
+{"file":"tools/tests/fixtures/werror/warning_canary.cpp","tests":["go:cmd/test-map","pytest:test_quest_apk_version","pytest:test_quest_store_build","pytest:test_quest_store_install","pytest:test_reap_merged","pytest:test_remove_worktree","pytest:test_run_tool_tests","pytest:test_run_tool_tests_memory","pytest:test_werror_live"]}

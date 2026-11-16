@@ -1,0 +1,5 @@
+{"component":"src/core/combat_balance","dir":"src/core/combat_balance"}
+{"file":"src/core/combat_balance/balance_merge.h","tests":["build","gtest:test_combat_settings","just:test-android","just:test-quest-hooks","go:cmd/content-pack-build","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/combat_balance/balance_values.h","tests":["build","gtest:test_combat_settings","gtest:test_combat_shipped_settings","just:test-android","just:test-quest-hooks","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/combat_balance/balance_values_absent.h","tests":["build","gtest:test_combat_settings","just:test-android","just:test-quest-hooks","go:cmd/test-map","pytest:test_config_yaml_source"]}
+{"file":"src/core/combat_balance/balance_values_gunpatch.h","tests":["build","gtest:test_combat_settings","just:test-android","just:test-quest-hooks","go:cmd/test-map","pytest:test_config_yaml_source"]}

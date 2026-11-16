@@ -1,0 +1,2 @@
+{"component":".claude/skills/merge-cleanup","dir":".claude/skills/merge-cleanup"}
+{"file":".claude/skills/merge-cleanup/SKILL.md","none":"agent instructions: no test of its own; the Markdown scanners (one-home, doc-paths) read it"}

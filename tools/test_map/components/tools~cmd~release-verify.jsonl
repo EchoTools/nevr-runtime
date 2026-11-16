@@ -1,0 +1,3 @@
+{"component":"tools/cmd/release-verify","dir":"tools/cmd/release-verify"}
+{"file":"tools/cmd/release-verify/main.go","tests":["go:cmd/guard-proof","go:cmd/release-verify"]}
+{"file":"tools/cmd/release-verify/main_test.go","tests":["go:cmd/guard-proof","go:cmd/release-verify"]}

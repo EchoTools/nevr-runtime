@@ -1,0 +1,3 @@
+{"component":"tools/cmd/run-copy","dir":"tools/cmd/run-copy"}
+{"file":"tools/cmd/run-copy/main.go","tests":["go:cmd/guard-proof","go:cmd/run-copy"]}
+{"file":"tools/cmd/run-copy/main_test.go","tests":["go:cmd/guard-proof","go:cmd/run-copy"]}

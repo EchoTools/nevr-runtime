@@ -1,0 +1,13 @@
+{"component":"tools/echomod/echomod/resources","dir":"tools/echomod/echomod/resources"}
+{"file":"tools/echomod/echomod/resources/__init__.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/resources/actor_data.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/resources/animation_cr.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/resources/base.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/resources/compound_cr.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/resources/generic_cr.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/resources/instancemodel_cr.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/resources/model_cr.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/resources/scene.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/resources/scene_expand_fix.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/resources/syncgrab_cr.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/resources/transform_cr.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}

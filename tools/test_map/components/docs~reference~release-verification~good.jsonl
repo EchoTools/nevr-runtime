@@ -1,0 +1,3 @@
+{"component":"docs/reference/release-verification/good","dir":"docs/reference/release-verification/good"}
+{"file":"docs/reference/release-verification/good/manifest.json","tests":["pytest:test_verifying_a_release_doc"]}
+{"file":"docs/reference/release-verification/good/manifest.json.sig","tests":["pytest:test_verifying_a_release_doc"]}

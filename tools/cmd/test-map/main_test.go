@@ -21,6 +21,12 @@ import (
 const cannedDir = "out"
 
 // fakeTree is the build tree the fixtures use for the release preset.
+// The permissions of the fixture's files and directories.
+const (
+	fileMode = 0o644
+	dirMode  = 0o755
+)
+
 const fakeTree = testmap.DefaultPreset
 
 func TestMain(m *testing.M) {
@@ -103,7 +109,7 @@ func newFixture(t *testing.T) *fixture {
 	ninja := testkit.Fake(t, "ninja")
 	gocmd := testkit.Fake(t, "go")
 	just := testkit.Fake(t, "just")
-	f := &fixture{t: t, repo: t.TempDir(), out: filepath.Join(t.TempDir(), "test_map.json"),
+	f := &fixture{t: t, repo: t.TempDir(), out: filepath.Join(t.TempDir(), "test_map"),
 		env: testkit.WithPath(testkit.Env(t), ninja.Dir(), gocmd.Dir(), just.Dir()), ninja: ninja, gocmd: gocmd, just: just}
 	f.git("init", "-q")
 	f.mkdir("build/" + fakeTree)
@@ -202,11 +208,7 @@ func (f *fixture) run(args ...string) (int, string, string) {
 // parsed reads the map the last run wrote.
 func (f *fixture) parsed(t *testing.T) *testmap.Map {
 	t.Helper()
-	data, err := os.ReadFile(f.out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m, err := testmap.Parse(data)
+	m, err := testmap.Load(f.out)
 	if err != nil {
 		t.Fatalf("the map the generator wrote does not parse: %v", err)
 	}
@@ -537,7 +539,6 @@ func TestFixedRulesCoverTheirFiles(t *testing.T) {
 	t.Parallel()
 	cases := []struct{ file, id string }{
 		{"tests/system/x.go", "just:test-system-short"},
-		{"tools/test_map.json", "go:internal/testmap"},
 		{"CMakeLists.txt", testmap.BuildTarget},
 		{"src/runtime/host/exports.def", "pe-contract"},
 		{"release-headlines/1.md", "pytest:test_release_train"},
@@ -693,7 +694,7 @@ func TestAMissingBuildTreeIsExit2NamingTheTreeAndRecipe(t *testing.T) {
 	}
 }
 
-// -check is exit 0 on the map the generator writes, names the first differing component, and is exit 1 after a change,
+// -check is exit 0 on the map the generator writes, names the first differing file, and is exit 1 after a change,
 // and exit 1 when there is no map.
 func TestCheckExitsZeroOnTheSameMapAndOneAfterAChange(t *testing.T) {
 	t.Parallel()
@@ -713,10 +714,10 @@ func TestCheckExitsZeroOnTheSameMapAndOneAfterAChange(t *testing.T) {
 	if code != exitUncovered {
 		t.Fatalf("check after a change: exit %d, want %d: %s", code, exitUncovered, stderr)
 	}
-	if !strings.Contains(stderr, "first differing component: docs") {
+	if !strings.Contains(stderr, "components/docs.jsonl differs at line") {
 		t.Errorf("check does not name the component that changed: %q", stderr)
 	}
-	if err := os.Remove(f.out); err != nil {
+	if err := os.Remove(filepath.Join(f.out, testmap.HeaderFile)); err != nil {
 		t.Fatal(err)
 	}
 	if code, _, _ := f.run("-check"); code != exitUncovered {
@@ -724,7 +725,7 @@ func TestCheckExitsZeroOnTheSameMapAndOneAfterAChange(t *testing.T) {
 	}
 }
 
-// The map the generator writes parses with testmap.Parse, and encodes back to the same bytes.
+// The map the generator writes loads with testmap.Load, and encodes back to the same bytes.
 func TestOutputParsesAndEncodesStably(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -744,29 +745,16 @@ func TestOutputParsesAndEncodesStably(t *testing.T) {
 	if lk, ok := m.Lookup("src/runtime/tests/test_a.cpp"); !ok || !hasID(lk.Tests, "gtest:test_a") {
 		t.Errorf("the parsed map does not give test_a.cpp its gtest: %v %v", lk.Tests, ok)
 	}
-	var buf bytes.Buffer
-	if err := testmap.Encode(&buf, m); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(f.out)
+	again, err := testmap.Encode(m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(buf.Bytes(), data) {
-		t.Errorf("Encode of the parsed map is not the file the generator wrote")
+	written, err := testmap.ReadFiles(f.out)
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-// The first difference names the component its line belongs to, or the line when the line is not a component.
-func TestFirstDifferenceNamesTheComponent(t *testing.T) {
-	t.Parallel()
-	have := "head\n {\"name\":\"docs\",\"dir\":\"docs\"},\n"
-	want := "head\n {\"name\":\"docs\",\"dir\":\"docs\",\"none\":{}},\n"
-	if got := firstDifference(have, want); got != "first differing component: docs" {
-		t.Errorf("firstDifference = %q", got)
-	}
-	if got := firstDifference("a\nb\n", "a\nc\n"); !strings.Contains(got, "outside the components, at line 2") {
-		t.Errorf("firstDifference outside the components = %q", got)
+	if d := testmap.Diff(written, again); d != "" {
+		t.Errorf("Encode of the loaded map is not what the generator wrote: %s", d)
 	}
 }
 
@@ -819,6 +807,21 @@ func TestBuildMapOneComponentPerDirectoryAndNoTestNoReasonIsExit1(t *testing.T) 
 	var fl failure
 	if !errors.As(err, &fl) || fl.code != exitUncovered {
 		t.Errorf("a file with no test and no reason: %v, want a failure with exit %d", err, exitUncovered)
+	}
+}
+
+// The files of the map's own directory are covered by the loader, so no component holds them: a tracked one is no
+// directory's component, and it is not an uncovered file either.
+func TestTheMapsOwnFilesAreInNoComponent(t *testing.T) {
+	t.Parallel()
+	cov := cover{}
+	cov.add("a.txt", "x")
+	mp, err := buildMap([]string{"a.txt", testmap.DefaultPath + "/map.json", testmap.DefaultPath + "/components/x.jsonl"}, cov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mp.Components) != 1 || mp.Components[0].Dir != "" {
+		t.Errorf("components = %+v, want only the root's", mp.Components)
 	}
 }
 

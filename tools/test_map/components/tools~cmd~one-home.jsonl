@@ -1,0 +1,3 @@
+{"component":"tools/cmd/one-home","dir":"tools/cmd/one-home"}
+{"file":"tools/cmd/one-home/main.go","tests":["go:cmd/guard-proof","go:cmd/one-home"]}
+{"file":"tools/cmd/one-home/main_test.go","tests":["go:cmd/guard-proof","go:cmd/one-home"]}

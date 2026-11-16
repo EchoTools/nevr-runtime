@@ -1,0 +1,13 @@
+{"component":"cmake","dir":"cmake"}
+{"file":"cmake/VerifyDistribution.cmake","tests":["build","pytest:test_signing_workflow"]}
+{"file":"cmake/nevr_build_identity.cmake","tests":["build"]}
+{"file":"cmake/nevr_build_info.cmake","tests":["build","pytest:test_quest_build_is_dev"]}
+{"file":"cmake/nevr_build_info.h.in","tests":["build","go:internal/questapk","pytest:test_quest_build_is_dev"]}
+{"file":"cmake/nevr_build_tree_remove.cmake","tests":["build","pytest:test_nevr_build_tree_remove_cmake"]}
+{"file":"cmake/nevr_builtin_defaults.cmake","tests":["build","pytest:test_builtin_defaults_contract"]}
+{"file":"cmake/nevr_builtin_defaults.h.in","tests":["build","pytest:test_builtin_defaults_contract"]}
+{"file":"cmake/nevr_version_info.cmake","tests":["build","pytest:test_pe_version_info"]}
+{"file":"cmake/nevr_version_info.rc.in","tests":["build","pytest:test_pe_version_info"]}
+{"file":"cmake/set_project_version_from_git.cmake","tests":["build","go:cmd/quest-apk-version","go:internal/questapk","pytest:test_quest_apk_version","pytest:test_quest_build_is_dev","pytest:test_release_version","pytest:test_version_reconfigure"]}
+{"file":"cmake/toolchain-mingw64.cmake","tests":["build","pytest:test_compile_checks_use_cmake","pytest:test_pe_version_info"]}
+{"file":"cmake/toolchain-msvc-wine.cmake","tests":["build"]}

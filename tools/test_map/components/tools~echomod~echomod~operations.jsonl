@@ -1,0 +1,3 @@
+{"component":"tools/echomod/echomod/operations","dir":"tools/echomod/echomod/operations"}
+{"file":"tools/echomod/echomod/operations/__init__.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/echomod/operations/actor_clone.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}

@@ -1,0 +1,3 @@
+{"component":"tools/cmd/wwise-events","dir":"tools/cmd/wwise-events"}
+{"file":"tools/cmd/wwise-events/main.go","tests":["go:cmd/guard-proof","go:cmd/wwise-events"]}
+{"file":"tools/cmd/wwise-events/main_test.go","tests":["go:cmd/guard-proof","go:cmd/wwise-events"]}

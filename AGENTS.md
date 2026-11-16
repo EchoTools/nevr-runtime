@@ -544,8 +544,8 @@ whole suites among them (`just test-full`, `just verify`, `just test-tools` with
 binary) are the owner's alone.
 
 ```sh
-just test-changed             # The fast unit tests that cover this branch's change, from tools/test_map.json (-n: the plan only; -heavy: the heavy suites too)
-just test-map                 # Write tools/test_map.json from the build trees (-check: compare, write nothing)
+just test-changed             # The fast unit tests that cover this branch's change, from the map in tools/test_map/ (-n: the plan only; -heavy: the heavy suites too)
+just test-map                 # Write the map, the directory tools/test_map/, from the build trees (-check: compare, write nothing)
 just test-full                # The full suite: verify and the suites verify does not run (owner only)
 just test-auth-unit test_x    # Build and run the named GTest binaries only
 ```
@@ -842,7 +842,7 @@ your seat name, for example `claude-main` or `codex`.
 - **A branch runs `just test-changed`, once, before it lands, and nothing else. An agent never picks tests.** The quick
   check is `systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G env -u DISPLAY -u WAYLAND_DISPLAY just
   test-changed` on the branch's tip. It reads `git diff --name-only --no-renames $(git merge-base origin/main HEAD)` (a
-  moved file is its old path and its new one), looks each path up in `tools/test_map.json` (the path, then the component
+  moved file is its old path and its new one), looks each path up in the map, the directory `tools/test_map/` (the path, then the component
   of its directory, then that file's tests: the build, the GTest binaries that compile it, the Quest and scripting
   groups, the Go packages and pytest files that read it, the checks such as `verify_pe_contract.py` for
   `src/runtime/host/`, and the scanners that read every file of its kind), and runs those that are fast unit tests, one at a
@@ -853,7 +853,7 @@ your seat name, for example `claude-main` or `codex`.
   them too, for the runs that call for them; they stay in the map and the repo. The build step stays, because the gtests
   read what it builds. Quote its output, the plan lines and the summary, in the commit message. A
   changed path the map does not cover fails the command, naming the path: the fix is `just test-map` run in the branch and
-  the map it writes committed in the same branch. The map is written by `just test-map` (`tools/cmd/test-map`) from the
+  the map it writes committed in the same branch. The map is one file for each component (`tools/test_map/components/<directory with each / written ~>.jsonl`, one tracked file to a line) and a header (`tools/test_map/map.json`), so two branches that add tests for different code edit different files and their landings do not conflict on the map; a branch commits only the lines of the files it adds or changes. The map is written by `just test-map` (`tools/cmd/test-map`) from the
   build trees, never by hand: the mingw-release, quest-host-<group>, android-arm64 and scripting trees, looked for in the
   build checkout, then the main checkout, then the branch's own `build/`; a missing one stops it, naming the recipe
   that makes it, and the map's own test (`tools/internal/testmap`) fails on a tracked file with no entry. A

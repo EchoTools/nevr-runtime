@@ -1,0 +1,84 @@
+{
+ "schema": 2,
+ "about": [
+  "The map just test-changed reads (tools/cmd/test-changed). It is written by just test-map (tools/cmd/test-map) from the",
+  "build trees, the Quest presets, the Go packages and the tests' own text: never by hand. Each tracked file is in exactly",
+  "one component, the one of its directory: its tests in files, or in none the reason it has no test of its own.",
+  "A file's tests are its own, then those of each scanner whose globs match it. A test id is a target below, or",
+  "gtest:<binary> (just test-auth-unit <binary>), just:<recipe>, go:<package under tools/> (go -C tools test -count=1 ./<package>)",
+  "or pytest:<name> (tools/tests/<name>.py). {preset} in a target is the build preset, else mingw-release.",
+  "A land runs only the fast unit tests: the heavy ids (internal/testmap heavy.go) are listed and skipped by test-changed,",
+  "and run by test-changed -heavy."
+ ],
+ "targets": {
+  "agents-imports": [
+   "python3",
+   "tools/verify_agents_imports.py"
+  ],
+  "build": [
+   "just",
+   "build"
+  ],
+  "crash-ingest-vet": [
+   "go",
+   "-C",
+   "tests/crash-ingest",
+   "vet",
+   "./..."
+  ],
+  "doc-paths": [
+   "python3",
+   "tools/verify_doc_paths.py"
+  ],
+  "host-seams": [
+   "python3",
+   "tools/verify_host_seams.py",
+   "build/{preset}"
+  ],
+  "log-rules": [
+   "python3",
+   "tools/verify_log_rules.py"
+  ],
+  "pe-contract": [
+   "python3",
+   "tools/verify_pe_contract.py",
+   "--dll",
+   "build/{preset}/bin/BugSplat64.dll",
+   "--runtime-dll",
+   "build/{preset}/bin/nevr-runtime.dll"
+  ]
+ },
+ "scanners": [
+  {
+   "name": "go-policy",
+   "globs": [
+    "tools/**/*.go",
+    "tools/**/*.py"
+   ],
+   "tests": [
+    "go:internal/policy"
+   ]
+  },
+  {
+   "name": "one-home",
+   "globs": [
+    "**/*.md"
+   ],
+   "tests": [
+    "go:cmd/one-home"
+   ]
+  },
+  {
+   "name": "doc-paths",
+   "globs": [
+    "**/*.md",
+    "**/*.cpp",
+    "**/*.h",
+    "**/*.hpp"
+   ],
+   "tests": [
+    "doc-paths"
+   ]
+  }
+ ]
+}

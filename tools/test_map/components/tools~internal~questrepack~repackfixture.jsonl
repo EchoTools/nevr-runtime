@@ -1,0 +1,6 @@
+{"component":"tools/internal/questrepack/repackfixture","dir":"tools/internal/questrepack/repackfixture"}
+{"file":"tools/internal/questrepack/repackfixture/axml.go","tests":["go:internal/questrepack/repackfixture","go:internal/questwiring","pytest:test_quest_plugin_default_wiring"]}
+{"file":"tools/internal/questrepack/repackfixture/fixture.go","tests":["go:internal/questrepack/repackfixture","go:internal/questwiring","pytest:test_quest_plugin_default_wiring"]}
+{"file":"tools/internal/questrepack/repackfixture/plugin.go","tests":["go:internal/questrepack/repackfixture","go:internal/questwiring","pytest:test_quest_plugin_default_wiring"]}
+{"file":"tools/internal/questrepack/repackfixture/standin.go","tests":["go:internal/questrepack/repackfixture","go:internal/questwiring","pytest:test_quest_plugin_default_wiring"]}
+{"file":"tools/internal/questrepack/repackfixture/tools.go","tests":["go:internal/questrepack/repackfixture","go:internal/questwiring","pytest:test_quest_plugin_default_wiring"]}

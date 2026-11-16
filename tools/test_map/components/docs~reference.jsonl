@@ -1,0 +1,31 @@
+{"component":"docs/reference","dir":"docs/reference"}
+{"file":"docs/reference/client-exit-path.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/content-pack-hosting.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/content-packs.md","tests":["go:cmd/cargo-pack","go:cmd/content-pack-build","go:cmd/content-test-pack","go:internal/radpack","pytest:test_content_packs_doc"]}
+{"file":"docs/reference/crash-report.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/curl-advisories.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/empty-server-ttl.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/example-config.yaml","tests":["go:internal/questwiring","go:internal/updatewiring","pytest:test_frame_stats_wiring","pytest:test_invite_service_wiring","pytest:test_quest_combat_equip_refire_wiring","pytest:test_sample_config_sensor"]}
+{"file":"docs/reference/export-tracer.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/friends-ui-path.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/game-level.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/join-hold.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/launcher-install-root.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/legacy-translator.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/load_timing.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/maps-channel.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/matchmaking-module-reload.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/package-manifest-format.md","tests":["go:cmd/levelpack"]}
+{"file":"docs/reference/plugin-assets.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/plugin-resources.md","tests":["go:cmd/cargo-extract","go:cmd/levelpack"]}
+{"file":"docs/reference/pns-export-surface.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/pnsrad-load-boundary.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/post-sysnet-path.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/quest-game-ndk.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/registration-harness.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/remote-log-set-evrid.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/service-contracts.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/smite-entrant-identity.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/social-nakama-protocol.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/social-scenario-harness.md","none":"documentation: only the scanners read it"}
+{"file":"docs/reference/verifying-a-release.md","tests":["go:cmd/release-verify","pytest:test_publish_quest_apk","pytest:test_rollback_beta","pytest:test_verifying_a_release_doc"]}

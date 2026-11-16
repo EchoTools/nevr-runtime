@@ -1,0 +1,4 @@
+{"component":"tools/internal/serverwiring","dir":"tools/internal/serverwiring"}
+{"file":"tools/internal/serverwiring/doc.go","tests":["go:internal/questwiring","go:internal/serverwiring"]}
+{"file":"tools/internal/serverwiring/join_hold_wiring_test.go","tests":["go:internal/questwiring","go:internal/serverwiring"]}
+{"file":"tools/internal/serverwiring/load_timing_wiring_test.go","tests":["go:internal/questwiring","go:internal/serverwiring"]}

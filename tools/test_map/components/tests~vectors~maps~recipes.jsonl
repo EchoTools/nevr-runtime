@@ -1,0 +1,2 @@
+{"component":"tests/vectors/maps/recipes","dir":"tests/vectors/maps/recipes"}
+{"file":"tests/vectors/maps/recipes/recipes.json","tests":["gtest:test_map_derive","gtest:test_map_manifest"]}

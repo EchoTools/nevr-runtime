@@ -1,0 +1,3 @@
+{"component":"tests/crash-ingest","dir":"tests/crash-ingest"}
+{"file":"tests/crash-ingest/crash_ingest_contract_test.go","tests":["crash-ingest-vet","go:cmd/test-map"]}
+{"file":"tests/crash-ingest/go.mod","tests":["crash-ingest-vet","go:cmd/test-map"]}

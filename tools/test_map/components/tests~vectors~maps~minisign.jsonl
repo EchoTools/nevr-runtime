@@ -1,0 +1,5 @@
+{"component":"tests/vectors/maps/minisign","dir":"tests/vectors/maps/minisign"}
+{"file":"tests/vectors/maps/minisign/README.md","tests":["gtest:test_map_derive","gtest:test_map_manifest"]}
+{"file":"tests/vectors/maps/minisign/test_key.pub","tests":["gtest:test_map_derive","gtest:test_map_manifest"]}
+{"file":"tests/vectors/maps/minisign/test_manifest.json","tests":["gtest:test_map_derive","gtest:test_map_manifest"]}
+{"file":"tests/vectors/maps/minisign/test_manifest.json.minisig","tests":["gtest:test_map_derive","gtest:test_map_manifest"]}

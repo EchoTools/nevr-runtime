@@ -1,0 +1,3 @@
+{"component":"src/scripting/vm/luau","dir":"src/scripting/vm/luau"}
+{"file":"src/scripting/vm/luau/CMakeLists.txt","tests":["just:test-scripting"]}
+{"file":"src/scripting/vm/luau/luau_vm.cpp","tests":["just:test-scripting"]}

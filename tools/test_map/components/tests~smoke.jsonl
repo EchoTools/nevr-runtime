@@ -1,0 +1,2 @@
+{"component":"tests/smoke","dir":"tests/smoke"}
+{"file":"tests/smoke/score-log.sh","tests":["go:internal/logwiring","pytest:test_loading_tips_wiring","pytest:test_score_log_markers"]}

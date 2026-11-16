@@ -1,0 +1,2 @@
+{"component":"src/modules/token-auth","dir":"src/modules/token-auth"}
+{"file":"src/modules/token-auth/CMakeLists.txt","tests":["build","pytest:test_config_yaml_source"]}

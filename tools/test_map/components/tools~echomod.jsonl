@@ -1,0 +1,9 @@
+{"component":"tools/echomod","dir":"tools/echomod"}
+{"file":"tools/echomod/README.md","none":"documentation: only the scanners read it"}
+{"file":"tools/echomod/clone_combat.py","tests":["go:internal/policy"]}
+{"file":"tools/echomod/clone_frisbee.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/generate_resources.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/hash_lookup.json","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/rad_archive_tool.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/radhash.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}
+{"file":"tools/echomod/setuparchive.py","none":"ADR 0044 'Where Python stays': no test in tools/tests names tools/echomod"}

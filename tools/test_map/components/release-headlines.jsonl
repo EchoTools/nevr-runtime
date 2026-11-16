@@ -1,0 +1,7 @@
+{"component":"release-headlines","dir":"release-headlines"}
+{"file":"release-headlines/02-new-unlocks-clear.txt","tests":["pytest:test_package_release","pytest:test_release_headlines","pytest:test_release_train"]}
+{"file":"release-headlines/03-server-ping.txt","tests":["pytest:test_package_release","pytest:test_release_headlines","pytest:test_release_train"]}
+{"file":"release-headlines/04-pc-combat-private.txt","tests":["pytest:test_package_release","pytest:test_release_headlines","pytest:test_release_train"]}
+{"file":"release-headlines/05-quest-combat-lobbies.txt","tests":["pytest:test_package_release","pytest:test_release_headlines","pytest:test_release_train"]}
+{"file":"release-headlines/06-quest-arena-apk.txt","tests":["pytest:test_package_release","pytest:test_release_headlines","pytest:test_release_train"]}
+{"file":"release-headlines/README.md","tests":["pytest:test_package_release","pytest:test_release_headlines","pytest:test_release_train"]}

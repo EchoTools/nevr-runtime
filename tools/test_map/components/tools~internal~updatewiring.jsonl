@@ -1,0 +1,4 @@
+{"component":"tools/internal/updatewiring","dir":"tools/internal/updatewiring"}
+{"file":"tools/internal/updatewiring/doc.go","tests":["go:internal/questwiring","go:internal/updatewiring"]}
+{"file":"tools/internal/updatewiring/install_link_libs_test.go","tests":["go:internal/questwiring","go:internal/updatewiring"]}
+{"file":"tools/internal/updatewiring/update_worker_test.go","tests":["go:internal/questwiring","go:internal/updatewiring"]}

@@ -1,0 +1,7 @@
+{"component":"tools/cmd/test-map","dir":"tools/cmd/test-map"}
+{"file":"tools/cmd/test-map/components.go","tests":["go:cmd/guard-proof","go:cmd/test-map"]}
+{"file":"tools/cmd/test-map/coverage.go","tests":["go:cmd/guard-proof","go:cmd/test-map"]}
+{"file":"tools/cmd/test-map/main.go","tests":["go:cmd/guard-proof","go:cmd/test-map"]}
+{"file":"tools/cmd/test-map/main_test.go","tests":["go:cmd/guard-proof","go:cmd/test-map"]}
+{"file":"tools/cmd/test-map/rules.go","tests":["go:cmd/guard-proof","go:cmd/test-map"]}
+{"file":"tools/cmd/test-map/tools.go","tests":["go:cmd/guard-proof","go:cmd/test-map"]}

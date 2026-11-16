@@ -1,0 +1,8 @@
+{"component":"src/modules/token-auth/src","dir":"src/modules/token-auth/src"}
+{"file":"src/modules/token-auth/src/auth_snapshot.cpp","tests":["build","gtest:test_token_auth","pytest:test_config_yaml_source"]}
+{"file":"src/modules/token-auth/src/auth_snapshot.h","tests":["build","gtest:test_token_auth","pytest:test_config_yaml_source"]}
+{"file":"src/modules/token-auth/src/device_poll_response.h","tests":["build","gtest:test_token_auth","pytest:test_config_yaml_source"]}
+{"file":"src/modules/token-auth/src/off_thread_wait.cpp","tests":["build","gtest:test_token_auth","pytest:test_config_yaml_source"]}
+{"file":"src/modules/token-auth/src/off_thread_wait.h","tests":["build","gtest:test_token_auth","pytest:test_config_yaml_source"]}
+{"file":"src/modules/token-auth/src/token_auth.cpp","tests":["build","gtest:test_token_auth","pytest:test_config_yaml_source","pytest:test_login_refusal_wiring","pytest:test_verify_self_check_wiring"]}
+{"file":"src/modules/token-auth/src/token_auth.h","tests":["build","gtest:test_token_auth","pytest:test_config_yaml_source"]}

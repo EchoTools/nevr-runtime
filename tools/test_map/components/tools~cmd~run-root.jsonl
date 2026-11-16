@@ -1,0 +1,3 @@
+{"component":"tools/cmd/run-root","dir":"tools/cmd/run-root"}
+{"file":"tools/cmd/run-root/main.go","tests":["go:cmd/guard-proof","go:cmd/run-root"]}
+{"file":"tools/cmd/run-root/main_test.go","tests":["go:cmd/guard-proof","go:cmd/run-root"]}

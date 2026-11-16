@@ -1,0 +1,2 @@
+{"component":"tools/internal/axmlfix","dir":"tools/internal/axmlfix"}
+{"file":"tools/internal/axmlfix/fixtures.go","tests":["go:internal/axmlfix","go:internal/questapkfix","go:internal/questwiring"]}

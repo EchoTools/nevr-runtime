@@ -1,0 +1,3 @@
+{"component":"tools/cmd/mutant-proof","dir":"tools/cmd/mutant-proof"}
+{"file":"tools/cmd/mutant-proof/main.go","tests":["go:cmd/guard-proof","go:cmd/mutant-proof"]}
+{"file":"tools/cmd/mutant-proof/main_test.go","tests":["go:cmd/guard-proof","go:cmd/mutant-proof"]}

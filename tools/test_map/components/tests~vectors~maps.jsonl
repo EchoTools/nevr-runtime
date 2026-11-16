@@ -1,0 +1,4 @@
+{"component":"tests/vectors/maps","dir":"tests/vectors/maps"}
+{"file":"tests/vectors/maps/.gitattributes","tests":["gtest:test_map_derive","gtest:test_map_manifest"]}
+{"file":"tests/vectors/maps/constants.json","tests":["gtest:test_map_derive","gtest:test_map_manifest"]}
+{"file":"tests/vectors/maps/package_index_cases.json","tests":["gtest:test_map_derive","gtest:test_map_manifest"]}

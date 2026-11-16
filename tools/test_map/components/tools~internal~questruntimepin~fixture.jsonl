@@ -1,0 +1,2 @@
+{"component":"tools/internal/questruntimepin/fixture","dir":"tools/internal/questruntimepin/fixture"}
+{"file":"tools/internal/questruntimepin/fixture/fixture.go","tests":["go:internal/questruntimepin/fixture","go:internal/questwiring"]}

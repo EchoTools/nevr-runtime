@@ -1,12 +1,12 @@
 // Command test-changed runs the tests that cover a branch's change, and nothing else (AGENTS.md, "Builds"):
 //
-//	test-changed [-repo dir] [-map file] [-base origin/main] [-preset name] [-n] [-heavy]
+//	test-changed [-repo dir] [-map dir] [-base origin/main] [-preset name] [-n] [-heavy]
 //
 // The change is what `git diff --name-only --no-renames -z $(git merge-base origin/main HEAD)` lists: the branch's commits
 // and its uncommitted edits to tracked files. --no-renames makes a file moved between two components show as a deletion
-// and an addition, so both components' tests run. Each changed path is looked up in tools/test_map.json (schema 2,
-// internal/testmap): the path's component, its own tests and the tests of every scanner whose glob matches it. The run is
-// the union of those tests in the order testmap.Order gives, one call at a time, each printed with its exit code.
+// and an addition, so both components' tests run. Each changed path is looked up in the map, the directory
+// tools/test_map (schema 2, internal/testmap): the path's component, its own tests and the tests of every scanner whose
+// glob matches it. The run is the union of those tests in the order testmap.Order gives, one call at a time, each printed with its exit code.
 //
 // Every gtest id of the run is one call of `just test-auth-unit <binary>...`, which appends one "<binary>\t<exit code>"
 // line per binary it ran to the file NEVR_GTEST_RESULTS names. That file is a fresh one under
@@ -116,7 +116,7 @@ func run(ctx context.Context, args []string, env []string, stdout, stderr io.Wri
 	flags := flag.NewFlagSet(tool, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	repo := flags.String("repo", "", "the checkout (default: the git top level of the working directory)")
-	mapFile := flags.String("map", "", "the map (default: <repo>/"+testmap.DefaultPath+")")
+	mapFile := flags.String("map", "", "the map directory (default: <repo>/"+testmap.DefaultPath+")")
 	base := flags.String("base", "origin/main", "the ref whose merge-base with HEAD the change is measured from")
 	preset := flags.String("preset", "", "the build preset: {preset} in the map and PRESET for the tests (default $PRESET, else "+testmap.DefaultPreset+")")
 	dry := flags.Bool("n", false, "print the plan and run nothing")
@@ -234,10 +234,7 @@ func (r *runner) do(repo, mapFile, base string, dry bool) int {
 	var baseMapErr error
 	loadBase := func() (*testmap.Map, error) {
 		if baseMap == nil && baseMapErr == nil {
-			var data string
-			if data, baseMapErr = r.git("show", mb+":"+filepath.ToSlash(relTo(r.repo, mapFile))); baseMapErr == nil {
-				baseMap, baseMapErr = testmap.Parse([]byte(data))
-			}
+			baseMap, baseMapErr = r.mapAt(mb, filepath.ToSlash(relTo(r.repo, mapFile)))
 		}
 		return baseMap, baseMapErr
 	}
@@ -325,6 +322,26 @@ func (r *runner) do(repo, mapFile, base string, dry bool) int {
 		}
 	}
 	return r.runSteps(steps, results)
+}
+
+// mapAt reads the map directory dir (repository-relative) as the commit rev has it.
+func (r *runner) mapAt(rev, dir string) (*testmap.Map, error) {
+	list, err := r.git("ls-tree", "-r", "--name-only", "-z", rev, "--", dir+"/")
+	if err != nil {
+		return nil, err
+	}
+	files := map[string][]byte{}
+	for _, p := range strings.Split(list, "\x00") {
+		if p == "" {
+			continue
+		}
+		data, err := r.git("show", rev+":"+p)
+		if err != nil {
+			return nil, err
+		}
+		files[strings.TrimPrefix(p, dir+"/")] = []byte(data)
+	}
+	return testmap.ParseFiles(files)
 }
 
 // measuredText is a heavy id's fastest recorded run for the "skipped heavy" line.
