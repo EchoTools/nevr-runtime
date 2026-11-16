@@ -16,6 +16,7 @@
 #include "cdn/cdn_env.h"
 #include "cdn/cdn_manifest.h"
 #include "cdn/cdn_plan.h"
+#include "cdn/cdn_prefetch.h"
 #include "cdn/cdn_script_gate.h"
 #include "cdn/cdn_store.h"
 
@@ -100,6 +101,61 @@ std::vector<std::string> BootOnlyLabels(const std::vector<std::string>& fixed, c
 // entries of this platform (label, name, stock_source, stock_sha256), each compared as a multiset. Document order, `labels`, `refused`,
 // `unknown_fields` and `stock_size` are not compared: they do not change what Mount builds.
 bool SameMountRecords(const Manifest& a, const Manifest& b, const Platform& platform);
+
+namespace detail {
+// The helpers the demand resolve (cdn_demand.h) shares with the worker above. Their behaviour is the worker's: nothing here is a second
+// implementation.
+
+// The policy a mount uses: the config's, with every label whose scripts are not delivered off (cdn_script_gate.h). `source` is "boot",
+// "fetch" or "demand".
+Policy GatedPolicy(Env& env, const RunConfig& config, const Manifest& manifest, const char* source);
+
+// The limits of this run, from the device: one line with every number, or the missing fact by name.
+Limits LoadLimits(Env& env, const std::string& dir);
+
+std::unique_ptr<Store> OpenStoreLogged(Env& env, const std::string& dir, const Limits& limits, const char* source);
+
+struct Downloaded {
+  bool ok = false;
+  bool cancelled = false;
+  bool stop_run = false;  // the failure is the store's, so it will be the next object's as well
+  const char* reason = "";
+  long status = 0;
+  int code = 0;
+};
+
+// Streams one object into the store while hashing it, and names it in the index when its size, its frame header and its SHA-256 are
+// the manifest's. Any failure gives the bytes back.
+Downloaded Download(Env& env, const RunConfig& config, Store& store, const Entry& e, const std::function<bool()>& keep_going);
+
+// The store as the first-run prefetch's store (cdn_prefetch.h): each object's decompressed size is kept from the entry it came from.
+class StorePrefetch : public PrefetchStore {
+ public:
+  StorePrefetch(Store& store, const std::vector<Entry>& objects);
+  bool Has(const std::string& sha256) const override;
+  bool HoldsSized(const std::string& sha256, std::uint64_t size, std::uint64_t bytes) const override;
+  std::unique_ptr<ObjectSink> Open(const std::string& sha256, std::uint64_t size, StoreStatus* status) override;
+
+ private:
+  Store& store_;
+  std::map<std::string, std::uint64_t> bytes_;
+};
+
+// The manifest of one fetch, read by its bytes: the parsed manifest, the bytes as had (a frame or JSON text) and the HTTP status. `stopped`
+// says why it was not had (kStoppedManifestFailed, "manifest_refused" or "cancelled"); its events are written.
+struct ManifestLoad {
+  bool ok = false;
+  const char* stopped = "";
+  Manifest manifest;
+  std::string body;
+  long http_status = 0;
+  std::string url;        // the manifest's URL, as requested
+  bool plain = false;     // the body is JSON text, not a zstd frame
+  std::uint64_t declared = 0;  // a frame's declared text size
+};
+ManifestLoad FetchManifest(Env& env, const RunConfig& config, const Limits& limits, const std::function<bool()>& keep_going);
+
+}  // namespace detail
 
 // Worker half. `keep_going` returning false ends it at the next boundary (shutdown).
 RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publish, const std::function<bool()>& keep_going);

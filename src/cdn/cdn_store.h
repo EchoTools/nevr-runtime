@@ -91,6 +91,9 @@ class Store {
     const auto it = blobs_.find(sha256);
     return it == blobs_.end() ? nullptr : &it->second;
   }
+  // Reads the stored frame of a held object into `frame` (BlobLoc::size bytes). False when the name is not held or a read is short. It
+  // touches no index and writes nothing; the bytes are not hashed (the name was checked when the object was stored).
+  bool ReadFrame(const std::string& sha256, std::string* frame) const;
   std::size_t blob_count() const { return blobs_.size(); }
   std::size_t file_count() const { return files_.size(); }
   std::uint64_t held_bytes() const { return held_bytes_; }

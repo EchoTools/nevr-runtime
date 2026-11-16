@@ -405,6 +405,17 @@ ParseResult ParseManifest(std::string_view text, const Limits& limits, Manifest*
 
 std::uint64_t MaxManifestFrameBytes(std::uint64_t declared_bytes) noexcept { return ZSTD_compressBound(static_cast<std::size_t>(declared_bytes)); }
 
+bool DecodeFrame(std::string_view frame, std::string* text) {
+  const unsigned char* const bytes = reinterpret_cast<const unsigned char*>(frame.data());
+  std::uint64_t declared = 0;
+  if (FrameContentSize(bytes, frame.size() < kMaxFrameHeaderBytes ? frame.size() : kMaxFrameHeaderBytes, &declared) != Rule::kNone) {
+    return false;
+  }
+  text->assign(static_cast<std::size_t>(declared), '\0');
+  const std::size_t got = ZSTD_decompress(&(*text)[0], text->size(), frame.data(), frame.size());
+  return ZSTD_isError(got) == 0 && got == declared;
+}
+
 ParseResult ParseManifestFrame(std::string_view frame, const Limits& limits, Manifest* out) {
   *out = Manifest();
   if (!limits.ok) return Fail(ParseStatus::kNoLimits);
@@ -417,9 +428,8 @@ ParseResult ParseManifestFrame(std::string_view frame, const Limits& limits, Man
   }
   // The size the publisher states is held to what this device can give a manifest before a byte is decoded.
   if (declared > limits.manifest_text_bytes) return Fail(ParseStatus::kTooLarge);
-  std::string text(static_cast<std::size_t>(declared), '\0');
-  const std::size_t got = ZSTD_decompress(&text[0], text.size(), frame.data(), frame.size());
-  if (ZSTD_isError(got) != 0 || got != declared) return Fail(ParseStatus::kDecompress);
+  std::string text;
+  if (!DecodeFrame(frame, &text)) return Fail(ParseStatus::kDecompress);
   return ParseManifest(text, limits, out);
 }
 

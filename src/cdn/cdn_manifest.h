@@ -169,6 +169,11 @@ std::uint64_t MaxManifestFrameBytes(std::uint64_t declared_bytes) noexcept;
 
 ParseResult ParseManifestFrame(std::string_view frame, const Limits& limits, Manifest* out);
 
+// Decodes one zstd frame whose header states its content size into exactly that many bytes (libzstd). False when the header states no
+// size or breaks the format, the decoder refuses the frame, or it decodes to another size. Shared by ParseManifestFrame and the demand
+// resolve's archive bodies (cdn_demand.h).
+bool DecodeFrame(std::string_view frame, std::string* text);
+
 // True when `body` begins with the zstd frame magic (28 B5 2F FD).
 bool StartsWithZstdMagic(std::string_view body) noexcept;
 

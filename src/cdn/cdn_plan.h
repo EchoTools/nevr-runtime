@@ -7,6 +7,9 @@
  *   on        fetched in the background, served when mounted; a failure is a Warning and the stock asset shows
  *   required  fetched first, and also under required_only; a failure is an Error. It never blocks a level load or a match.
  *
+ * A dedicated server reads `kServerLabelDefaults` instead (Policy::role). Its `game` label is on, not required: a demand resolve
+ * (cdn_demand.h) fetches what a session needs, and a required label would block a level load on the whole label.
+ *
  * Budgets. A label is planned whole or skipped whole: its blobs that the store does not hold must fit the storage budget, and the
  * store files they need must fit the descriptors (cdn_limits.h). Both numbers come from the device.
  */
@@ -40,11 +43,22 @@ inline constexpr LabelDefault kLabelDefaults[] = {{"lobby_posters", LabelState::
                                                   {"combat_content", LabelState::kOn}};
 inline constexpr LabelState kUnlistedLabelState = LabelState::kOff;
 
+// Who asks: the client (the game's own process) or the dedicated server (docs/adr/0045 decision 9).
+enum class Role : std::uint8_t { kClient, kServer };
+const char* RoleName(Role role) noexcept;  // "client", "server"
+
+// The server's defaults: `combat_content` and `game` are on, every other label is unlisted (off).
+inline constexpr LabelDefault kServerLabelDefaults[] = {{"combat_content", LabelState::kOn}, {"game", LabelState::kOn}};
+
 struct Policy {
   std::map<std::string, LabelState> overrides;  // from config
   bool required_only = false;
+  Role role = Role::kClient;
 };
 
+// An override wins in both roles, then the role's table, then kUnlistedLabelState.
+LabelState StateOf(const std::string& label, const Policy& policy, Role role);
+// The same, for the role the policy names.
 LabelState StateOf(const std::string& label, const Policy& policy);
 
 enum class SkipReason : std::uint8_t {

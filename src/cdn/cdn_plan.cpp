@@ -40,14 +40,27 @@ const char* SkipReasonName(SkipReason reason) noexcept {
   return "unknown";
 }
 
-LabelState StateOf(const std::string& label, const Policy& policy) {
+const char* RoleName(Role role) noexcept {
+  switch (role) {
+    case Role::kClient: return "client";
+    case Role::kServer: return "server";
+  }
+  return "unknown";
+}
+
+LabelState StateOf(const std::string& label, const Policy& policy, Role role) {
   const auto it = policy.overrides.find(label);
   if (it != policy.overrides.end()) return it->second;
-  for (const LabelDefault& d : kLabelDefaults) {
-    if (label == d.label) return d.state;
+  const LabelDefault* table = role == Role::kServer ? kServerLabelDefaults : kLabelDefaults;
+  const std::size_t rows = role == Role::kServer ? sizeof(kServerLabelDefaults) / sizeof(kServerLabelDefaults[0])
+                                                 : sizeof(kLabelDefaults) / sizeof(kLabelDefaults[0]);
+  for (std::size_t i = 0; i < rows; ++i) {
+    if (label == table[i].label) return table[i].state;
   }
   return kUnlistedLabelState;
 }
+
+LabelState StateOf(const std::string& label, const Policy& policy) { return StateOf(label, policy, policy.role); }
 
 Plan MakePlan(const Manifest& manifest, const Platform& platform, const Policy& policy, const Limits& limits,
               std::uint64_t held_bytes, const std::function<bool(const Entry&)>& held) {

@@ -617,9 +617,30 @@ void EveryBadScriptIsListedAndTheListMustBeAnArray() {
   QCHECK(Parse(ScriptDoc(json::object()), &m).status == nc::ParseStatus::kBadField);
 }
 
+// The server's own table (PLAN-v7 R6-a-1 section 1.6): `game` and `combat_content` are on, an unlisted label is off, an override
+// wins in both roles, and the two-argument form reads the role the policy names.
+void StateOfReadsTheServerTable() {
+  nc::Policy server;
+  server.role = nc::Role::kServer;
+  QCHECK(nc::StateOf("combat_content", server, nc::Role::kServer) == nc::LabelState::kOn);
+  QCHECK(nc::StateOf("game", server, nc::Role::kServer) == nc::LabelState::kOn);
+  QCHECK(nc::StateOf("lobby_posters", server, nc::Role::kServer) == nc::LabelState::kOff);
+  QCHECK(nc::StateOf("unlisted_label", server, nc::Role::kServer) == nc::LabelState::kOff);
+  nc::Policy overridden = server;
+  overridden.overrides["game"] = nc::LabelState::kOff;
+  QCHECK(nc::StateOf("game", overridden, nc::Role::kServer) == nc::LabelState::kOff);
+  QCHECK(nc::StateOf("game", server) == nc::LabelState::kOn);  // the two-argument form reads policy.role
+  QCHECK(nc::StateOf("lobby_posters", server) == nc::LabelState::kOff);
+  nc::Policy client;
+  QCHECK(nc::StateOf("game", client, nc::Role::kClient) == nc::LabelState::kRequired);
+  QCHECK(nc::StateOf("lobby_posters", client, nc::Role::kClient) == nc::LabelState::kOn);
+  QCHECK(nc::StateOf("game", client) == nc::LabelState::kRequired);
+}
+
 }  // namespace
 
 int main() {
+  StateOfReadsTheServerTable();
   AManifestFrameDecodesAndParsesLikeItsText();
   TheFrameParserAloneTakesOnlyAFrame();
   TheBodyIsReadAsAFrameOrAsTextByItsBytes();

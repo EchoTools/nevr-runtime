@@ -45,7 +45,9 @@ nevr_ht_test(resource_shadow_test GROUP data HOST NOEXC
 # The first-run prefetch (docs/adr/0045-cdn-texture-delivery.md, the first-run hold): every object of a manifest, before the engine. cdn_run.cpp
 # drives it, so every target that links cdn_run links it.
 nevr_ht_obj(o_cdn_cdn_prefetch GROUP data NOEXC HOST SRC src/cdn/cdn_prefetch.cpp)
-set(_cdn_objs o_cdn_device_memory o_cdn_resource_shadow o_cdn_cdn_limits o_cdn_cdn_validate o_cdn_cdn_manifest o_cdn_cdn_plan o_cdn_cdn_script_gate o_cdn_cdn_store o_cdn_cdn_run o_cdn_cdn_prefetch o_data_sha256)
+# The demand resolve (docs/adr/0045 decision 9, PLAN-v7 R6-a-1): the server's per-session set, built on cdn_run and the prefetch.
+nevr_ht_obj(o_cdn_cdn_demand GROUP data NOEXC HOST SRC src/cdn/cdn_demand.cpp)
+set(_cdn_objs o_cdn_device_memory o_cdn_resource_shadow o_cdn_cdn_limits o_cdn_cdn_validate o_cdn_cdn_manifest o_cdn_cdn_plan o_cdn_cdn_script_gate o_cdn_cdn_store o_cdn_cdn_run o_cdn_cdn_prefetch o_cdn_cdn_demand o_data_sha256)
 nevr_ht_test(device_memory_test GROUP data HOST
   SRC src/quest/tests/device_memory_test.cpp OBJS o_cdn_device_memory)
 nevr_ht_test(cdn_limits_test GROUP data HOST
@@ -64,6 +66,8 @@ nevr_ht_test(cdn_scale_test GROUP data HOST
   SRC src/quest/tests/cdn_scale_test.cpp OBJS ${_cdn_objs} LIBS ${NEVR_ZSTD_LIB})
 nevr_ht_test(cdn_prefetch_test GROUP data HOST
   SRC src/quest/tests/cdn_prefetch_test.cpp OBJS ${_cdn_objs} LIBS ${NEVR_ZSTD_LIB})
+nevr_ht_test(cdn_demand_test GROUP data HOST
+  SRC src/quest/tests/cdn_demand_test.cpp OBJS ${_cdn_objs} LIBS ${NEVR_ZSTD_LIB})
 # The Quest side: the POSIX env on real files, the settings, and the worker end to end over a scripted transport. quest_config.h is read
 # for the settings struct only (nothing of quest_config.cpp is linked).
 nevr_ht_obj(o_cdn_env_posix GROUP data NOEXC HOST INCS src/quest/sentinel SRC src/cdn/env_posix.cpp)

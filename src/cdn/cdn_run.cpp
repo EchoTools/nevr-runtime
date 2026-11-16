@@ -38,10 +38,11 @@ std::string HostOf(const std::string& url) {
 
 std::string StatesText(const Policy& policy, const Manifest* manifest) {
   std::map<std::string, LabelState> states;
-  for (const LabelDefault& d : kLabelDefaults) states[d.label] = d.state;
+  for (const LabelDefault& d : kLabelDefaults) states[d.label] = StateOf(d.label, policy, policy.role);
+  for (const LabelDefault& d : kServerLabelDefaults) states[d.label] = StateOf(d.label, policy, policy.role);
   for (const auto& kv : policy.overrides) states[kv.first] = kv.second;
   if (manifest != nullptr) {
-    for (const std::string& label : manifest->labels) states[label] = StateOf(label, policy);
+    for (const std::string& label : manifest->labels) states[label] = StateOf(label, policy, policy.role);
   }
   std::string text;
   for (const auto& kv : states) {
@@ -83,6 +84,33 @@ void SayMounted(Env& env, const char* source, const Mounted& m, std::uint64_t ms
   fields.insert(fields.end(), none.begin(), none.end());
   env.Event(m.refused != 0 ? EventLevel::kWarn : EventLevel::kInfo, "cdn_mounted", fields);
 }
+
+// Says what the validator left out of the manifest: the first few one by one, then one line a rule with its count.
+void ReportRefusals(Env& env, const Manifest& manifest, const char* source) {
+  std::map<Rule, std::size_t> counts;
+  std::size_t said = 0;
+  for (const Refusal& r : manifest.refused) {
+    ++counts[r.rule];
+    if (said >= kSingleLines) continue;
+    ++said;
+    env.Event(EventLevel::kWarn, "cdn_refused",
+              {{"source", source}, {"label", r.label}, {"index", r.index}, {"type", FormatHex64(r.type)}, {"name", FormatHex64(r.name)},
+               {"rule", RuleName(r.rule)},
+               {"consequence", IsScriptRule(r.rule) ? "this label is not mounted; its levels run on the game's own data"
+                                                    : "this record is neither fetched nor served"}});
+  }
+  if (manifest.refused.size() > kSingleLines) {
+    for (const auto& kv : counts) {
+      env.Event(EventLevel::kWarn, "cdn_refused",
+                {{"source", source}, {"rule", RuleName(kv.first)}, {"count", kv.second},
+                 {"consequence", "these records are neither fetched nor served"}});
+    }
+  }
+}
+
+}  // namespace
+
+namespace detail {
 
 // The policy a mount uses: the config's, with every label whose scripts are not delivered off (cdn_script_gate.h). The registrar runs
 // first, so the gate knows what it held. `source` is "boot" or "fetch".
@@ -153,37 +181,6 @@ std::unique_ptr<Store> OpenStoreLogged(Env& env, const std::string& dir, const L
   return store;
 }
 
-// Says what the validator left out of the manifest: the first few one by one, then one line a rule with its count.
-void ReportRefusals(Env& env, const Manifest& manifest, const char* source) {
-  std::map<Rule, std::size_t> counts;
-  std::size_t said = 0;
-  for (const Refusal& r : manifest.refused) {
-    ++counts[r.rule];
-    if (said >= kSingleLines) continue;
-    ++said;
-    env.Event(EventLevel::kWarn, "cdn_refused",
-              {{"source", source}, {"label", r.label}, {"index", r.index}, {"type", FormatHex64(r.type)}, {"name", FormatHex64(r.name)},
-               {"rule", RuleName(r.rule)},
-               {"consequence", IsScriptRule(r.rule) ? "this label is not mounted; its levels run on the game's own data"
-                                                    : "this record is neither fetched nor served"}});
-  }
-  if (manifest.refused.size() > kSingleLines) {
-    for (const auto& kv : counts) {
-      env.Event(EventLevel::kWarn, "cdn_refused",
-                {{"source", source}, {"rule", RuleName(kv.first)}, {"count", kv.second},
-                 {"consequence", "these records are neither fetched nor served"}});
-    }
-  }
-}
-
-struct Downloaded {
-  bool ok = false;
-  bool cancelled = false;
-  bool stop_run = false;  // the failure is the store's, so it will be the next object's as well
-  const char* reason = "";
-  long status = 0;
-  int code = 0;
-};
 
 // Streams one object into the store while hashing it, and names it in the index when its size, its frame header and its SHA-256 are
 // the manifest's. A transfer that gives more than `size` bytes is ended. Any failure gives the bytes back. This is the one place an
@@ -339,30 +336,30 @@ class PrefetchSink : public ObjectSink {
   bool committed_ = false;
 };
 
-class StorePrefetch : public PrefetchStore {
- public:
-  StorePrefetch(Store& store, const std::vector<Entry>& objects) : store_(store) {
-    for (const Entry& e : objects) bytes_[e.sha256] = e.bytes;
-  }
-  bool Has(const std::string& sha256) const override { return store_.Has(sha256); }
-  bool HoldsSized(const std::string& sha256, std::uint64_t size, std::uint64_t bytes) const override {
-    return store_.HoldsSized(sha256, size, bytes);
-  }
-  std::unique_ptr<ObjectSink> Open(const std::string& sha256, std::uint64_t size, StoreStatus* status) override {
-    const char* why = "";
-    std::unique_ptr<Store::Writer> writer = store_.Begin(size, &why);
-    if (!writer) {
-      // no_store_file: the store has no room left for another file of objects; too_large and open_failed are the store's other refusals.
-      *status = std::string(why) == "no_store_file" ? StoreStatus::kNoSpace : StoreStatus::kIoError;
-      return nullptr;
-    }
-    return std::unique_ptr<ObjectSink>(new PrefetchSink(std::move(writer), sha256, size, bytes_[sha256]));
-  }
+StorePrefetch::StorePrefetch(Store& store, const std::vector<Entry>& objects) : store_(store) {
+  for (const Entry& e : objects) bytes_[e.sha256] = e.bytes;
+}
 
- private:
-  Store& store_;
-  std::map<std::string, std::uint64_t> bytes_;
-};
+bool StorePrefetch::Has(const std::string& sha256) const { return store_.Has(sha256); }
+
+bool StorePrefetch::HoldsSized(const std::string& sha256, std::uint64_t size, std::uint64_t bytes) const {
+  return store_.HoldsSized(sha256, size, bytes);
+}
+
+std::unique_ptr<ObjectSink> StorePrefetch::Open(const std::string& sha256, std::uint64_t size, StoreStatus* status) {
+  const char* why = "";
+  std::unique_ptr<Store::Writer> writer = store_.Begin(size, &why);
+  if (!writer) {
+    // no_store_file: the store has no room left for another file of objects; too_large and open_failed are the store's other refusals.
+    *status = std::string(why) == "no_store_file" ? StoreStatus::kNoSpace : StoreStatus::kIoError;
+    return nullptr;
+  }
+  return std::unique_ptr<ObjectSink>(new PrefetchSink(std::move(writer), sha256, size, bytes_[sha256]));
+}
+
+}  // namespace detail
+
+namespace {
 
 bool ReadSavedManifest(Env& env, const std::string& dir, const Limits& limits, std::string* frame) {
   return env.ReadSmallFile(ManifestCopyPath(dir), frame, static_cast<std::size_t>(MaxManifestFrameBytes(limits.manifest_text_bytes)));
@@ -449,10 +446,10 @@ bool SameMountRecords(const Manifest& a, const Manifest& b, const Platform& plat
 
 bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish, Manifest* boot) {
   if (boot != nullptr) *boot = Manifest();
-  const Limits limits = LoadLimits(env, config.dir);
+  const Limits limits = detail::LoadLimits(env, config.dir);
   if (!limits.ok) return false;
-  std::unique_ptr<Store> store = OpenStoreLogged(env, config.dir, limits, "boot");
-  if (!store) return false;  // only when the limits are not ok, which LoadLimits has said
+  std::unique_ptr<Store> store = detail::OpenStoreLogged(env, config.dir, limits, "boot");
+  if (!store) return false;  // only when the limits are not ok, which detail::LoadLimits has said
   if (store->blob_count() == 0) {
     // The normal first launch: nothing was ever fetched.
     env.Event(EventLevel::kInfo, "cdn_mounted",
@@ -478,7 +475,7 @@ bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish, M
   }
   ReportRefusals(env, manifest, "boot");
   const std::uint64_t mountStarted = env.NowMs();
-  std::unique_ptr<Mounted> mounted(new Mounted(Mount(env, *store, manifest, config.platform, GatedPolicy(env, config, manifest, "boot"))));
+  std::unique_ptr<Mounted> mounted(new Mounted(Mount(env, *store, manifest, config.platform, detail::GatedPolicy(env, config, manifest, "boot"))));
   const std::uint64_t mountMs = env.NowMs() - mountStarted;
   SayMounted(env, "boot", *mounted, mountMs);
   if (!mounted->shadow) return false;
@@ -487,37 +484,10 @@ bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish, M
   return true;
 }
 
-RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publish, const std::function<bool()>& keep_going) {
-  RunResult result;
-  const std::uint64_t started = env.NowMs();
-  const auto done = [&](const char* resultText) {
-    env.Event(result.failed != 0 || std::string(result.stopped) == "write_failed" ? EventLevel::kWarn : EventLevel::kInfo, "cdn_done",
-              {{"result", resultText},
-               {"fetched", result.fetched},
-               {"cached", result.cached},
-               {"failed", result.failed},
-               {"refused", result.refused},
-               {"bytes", result.bytes},
-               {"ms", env.NowMs() - started}});
-  };
-  if (!env.MakeDirs(config.dir)) {
-    env.Event(EventLevel::kError, "cdn_done", {{"result", "failed"}, {"reason", "cache_dir"}});
-    return result;
-  }
-  const Limits limits = LoadLimits(env, config.dir);
-  if (!limits.ok) {
-    result.stopped = "limits";
-    done("limits");
-    return result;
-  }
-  std::unique_ptr<Store> store = OpenStoreLogged(env, config.dir, limits, "fetch");
-  env.Event(EventLevel::kInfo, "cdn_start",
-            {{"source", config.source},
-             {"host", HostOf(config.base_url)},
-             {"platform", config.platform.name},
-             {"labels", StatesText(config.policy, nullptr)},
-             {"required_only", config.policy.required_only ? 1 : 0}});
+namespace detail {
 
+ManifestLoad FetchManifest(Env& env, const RunConfig& config, const Limits& limits, const std::function<bool()>& keep_going) {
+  ManifestLoad out;
   // Step 1: the manifest, read by its bytes. A body that begins with the zstd magic is one frame: its header states the size of the
   // text, that size is held to the device's memory as soon as the header has arrived, and the rest of the body is not downloaded when
   // it does not fit or the header is one no frame may have. Any other body is the JSON text, held to the same text limit as it arrives.
@@ -577,9 +547,8 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
                                   },
                                   keep_going);
   if (http.cancelled) {
-    result.stopped = "cancelled";
-    done("cancelled");
-    return result;
+    out.stopped = "cancelled";
+    return out;
   }
   const long httpStatus = status != 0 ? status : http.status;
   const char* manifestFailure = early;
@@ -598,11 +567,10 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
     fields.push_back({"consequence", "no CDN asset is fetched this run; what the store holds stays mounted"});
     env.Event(EventLevel::kWarn, "cdn_manifest", fields);
     const bool refused = std::string(manifestFailure) == "not_zstd" || std::string(manifestFailure) == "no_content_size";
-    result.stopped = refused ? "manifest_refused" : kStoppedManifestFailed;
-    done(result.stopped);
-    return result;
+    out.stopped = refused ? "manifest_refused" : kStoppedManifestFailed;
+    return out;
   }
-  Manifest manifest;
+  Manifest& manifest = out.manifest;
   const ParseResult parsed = ParseManifestBody(body, limits, &manifest);
   if (parsed.status != ParseStatus::kOk) {
     std::vector<Field> fields = {{"result", "refused"}, {"reason", ParseStatusName(parsed.status)}, {"url", manifestUrl},
@@ -613,10 +581,64 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
     }
     fields.push_back({"consequence", "no CDN asset is fetched this run; what the store holds stays mounted"});
     env.Event(EventLevel::kWarn, "cdn_manifest", fields);
-    result.stopped = parsed.status == ParseStatus::kTooLarge ? kStoppedManifestFailed : "manifest_refused";
-    done(result.stopped);
+    out.stopped = parsed.status == ParseStatus::kTooLarge ? kStoppedManifestFailed : "manifest_refused";
+    return out;
+  }
+  out.body = std::move(body);
+  out.http_status = httpStatus;
+  out.url = manifestUrl;
+  out.plain = plain;
+  out.declared = declared;
+  out.ok = true;
+  return out;
+}
+
+}  // namespace detail
+
+RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publish, const std::function<bool()>& keep_going) {
+  RunResult result;
+  const std::uint64_t started = env.NowMs();
+  const auto done = [&](const char* resultText) {
+    env.Event(result.failed != 0 || std::string(result.stopped) == "write_failed" ? EventLevel::kWarn : EventLevel::kInfo, "cdn_done",
+              {{"result", resultText},
+               {"fetched", result.fetched},
+               {"cached", result.cached},
+               {"failed", result.failed},
+               {"refused", result.refused},
+               {"bytes", result.bytes},
+               {"ms", env.NowMs() - started}});
+  };
+  if (!env.MakeDirs(config.dir)) {
+    env.Event(EventLevel::kError, "cdn_done", {{"result", "failed"}, {"reason", "cache_dir"}});
     return result;
   }
+  const Limits limits = detail::LoadLimits(env, config.dir);
+  if (!limits.ok) {
+    result.stopped = "limits";
+    done("limits");
+    return result;
+  }
+  std::unique_ptr<Store> store = detail::OpenStoreLogged(env, config.dir, limits, "fetch");
+  env.Event(EventLevel::kInfo, "cdn_start",
+            {{"source", config.source},
+             {"host", HostOf(config.base_url)},
+             {"platform", config.platform.name},
+             {"labels", StatesText(config.policy, nullptr)},
+             {"required_only", config.policy.required_only ? 1 : 0}});
+
+  // Step 1: the manifest, read by its bytes (detail::FetchManifest). The run ends with done(stopped) when it is not had.
+  detail::ManifestLoad loaded = detail::FetchManifest(env, config, limits, keep_going);
+  if (!loaded.ok) {
+    result.stopped = loaded.stopped;
+    done(loaded.stopped);
+    return result;
+  }
+  Manifest& manifest = loaded.manifest;
+  const std::string& body = loaded.body;
+  const long httpStatus = loaded.http_status;
+  const std::string& manifestUrl = loaded.url;
+  const bool plain = loaded.plain;
+  const std::uint64_t declared = loaded.declared;
   result.manifest_loaded = true;
   result.refused = manifest.refused.size();
   std::string manifestSha;
@@ -686,7 +708,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
       progress.done_bytes = done;
       report();
     };
-    StorePrefetch adapter(*store, prefetch.objects);
+    detail::StorePrefetch adapter(*store, prefetch.objects);
     const PrefetchResult fetched = Prefetch(env, adapter, prefetch);
     result.fetched = fetched.fetched;
     result.cached = fetched.held;
@@ -716,7 +738,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
         return result;
       }
       const std::uint64_t blobStarted = env.NowMs();
-      const Downloaded d = Download(env, config, *store, e, keep_going);
+      const detail::Downloaded d = detail::Download(env, config, *store, e, keep_going);
       if (d.cancelled) {
         result.stopped = "cancelled";
         done("cancelled");
@@ -802,7 +824,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
   if (publishSet) {
     store->EndWrites();  // the mount opens the store files this run appended to; on the PC an open append handle refuses that open
     const std::uint64_t mountStarted = env.NowMs();
-    std::unique_ptr<Mounted> mounted(new Mounted(Mount(env, *store, mountSet, config.platform, GatedPolicy(env, config, mountSet, "fetch"))));
+    std::unique_ptr<Mounted> mounted(new Mounted(Mount(env, *store, mountSet, config.platform, detail::GatedPolicy(env, config, mountSet, "fetch"))));
     const std::uint64_t mountMs = env.NowMs() - mountStarted;
     if (mounted->shadow || mounted->refused != 0 || mounted->missing != 0) SayMounted(env, "fetch", *mounted, mountMs, bootOnlyKept);
     if (mounted->shadow) {

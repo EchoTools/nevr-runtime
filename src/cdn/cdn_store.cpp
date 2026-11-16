@@ -287,6 +287,25 @@ void Store::EndWrites() {
   current_.reset();
 }
 
+bool Store::ReadFrame(const std::string& sha256, std::string* frame) const {
+  const BlobLoc* loc = Find(sha256);
+  if (loc == nullptr) return false;
+  std::int64_t handle = -1;
+  std::uint64_t size = 0;
+  if (!env_.OpenBlob(StoreFilePath(dir_, loc->file), &handle, &size)) return false;
+  frame->assign(loc->size, '\0');
+  bool ok = true;
+  std::uint64_t at = 0;
+  while (ok && at < loc->size) {
+    std::size_t got = 0;
+    const std::size_t want = static_cast<std::size_t>(loc->size - at);
+    if (!env_.ReadBlob(handle, loc->offset + at, &(*frame)[static_cast<std::size_t>(at)], want, &got) || got == 0) ok = false;
+    at += got;
+  }
+  env_.CloseBlob(handle);
+  return ok && at == loc->size;
+}
+
 std::size_t Store::Verify(std::size_t* checked) {
   *checked = 0;
   std::size_t bad = 0;
