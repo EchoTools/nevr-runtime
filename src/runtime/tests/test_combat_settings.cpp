@@ -11,6 +11,7 @@
 
 #include "core/combat_balance/balance_merge.h"
 #include "core/combat_balance/balance_values.h"
+#include "core/combat_balance/balance_values_absent.h"
 #include "runtime/combat/combat_settings.h"
 
 namespace {
@@ -111,6 +112,38 @@ TEST(CombatBalance, ABlobThatIsNotAJsonResourceIsLeft) {
   const std::string bad = Resource("{not json");
   EXPECT_EQ(nevr_combat::balance::Apply(reinterpret_cast<const std::uint8_t*>(bad.data()), bad.size(), "{}", &out, &changed),
             nevr_combat::balance::Result::kBodyUnparsed);
+}
+
+TEST(CombatBalance, AStockDocumentWithoutTheDroneDamageRowGetsIt) {
+  const std::string in = Resource(R"({"damage_table":{"magnum":{"head":1.5}}})");
+  std::string out;
+  std::size_t changed = 0;
+  ASSERT_EQ(nevr_combat::balance::Apply(reinterpret_cast<const std::uint8_t*>(in.data()), in.size(), "{}", &out, &changed,
+                                        nevr_combat::balance::kCatAbsentValues),
+            nevr_combat::balance::Result::kApplied);
+  EXPECT_EQ(changed, 7u);
+  const auto body = nlohmann::json::parse(out.substr(nevr_combat::balance::kHeaderSize));
+  for (const char* k : {"head", "arm", "leg", "torso", "ordnance", "barrier", "ssi"})
+    EXPECT_EQ(body["damage_table"]["drone"][k].get<int>(), 1) << k;
+  EXPECT_DOUBLE_EQ(body["damage_table"]["magnum"]["head"].get<double>(), 1.5);
+}
+
+TEST(CombatBalance, ADocumentWithAnotherDroneDamageRowKeepsIt) {
+  const std::string in = Resource(R"({"damage_table":{"drone":{"head":2,"torso":0.5}}})");
+  std::string out = "untouched";
+  std::size_t changed = 0;
+  const auto r = nevr_combat::balance::Apply(reinterpret_cast<const std::uint8_t*>(in.data()), in.size(), "{}", &out, &changed,
+                                             nevr_combat::balance::kCatAbsentValues);
+  ASSERT_EQ(r, nevr_combat::balance::Result::kApplied);  // the keys the row lacks are added, the ones it has are not touched
+  const auto body = nlohmann::json::parse(out.substr(nevr_combat::balance::kHeaderSize));
+  EXPECT_EQ(body["damage_table"]["drone"]["head"].get<int>(), 2);
+  EXPECT_DOUBLE_EQ(body["damage_table"]["drone"]["torso"].get<double>(), 0.5);
+  const std::string whole = Resource(R"({"damage_table":{"drone":{"head":2,"arm":2,"leg":2,"torso":2,"ordnance":2,"barrier":2,"ssi":2}}})");
+  std::string out2 = "untouched";
+  EXPECT_EQ(nevr_combat::balance::Apply(reinterpret_cast<const std::uint8_t*>(whole.data()), whole.size(), "{}", &out2, &changed,
+                                        nevr_combat::balance::kCatAbsentValues),
+            nevr_combat::balance::Result::kUnchanged);
+  EXPECT_EQ(out2, "untouched");
 }
 
 TEST(CombatBalance, CatsValuesParseAndSetSomething) {

@@ -10,6 +10,7 @@
 #include "cdn_read_keys.h"
 #include "core/combat_balance/balance_merge.h"
 #include "core/combat_balance/balance_values.h"
+#include "core/combat_balance/balance_values_absent.h"
 #include "got_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
@@ -200,7 +201,8 @@ struct Balanced {
 // personality (outside_game_call.h).
 NEVR_OUTSIDE_GAME_CALL Balanced MergeBalance(const unsigned char* resource, std::size_t size) noexcept {
   Balanced b;
-  b.result = nevr_combat::balance::Apply(resource, size, nevr_combat::balance::kCatWeaponSettings, &b.bytes, &b.changed);
+  b.result = nevr_combat::balance::Apply(resource, size, nevr_combat::balance::kCatWeaponSettings, &b.bytes, &b.changed,
+                                           nevr_combat::balance::kCatAbsentValues);
   const nevr_combat::balance::Probe p =
       nevr_combat::balance::ReadProbe(reinterpret_cast<const std::uint8_t*>(b.bytes.data()), b.bytes.size());
   b.damage = nevr_combat::balance::ValueText(p.magnumDamage);

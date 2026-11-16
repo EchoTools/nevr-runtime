@@ -7,7 +7,7 @@
 // test_combat_settings.cpp and menu_cards_hook_test.cpp drive it on synthetic resources.
 // The merge is the one Cat's tools/apply_config.py makes: every key of the values whose name does not start with `_` is
 // set; a nested object is merged into the object of the same name (made when absent); a value equal to the stock one is
-// left and not counted.
+// left and not counted. MergeAbsent (balance_values_absent.h) is the add-only variant: it sets a key only when the stock body lacks it.
 
 #include <cstddef>
 #include <cstdio>
@@ -44,6 +44,16 @@ inline const char* ResultName(Result r) {
   return "unknown";
 }
 
+/// The number of non-object values under `v` that do not start with `_` (what a MergeAbsent of a whole object adds).
+inline std::size_t CountLeaves(const nlohmann::ordered_json& v) {
+  std::size_t n = 0;
+  for (auto it = v.begin(); it != v.end(); ++it) {
+    if (!it.key().empty() && it.key()[0] == '_') continue;
+    n += it.value().is_object() ? CountLeaves(it.value()) : 1;
+  }
+  return n;
+}
+
 /// Merges `src` into `into` as apply_config.py does; returns how many values it set.
 inline std::size_t Merge(nlohmann::ordered_json& into, const nlohmann::ordered_json& src) {
   std::size_t changed = 0;
@@ -62,10 +72,31 @@ inline std::size_t Merge(nlohmann::ordered_json& into, const nlohmann::ordered_j
   return changed;
 }
 
+/// Merges `src` into `into` setting a key only when `into` does not hold it (Python's dict.setdefault, as Cat's
+/// tools/fix_drone.py does for damage_table.drone); a nested object is merged into the object of the same name, made when
+/// absent. A key that starts with `_` is skipped. Returns how many values it added. A present key is never overwritten,
+/// even with a different value or a different type.
+inline std::size_t MergeAbsent(nlohmann::ordered_json& into, const nlohmann::ordered_json& src) {
+  std::size_t added = 0;
+  for (auto it = src.begin(); it != src.end(); ++it) {
+    const std::string& key = it.key();
+    if (!key.empty() && key[0] == '_') continue;
+    if (!into.contains(key)) {
+      into[key] = it.value();
+      added += it.value().is_object() ? CountLeaves(it.value()) : 1;
+    } else if (it.value().is_object() && into[key].is_object()) {
+      added += MergeAbsent(into[key], it.value());
+    }
+  }
+  return added;
+}
+
 /// The resource `blob` with `values` merged into its body, in `*out` (header kept, length updated). `*changed` is the
-/// number of values set. Nothing is thrown: a blob that is not a JSON resource, or a body or values that do not parse,
+/// number of values set. `absentValues`, when given, is then merged with MergeAbsent (keys the stock body lacks only) and its
+/// additions count in `*changed`. Nothing is thrown: a blob that is not a JSON resource, or a body or values that do not parse,
 /// is a Result and `*out` is untouched.
-inline Result Apply(const std::uint8_t* blob, std::size_t size, const char* values, std::string* out, std::size_t* changed) {
+inline Result Apply(const std::uint8_t* blob, std::size_t size, const char* values, std::string* out, std::size_t* changed,
+                    const char* absentValues = nullptr) {
   *changed = 0;
   if (blob == nullptr || size < kHeaderSize) return Result::kNotAResource;
   std::uint64_t declared = 0;
@@ -76,6 +107,11 @@ inline Result Apply(const std::uint8_t* blob, std::size_t size, const char* valu
   nlohmann::ordered_json src = nlohmann::ordered_json::parse(values, nullptr, false);
   if (src.is_discarded() || !src.is_object()) return Result::kValuesUnparsed;
   *changed = Merge(body, src);
+  if (absentValues != nullptr) {
+    nlohmann::ordered_json absent = nlohmann::ordered_json::parse(absentValues, nullptr, false);
+    if (absent.is_discarded() || !absent.is_object()) return Result::kValuesUnparsed;
+    *changed += MergeAbsent(body, absent);
+  }
   if (*changed == 0) return Result::kUnchanged;
   const std::string text = body.dump();
   std::string result(reinterpret_cast<const char*>(blob), kHeaderSize);

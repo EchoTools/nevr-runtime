@@ -13,6 +13,7 @@
 #include "core/logging.h"
 #include "core/combat_balance/balance_merge.h"
 #include "core/combat_balance/balance_values.h"
+#include "core/combat_balance/balance_values_absent.h"
 #include "runtime/combat/capture_scores.h"
 #include "runtime/combat/capture_time.h"
 #include "runtime/combat/cat_compat.h"
@@ -83,7 +84,8 @@ bool BalanceTransform(const void* original, uint64_t originalSize, const void** 
   std::string merged;
   std::size_t changed = 0;
   const balance::Result r = balance::Apply(static_cast<const std::uint8_t*>(original), static_cast<std::size_t>(originalSize),
-                                           balance::kCatWeaponSettings, &merged, &changed);
+                                           balance::kCatWeaponSettings, &merged, &changed,
+                                           balance::kCatAbsentValues);
   if (r != balance::Result::kApplied) {
     Log(r == balance::Result::kUnchanged ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
         "[NEVR.COMBAT] balance not applied resource=mp_weapon_settings result=%s size=%llu (the game's own values stay)",
