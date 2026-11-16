@@ -241,6 +241,10 @@ func TestTheProductionStepsAreTheEchoCombatOnesInOrder(t *testing.T) {
 		"drone actor runs script 190ed14fe6c74dd3",
 		"damageable health of actor 10e40287a9bf5a13 9999 to 70",
 		"equipment lists offer magnum, smg, chain, rifle, loc, dot and drone",
+		// steps_point.go after steps_equipment.go, before steps_rules_terminal.go, by file name
+		"equipment tacmods offer point (NEUTRON)",
+		"point settings get required_charge",
+		"barrier wall gets the stun mine's explosion row",
 		"RULES page labels the capture point's two times",
 	}
 	// Steps of the other data pieces (steps_<feature>.go, each registered from its own init) may sit between these and
