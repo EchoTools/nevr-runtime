@@ -66,7 +66,7 @@ These seven rules come before every other rule in this file. Each carries its re
 | Open an issue or post anything public | "Documentation, plans and findings", `docs/standards/planning.md` |
 | Tag, release or deploy | `RELEASING.md`, "Production Deployment", "Who speaks for the owner" |
 
-- **Recover a session.** At the start of a session, and after a context summary, rebuild the state with commands and act on what they print: `git fetch origin main`; `git worktree list`; for each worktree the ledger (`$REAP_LEDGER`) credits to your seat, `git -C <worktree> status --porcelain` and `git -C <worktree> log --oneline origin/main..HEAD`; then the unit's issue. A worktree with commits ahead of `origin/main` and a clean status is at its quick check, its review or "Landing": take that step. Uncommitted changes in your own worktree are an unfinished tranche: read the diff, finish it, commit it.
+- **Recover a session.** At the start of a session, and after a context summary, rebuild the state with commands and act on what they print: `git fetch origin main`; `git worktree list`; for each worktree the ledger (`$REAP_LEDGER`) credits to your seat, `git -C <worktree> status --porcelain` and `git -C <worktree> log --oneline origin/main..HEAD`; then the unit's issue, when it has one. A worktree with commits ahead of `origin/main` and a clean status is at its quick check, its review or "Landing": take that step. Uncommitted changes in your own worktree are an unfinished tranche: read the diff, finish it, commit it.
 
 ## Do what was asked
 
@@ -255,7 +255,8 @@ The message of the commit that lands carries the items below; it is the evidence
   - restored tree: 9 tests OK
   ```
 - **Evidence on the exact tip**, as "Review, verification and landing" says: each command run on the reviewed tree (`git rev-parse HEAD^{tree}`), its
-  exit code, what was not run or not established, and the issue (`Closes #N` or `Refs #N`).
+  exit code, what was not run or not established, and, for a commit that is not of type `docs`, the issue (`Closes #N`
+  or `Refs #N`).
 - **Platform parity.** PCVR and Quest stay at parity. A commit that adds or changes player-facing behavior says in its
   message what the other platform's status is: done in this commit, already present (`file:line`), not applicable (the
   reason), or a linked twin issue filed in the same turn.
@@ -273,9 +274,10 @@ The message of the commit that lands carries the items below; it is the evidence
 ### Live rules
 
 - **No pull requests** (rule 2). Work lands on `main` through "Landing". One job that is not an agent still opens one: the nightly `.github/workflows/echo-symbols-sync.yml` (#2370 moves it to "Landing"). The `pr-read-check`, `pr-issue-link-check` and `pr-title-check` workflows run only on a pull request, so they gate nothing that lands.
-- **The landed commit names the issue it resolves or advances** (`Closes #N` or `Refs #N`). No check enforces this; the review does.
-- **Runs use a throwaway copy of the game install, never the install itself** (#524; "The game install"). No check
-  enforces this: the scripts still default to the checkout's `echovr/`, so point every writer at the copy yourself.
+- **A landed code commit names the issue it resolves or advances** (`Closes #N` or `Refs #N`); a commit of type `docs` names none, and its message is its record ("Code work starts from an existing issue"). `just land` refuses a commit that breaks this (`tools/internal/evidence`); whether the named issue is the right one is the review's.
+- **Runs use a throwaway copy of the game install, never the install itself** (#524; "The game install"). The launch
+  scripts refuse a run that names no copy (`NEVR_GAME_ROOT`), and the Go system tests skip without `EVR_GAME_DIR` and
+  their write helpers refuse. `NEVR_RUN_ON_INSTALL=1` is how a person says they mean their own install; no agent sets it.
 
 ### The N-rules index
 
@@ -299,7 +301,7 @@ must break one, say so in the commit message and why.
 
 Every branch an agent creates has a documented deletion point from the moment it exists. A landed branch is scratch: `main` keeps the commits, so never keep one "for reference".
 
-- **One branch per unit of work.** Name it `<seat>/<issue>-<slug>`.
+- **One branch per unit of work.** Name it `<seat>/<issue>-<slug>`, or `<seat>/<slug>` for a `docs` change, which has no issue.
 - **Create:** `git fetch origin main && git worktree add --no-track -b <branch> .claude/worktrees/<branch> origin/main`, fetch first, every time: a worktree made from an unfetched `origin/main` starts from wherever the last fetch left it, hours behind. `--no-track` stops the branch inheriting `origin/main` as its upstream, which sends a bare push to main.
 - **Declare the end:** `git worktree lock --reason "<seat>: delete when it lands on main or is abandoned" .claude/worktrees/<branch>`.
 - **The branch stays local.** Commits in a worktree survive a dead session (rule 5), and a branch on origin could not be rebased at landing. The one push is `main` ("Landing"); a contributor without push access pushes to their fork instead ("For contributors").
@@ -437,7 +439,7 @@ just scenario-all             # Every social scenario in turn, one PASS/FAIL tab
 just test-winvm               # Built runtime on a native Windows VM (needs WINVM_USER/WINVM_PASS; tools/winvm/README.md)
 ```
 
-Tests require: Echo VR game binary, Go toolchain. Environment variables: `NEVR_BUILD_DIR` (build output), `EVR_GAME_DIR` (the `echovr/` directory of a copy of the install, never the owner's install; see "The game install").
+Tests require: Echo VR game binary, Go toolchain. Environment variables: `NEVR_BUILD_DIR` (build output), `EVR_GAME_DIR` (the `echovr/` directory of a copy of the install, never the owner's install; it has no default, and the tests that deploy or start the game skip without it; see "The game install").
 
 ## Startup timing
 
@@ -774,9 +776,11 @@ your seat name, for example `claude-main` or `codex`.
 - **No agent runs a deploy script or writes into the owner's install.** Before any run, follow the skill `run-on-a-copy`. The main checkout's
   `echovr/` may be a symlink to the owner's install (`echovr` is git-ignored and untracked, so the repo does not
   guarantee what it is). The install and `echovr/**` in the main checkout are never a deploy target. Each writer below writes into the tree it is
-  pointed at: the scripts default to `echovr/` of the main checkout (through that link), the Go tests
-  to `$EVR_GAME_DIR`, whose default is `../../ready-at-dawn-echo-arena` from the test directory. Point
-  each at a copy explicitly:
+  pointed at, and none has a default: the scripts refuse without `NEVR_GAME_ROOT` (exit 2, naming it),
+  `just generate-combat-overrides` stops without it, and the Go tests in `tests/system` skip without `EVR_GAME_DIR`.
+  `NEVR_RUN_ON_INSTALL=1` makes `launch-client.sh` and `launch-server.sh` fall back to the main checkout's `echovr/`
+  (through that link): it is for a person running their own install, and no agent sets it (`verify-server.sh` refuses
+  the install whatever it says). Point each at a copy:
   - `verify-server.sh` deploys `BugSplat64.dll` into `echovr/bin/win10` of `$NEVR_GAME_ROOT`, `nevr-runtime.dll` into the nevr root of
     its Wine prefix (`echovr/.wineprefix/drive_c/users/<user>/AppData/Local/nevr/echovr`) and, when
     `build/mingw-release/bin/plugins` exists, its files into that root's `plugins`, and, when
@@ -798,7 +802,7 @@ your seat name, for example `claude-main` or `codex`.
     `NEVR_LIVE_TESTS=1` it runs `wine ./echovr.exe` in `$EVR_GAME_DIR/bin/win10` with `$WINEPREFIX`
     when set, else `$EVR_GAME_DIR/.wineprefix`; unset `WINEPREFIX` or set it to
     `<copy>/echovr/.wineprefix` for a Go test run).
-  - `just generate-combat-overrides` (writes `echovr/bin/win10/_overrides/combat`).
+  - `just generate-combat-overrides` (writes `echovr/bin/win10/_overrides/combat` of `$NEVR_GAME_ROOT`).
 
   Not writers: `just test-plugins`, `just test-plugins-verbose` and `just test-plugins-short` (the plugin
   tests only read `$EVR_GAME_DIR/bin/win10/_overrides/combat`), `just test-plugins-groundtruth` and
@@ -807,10 +811,8 @@ your seat name, for example `claude-main` or `codex`.
   `C:\nevr-systest`) and reads the guest's install (`C:\echovr`) through junctions it makes in the
   rig; whether the game writes through them is not verified.
 
-  Point the scripts and the scenario recipes at the copy with `NEVR_GAME_ROOT=<copy>`, the Go tests
-  with `EVR_GAME_DIR=<copy>/echovr`, and the combat generator with
-  `--output-dir <copy>/echovr/bin/win10/_overrides/combat` (run
-  `python tools/echomod/generate_resources.py` directly). A writer that cannot be pointed at the
+  Point the scripts, the scenario recipes and the combat generator at the copy with `NEVR_GAME_ROOT=<copy>`, and the
+  Go tests with `EVR_GAME_DIR=<copy>/echovr`. A writer that cannot be pointed at the
   copy is not run; the change lands on its quick check and the run is named as not run.
 - **The copy** lives under `~/src/nevr-runtime-work/<agent>/` (named per agent, never another
   agent's). `<copy>` below is `<that directory>/game-copy`, the pristine copy.
@@ -893,8 +895,8 @@ your seat name, for example `claude-main` or `codex`.
 - **Force the mechanism to prove a fix.** Plant the bug, or inject the delay or the thread hop that exposes it, and run
   once with the bug and once without; paste both outputs. "Run it N times" is neither proof nor a done condition. When a
   failure cannot be forced, the fix is a log line that makes the next real occurrence explain itself.
-- **The commit message is the evidence.** The message of the branch's last commit carries what "What a landed commit carries" lists: each command run on the reviewed tree (`git rev-parse HEAD^{tree}`; a commit cannot name its own SHA) and its result, the mutants, what was not run, and the issue. When the content changes before landing, amend it (the branch is unpushed); a content change after a MERGE verdict gets a new review before it lands.
-- **Work starts from an existing issue, and the landed commit names it.** The issue states the problem and its done-bar. The message carries one line for each issue it resolves, `Closes #N` (or `Fixes #N`, `Resolves #N`), and GitHub closes the issue when the commit reaches `main`. A commit that leaves part of an issue open, such as a live run still owed, uses `Refs #N` (or `Part of #N`, `Completes #N`) and says what is still open; `Refs` becomes `Closes` only after checking that the issue has nothing left open. A fix that has no issue gets an issue first. There is no "no issue" form. The review confirms that each named issue is resolved by the diff; an issue that landed work fixed is never left open (`docs/standards/planning.md`, "Hygiene rules").
+- **The commit message is the evidence.** The message of the branch's last commit carries what "What a landed commit carries" lists: each command run on the reviewed tree (`git rev-parse HEAD^{tree}`; a commit cannot name its own SHA) and its result, the mutants, what was not run, and the issue (a `docs` commit names none). When the content changes before landing, amend it (the branch is unpushed); a content change after a MERGE verdict gets a new review before it lands.
+- **Code work starts from an existing issue, and the landed commit names it.** Issues are for code. A change to documents only (this file, a standard, a skill, an ADR, a comment) has no issue: it is committed with type `docs`, and its message is its record, with the reason for each change, so that `git log` on the file answers why. For code, the issue states the problem and its done-bar. The message carries one line for each issue it resolves, `Closes #N` (or `Fixes #N`, `Resolves #N`), and GitHub closes the issue when the commit reaches `main`. A commit that leaves part of an issue open, such as a live run still owed, uses `Refs #N` (or `Part of #N`, `Completes #N`) and says what is still open; `Refs` becomes `Closes` only after checking that the issue has nothing left open. A fix that has no issue gets an issue first. A code commit has no "no issue" form. The review confirms that each named issue is resolved by the diff; an issue that landed work fixed is never left open (`docs/standards/planning.md`, "Hygiene rules").
 - **Landing.** Land from the branch's own worktree, never from the main checkout. After the quick check and a MERGE verdict, run `just land -review <report> -test 'just test-changed'`, `<report>` the review's file. `tools/cmd/land` (its header lists the steps and the exit codes) refuses with exit 11, before the lock, unless the report's one verdict line is `Verdict: MERGE` with HEAD's full sha (no `-review`, a missing file, a FIX, or a review of another commit, which means a new review); it then takes the lock, fetches, rebases the branch onto `origin/main`, reruns each test on the rebased tip, adds the trailer `Reviewed-by-report: <scratch>/<report file> Verdict: MERGE <sha> sha256=<report's sha256>` to the tip commit, pushes the tip with `git push origin HEAD:refs/heads/main` (never forced, so it can only fast-forward), records `git ls-remote origin refs/heads/main` before and after (the second must print the tip), and fast-forwards the main checkout with `git merge --ff-only origin/main` when that checkout has `main` checked out and a clean tree. Exit 10 (the tip commit's message lacks its evidence: `tools/cmd/commit-evidence`'s check, skill `landed-commit-evidence`), exit 4 (a rebase conflict) and exit 5 (a failed test) go back to the work, the quick check and a new review; exit 6 means `main` moved: run `just land` again with the same report (a run that does not push puts the branch back at the reviewed commit). No merge commit and no squash, ever: each commit of the branch lands with its own message. Then, in the same turn, remove the worktree and delete the branch ("Branch lifecycle"). When `land` left the main checkout alone, leave it (rule 3).
 - **Verification before landing.** A runtime change is tested by its author before it lands (and `just test-changed` once more after Landing's rebase): the
   quick check on the tip, run as the plain recipe (see "Builds"). After the release cut, main runs the PC login test
