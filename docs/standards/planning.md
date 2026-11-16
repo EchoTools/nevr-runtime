@@ -120,8 +120,6 @@ mechanical and reversible) or listed for a decision. Branches and issues are nev
 
 **Branches**
 - A branch whose work landed is deleted in the same turn (`AGENTS.md`, "Branch lifecycle").
-- A branch not landed within 24 hours is landed or deleted, by the seat that created it; nothing is left to age across
-  sprints.
 
 **Milestones**
 - An open milestone's title is `Future` or the version the next tag will compute to (see "Release milestones"). A
