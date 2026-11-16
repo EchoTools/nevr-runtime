@@ -55,11 +55,18 @@ void ApplyHandleFact(const HandleFact& fact, DeviceFacts* out);
 inline constexpr const char* kHandleDecisionEvent = "device_handles";
 void HandleDecisionRecord(const HandleFact& fact, EventLevel* level, std::vector<Field>* fields);
 
+// The stall window of a Get (libcurl's CURLOPT_LOW_SPEED_TIME, in seconds, with the floor of 1024 bytes a second): a transfer slower
+// than the floor for this long is given up. The Quest transport uses the same 30 s (quest/data/curl_transport.h); production
+// keeps it, and only a test passes a shorter one.
+inline constexpr long kShippedStallSeconds = 30;
+
 class WindowsEnv : public Env {
  public:
   // `event_tag` starts every Event line: "[NEVR.CDN]" for the CDN, "[NEVR.MAPS]" for the map channel. `allow_plain_http` admits
   // http:// in Get; production leaves it off (the CDN is https), and the loopback tests turn it on, as the Quest's transport does.
-  explicit WindowsEnv(const char* event_tag = "[NEVR.CDN]", bool allow_plain_http = false);
+  // `stall_seconds` is the stall window Get gives up on; production uses kShippedStallSeconds.
+  explicit WindowsEnv(const char* event_tag = "[NEVR.CDN]", bool allow_plain_http = false,
+                      long stall_seconds = kShippedStallSeconds);
 
   bool ReadSmallFile(const std::string& path, std::string* out, std::size_t max_bytes) override;
   bool MakeDirs(const std::string& dir) override;
@@ -77,6 +84,7 @@ class WindowsEnv : public Env {
  private:
   std::string tag_;
   bool allow_plain_http_;
+  long stall_seconds_;
   std::atomic<bool> handle_count_logged_{false};  // the first decision of the handle-count workaround is logged (ADR 0032 rule 3)
 };
 

@@ -22,12 +22,6 @@
       "date": "2026-11-16"
     },
     {
-      "id": "gtest:test_env_windows#EnvWindowsHttp.ATransferUnderTheLowSpeedFloorTimesOut",
-      "reason": "The test waits out curl's 30 s low-speed window: 30018 ms in the one run that logged it.",
-      "measured": "gtest output of the land run of 2026-11-16 (30018 ms)",
-      "date": "2026-11-16"
-    },
-    {
       "id": "just:test-android",
       "reason": "A recipe, not a test: the NDK build and the checks it runs take a median of 57.6 s in 58 test-changed runs (min 2.7 s, max 94.2 s). A land does not run it; its tests come back when the build is split from them.",
       "measured": "test-changed.jsonl (58 runs), 2026-11-16",

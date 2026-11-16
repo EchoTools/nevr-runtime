@@ -105,9 +105,8 @@ constexpr unsigned char kDeleteCharacter = 0x7F;
 // libcurl's progress callback returns this to end the transfer (non-zero: CURLE_ABORTED_BY_CALLBACK).
 constexpr int kCurlAbortTransfer = 1;
 // The Quest transport's numbers (quest/data/curl_transport.h): a connect may take 15 s, and a transfer slower than 1024 bytes a
-// second for 30 s is given up, so a stalled object fails and the next one is tried.
+// second for the stall window (kShippedStallSeconds, env_windows.h) is given up, so a stalled object fails and the next one is tried.
 constexpr long kConnectTimeoutSeconds = 15;
-constexpr long kStallSeconds = 30;
 constexpr long kMinBytesPerSecond = 1024;
 
 bool IsSeparator(wchar_t c) { return c == L'\\' || c == L'/'; }
@@ -358,8 +357,10 @@ EchoVR::LogLevel LevelFor(EventLevel level) {
 
 }  // namespace
 
-WindowsEnv::WindowsEnv(const char* event_tag, bool allow_plain_http)
-    : tag_(event_tag != nullptr ? event_tag : kDefaultLogTag), allow_plain_http_(allow_plain_http) {}
+WindowsEnv::WindowsEnv(const char* event_tag, bool allow_plain_http, long stall_seconds)
+    : tag_(event_tag != nullptr ? event_tag : kDefaultLogTag),
+      allow_plain_http_(allow_plain_http),
+      stall_seconds_(stall_seconds) {}
 
 bool WindowsEnv::ReadSmallFile(const std::string& path, std::string* out, std::size_t max_bytes) {
   std::wstring wide;
@@ -583,7 +584,7 @@ HttpResult WindowsEnv::Get(const std::string& url, const HttpBody& on_body, cons
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, kConnectTimeoutSeconds);
   curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, kMinBytesPerSecond);
-  curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, kStallSeconds);
+  curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, stall_seconds_);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &WriteBody);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &state);
   curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);

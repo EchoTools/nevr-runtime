@@ -519,9 +519,14 @@ constexpr char kChildFilter[] = "EnvWindowsChild.AppendsThenIsKilled";
 // The loopback cases run plain http through an Env that admits it (the Quest's transport admits it the same way for its tests); the
 // production Env is https only, and AnotherSchemeIsATransportFailure checks that.
 constexpr bool kAllowPlainHttpForLoopback = true;
-// Get's stall bound, as env_windows.cpp sets it (kStallSeconds = 30).
+// Get's stall window is the constructor parameter of WindowsEnv (src/cdn/env_windows.h), defaulting to nevr_cdn::kShippedStallSeconds
+// (30 s, the shipped value); the timed-out test passes kFastStallSeconds below through that seam.
 constexpr std::uint64_t kMsPerSecond = 1000;
-constexpr std::uint64_t kStallSecondsMs = 30 * kMsPerSecond;
+// The stall window the timed-out test passes through the seam: 2 s, so the test runs in about 2 s rather than the 30 s it had.
+constexpr long kFastStallSeconds = 2;
+constexpr std::uint64_t kFastStallMs = static_cast<std::uint64_t>(kFastStallSeconds) * kMsPerSecond;
+// The shipped stall window, written out here so the test fails if the production default changes.
+constexpr long kShippedStallSecondsAsShipped = 30;
 constexpr std::size_t kCapBytes = 100000;
 constexpr std::size_t kMiB = std::size_t{1} << 20;
 constexpr std::size_t kShaMillionBytes = 1000000;
@@ -803,12 +808,13 @@ TEST(EnvWindowsHttp, KeepGoingEndsAHeldTransfer) {
 }
 
 // A body that keeps arriving, but under the floor, ends at the stall bound, so a fetch worker's life has a bound while the server
-// stays connected.
+// stays connected. The stall window is the seam's parameter: the test passes a short one, and the production window is pinned by
+// TheShippedStallWindowIsThirtySeconds below.
 TEST(EnvWindowsHttp, ATransferUnderTheLowSpeedFloorTimesOut) {
   DripServer server;
-  nevr_cdn::WindowsEnv env(nullptr, kAllowPlainHttpForLoopback);
+  nevr_cdn::WindowsEnv env(nullptr, kAllowPlainHttpForLoopback, kFastStallSeconds);
   const std::uint64_t start = env.NowMs();
-  const std::uint64_t giveUpMs = kGiveUpFactor * kStallSecondsMs;
+  const std::uint64_t giveUpMs = kGiveUpFactor * kFastStallMs;
   Received r;
   const nevr_cdn::HttpResult result = env.Get(server.Base() + "/piece", Into(&r), [&] { return env.NowMs() - start < giveUpMs; });
   const std::uint64_t took = env.NowMs() - start;
@@ -817,8 +823,13 @@ TEST(EnvWindowsHttp, ATransferUnderTheLowSpeedFloorTimesOut) {
   EXPECT_FALSE(result.cancelled);
   EXPECT_EQ(result.status, kHttpOk);
   EXPECT_FALSE(r.body.empty()) << "the server was sending";
-  EXPECT_GE(took, kStallSecondsMs - kMsPerSecond);
-  EXPECT_LT(took, kStallSecondsMs + kTookSlackMs);
+  EXPECT_GE(took, kFastStallMs - kMsPerSecond);
+  EXPECT_LT(took, kFastStallMs + kTookSlackMs);
+}
+
+// The production stall window is the shipped one: a Get gives up on a stalled body after 30 s, as the Quest transport does.
+TEST(EnvWindowsHttp, TheShippedStallWindowIsThirtySeconds) {
+  EXPECT_EQ(nevr_cdn::kShippedStallSeconds, kShippedStallSecondsAsShipped);
 }
 
 // Production Get is https only: plain http and a file URL are transport failures that never reach the network.
