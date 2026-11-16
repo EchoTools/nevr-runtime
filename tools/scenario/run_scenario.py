@@ -45,10 +45,12 @@ SCRATCH_REMOVED = "when the PR that cites a run merges, unless the PR keeps it a
 
 @functools.lru_cache(maxsize=None)
 def wineprefix() -> pathlib.Path:
-    """The game's Wine prefix. The game install exists only in the main checkout; launch-client.sh
-    is the one place that resolves where (NEVR_GAME_ROOT, else the main checkout), so ask it."""
+    """The game's Wine prefix. launch-client.sh is the one place that resolves the game root (NEVR_GAME_ROOT, a copy of
+    the install; it refuses when that is unset), so ask it and pass its refusal on."""
     out = subprocess.run([str(REPO / "launch-client.sh"), "--print-game-root"],
-                         capture_output=True, text=True, check=True)
+                         capture_output=True, text=True)
+    if out.returncode != 0:
+        raise SystemExit(f"cannot resolve the game root: {out.stderr.strip()}")
     return pathlib.Path(out.stdout.strip()) / "echovr/.wineprefix"
 
 

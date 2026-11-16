@@ -30,25 +30,33 @@ game_pids() {
 # shellcheck source=tools/lib/work_root.sh
 source "$(dirname "${BASH_SOURCE[0]}")/work_root.sh"
 
-# The game install (echovr/) exists only in the main checkout, so it is resolved independent of
-# where the calling script lives: NEVR_GAME_ROOT if set, else the main checkout of this repository
-# (the parent of the git common dir, the same from a worktree), else the current directory.
-# Prints an absolute path or exits 2.
+# The game install (echovr/) exists only in the main checkout, and it may be the owner's real install (the checkout's
+# echovr/ can be a link to it). A run writes into the root it resolves, so the root is never guessed: NEVR_GAME_ROOT names
+# it (a throwaway copy of the install, AGENTS.md "The game install"). A person who really means the checkout's own
+# install says so with NEVR_RUN_ON_INSTALL=1, and only then does the root fall back to the main checkout of this
+# repository (the parent of the git common dir, the same from a worktree), else the current directory.
+# Prints an absolute path; exits 2 when NEVR_GAME_ROOT is unset or empty and NEVR_RUN_ON_INSTALL is not 1.
 resolve_game_root() {
   local root common
   if [[ -n "${NEVR_GAME_ROOT:-}" ]]; then
     root=$NEVR_GAME_ROOT
-  elif common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
-    root=$(dirname "$common")
+  elif [[ "${NEVR_RUN_ON_INSTALL:-}" == 1 ]]; then
+    if common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+      root=$(dirname "$common")
+    else
+      root=$(pwd)
+    fi
   else
-    root=$(pwd)
+    echo "ERROR: NEVR_GAME_ROOT is not set: set it to a throwaway copy of the game install (AGENTS.md \"The game install\"); to run on this checkout's own install, set NEVR_RUN_ON_INSTALL=1" >&2
+    exit 2
   fi
   [[ "$root" == /* ]] || { echo "ERROR: NEVR_GAME_ROOT must be an absolute path (got $root)" >&2; exit 2; }
   printf '%s\n' "$root"
 }
 
 # refuse_copy_credentials <game root>: a throwaway copy of the install carries no sign-in. When NEVR_GAME_ROOT names the
-# root (a copy; unset is the main checkout's own install, which holds the owner's sign-in), any `.credentials.json*`
+# root (a copy; unset, which resolve_game_root allows only under NEVR_RUN_ON_INSTALL=1, is the main checkout's own install,
+# which holds the owner's sign-in), any `.credentials.json*`
 # file under <game root>/echovr, in `_local` or in the nevr root of the Wine prefix, makes the run sign in as whoever
 # the file belongs to. Prints one line naming the files by path (never their content) and exits 3 (the exit of
 # launch-client.sh's other "not pristine" aborts); exits 2 when the tree cannot be searched, so a failed search is

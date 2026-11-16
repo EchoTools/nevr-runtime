@@ -4449,11 +4449,11 @@ verify: go-tools
     python3 tools/verify_mode_patch_ground_truth.py
     echo "verify: OK ({{ preset }})"
 
-# Generate combat override files from echomod build output
+# Generate combat override files from echomod build output, into the copy of the game install NEVR_GAME_ROOT names (just stops with the variable's name when it is unset: this checkout's echovr/ may be the owner's install)
 generate-combat-overrides build_dir:
     python tools/echomod/generate_resources.py \
         --build-dir {{build_dir}} \
-        --output-dir echovr/bin/win10/_overrides/combat
+        --output-dir "{{env('NEVR_GAME_ROOT')}}/echovr/bin/win10/_overrides/combat"
 
 # --- Code Signing ---
 

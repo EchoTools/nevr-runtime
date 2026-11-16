@@ -33,7 +33,8 @@ change to runtime code, also run the game against a server (`NEVR_GAME_ROOT=<cop
 "fixed" or "verified", and [`docs/standards/logging.md`](docs/standards/logging.md) covers what a component must log.
 
 The Go system suites are run with `just test-system` and are not part of `just verify`; they need the Echo VR game
-binary. See "Testing" in `AGENTS.md`.
+binary, and `EVR_GAME_DIR=<copy of the install>/echovr` names it: with it unset every test that would deploy into, delete
+from or start the game skips. See "Testing" in `AGENTS.md`.
 
 ## Before you change code
 

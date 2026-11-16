@@ -3,7 +3,7 @@
 One client, no human: a scenario brings the game up on the nested display, puts it in a state by injecting
 the messages the server would send, makes it act through the game's own entry point, and judges the run's own
 log. `just scenario NAME` runs one scenario and `just scenario-all` runs every scenario in turn and prints one
-PASS/FAIL table. The reasons for the shape (the owner's constraints and the failure that decided it) are in
+PASS/FAIL table. Both launch the client through `launch-client.sh`, so they need `NEVR_GAME_ROOT=<a copy of the game install>` and stop without it. The reasons for the shape (the owner's constraints and the failure that decided it) are in
 `docs/design/2026-10-01-social-scenario-harness.md`.
 
 ## Why one client is enough

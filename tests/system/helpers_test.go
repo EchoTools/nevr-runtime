@@ -17,10 +17,13 @@ const (
 	envBuildDir     = "NEVR_BUILD_DIR"
 	defaultBuildDir = "../../dist"
 
-	// EVR_GAME_DIR points to the Echo VR game installation directory
-	envGameDir     = "EVR_GAME_DIR"
-	defaultGameDir = "../../ready-at-dawn-echo-arena"
+	// EVR_GAME_DIR points to the echovr/ directory of a throwaway COPY of the game install (AGENTS.md "The game
+	// install"). It has no default: a default would be a real install, and these helpers write and delete under it.
+	envGameDir = "EVR_GAME_DIR"
 )
+
+// errNoGameDir is what the write helpers return when they are handed no game directory.
+var errNoGameDir = fmt.Errorf("%s is not set: set it to the echovr/ directory of a copy of the game install", envGameDir)
 
 // getBuildDir returns the build directory from environment or default
 func getBuildDir() string {
@@ -30,12 +33,20 @@ func getBuildDir() string {
 	return defaultBuildDir
 }
 
-// getGameDir returns the game directory from environment or default
+// getGameDir returns the game directory from the environment, or "" when EVR_GAME_DIR is unset. There is no default.
 func getGameDir() string {
-	if dir := os.Getenv(envGameDir); dir != "" {
-		return dir
+	return os.Getenv(envGameDir)
+}
+
+// requireGameDir returns the game directory, or skips the test naming EVR_GAME_DIR when it is unset. Every test that
+// reads, deploys into, deletes from or starts the game takes its directory from here.
+func requireGameDir(t *testing.T) string {
+	t.Helper()
+	dir := getGameDir()
+	if dir == "" {
+		t.Skipf("%s not set: point it at the echovr/ directory of a copy of the game install", envGameDir)
 	}
-	return defaultGameDir
+	return dir
 }
 
 // getDLLPath resolves the full path to a DLL file in the build directory.
@@ -80,6 +91,9 @@ func deployedPath(gameDir, dllName string) string {
 // gameDir: path to the game root directory
 // Returns: error if copy fails
 func deployDLL(dllPath, gameDir string) error {
+	if gameDir == "" {
+		return errNoGameDir
+	}
 	// Resolve game directory to absolute path
 	absGameDir, err := filepath.Abs(gameDir)
 	if err != nil {
@@ -128,6 +142,9 @@ func deployDLL(dllPath, gameDir string) error {
 // gameDir: path to the game root directory
 // Returns: error if cleanup fails
 func cleanupDLLs(gameDir string) error {
+	if gameDir == "" {
+		return errNoGameDir
+	}
 	// Resolve game directory to absolute path
 	absGameDir, err := filepath.Abs(gameDir)
 	if err != nil {
@@ -160,7 +177,7 @@ func cleanupDLLs(gameDir string) error {
 
 // deployAllDLLs is a convenience helper that deploys all NEVR DLL files
 func deployAllDLLs(t *testing.T) {
-	gameDir := getGameDir()
+	gameDir := requireGameDir(t)
 	dllNames := []string{
 		"nevr-runtime.dll",
 		"BugSplat64.dll",
@@ -175,7 +192,7 @@ func deployAllDLLs(t *testing.T) {
 
 // cleanupAllDLLs is a convenience helper that cleans up all NEVR DLL files
 func cleanupAllDLLs(t *testing.T) {
-	gameDir := getGameDir()
+	gameDir := requireGameDir(t)
 	err := cleanupDLLs(gameDir)
 	require.NoError(t, err, "Failed to cleanup DLLs")
 }

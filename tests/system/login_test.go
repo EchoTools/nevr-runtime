@@ -28,6 +28,8 @@ func requireLiveClient(t *testing.T) string {
 		t.Skip("set NEVR_LIVE_TESTS=1 to run the local Echo VR login smoke test")
 	}
 
+	// Before the Once: a skip inside it would end the goroutine with the run marked done and nothing recorded.
+	requireGameDir(t)
 	liveLoginRun.once.Do(func() {
 		gameDir := getGameDir()
 		binDir := filepath.Join(gameDir, "bin", "win10")

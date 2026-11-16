@@ -42,3 +42,28 @@ func TestDeploy_RuntimeGoesToTheNevrRootAndHostToTheGameDirectory(t *testing.T) 
 	_, err = os.Stat(filepath.Join(gameDir, "bin", "win10", "BugSplat64.dll"))
 	assert.True(t, os.IsNotExist(err), "cleanup removes the host")
 }
+
+// With EVR_GAME_DIR unset there is no game directory to fall back to: the write helpers refuse instead of resolving
+// "" to the current directory or to a default install, so a test that forgets requireGameDir still writes nothing.
+func TestDeploy_NoGameDirIsRefusedByTheWriteHelpers(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "BugSplat64.dll")
+	require.NoError(t, os.WriteFile(src, []byte("HOST"), 0o644))
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+
+	require.ErrorIs(t, deployDLL(src, ""), errNoGameDir)
+	require.ErrorIs(t, cleanupDLLs(""), errNoGameDir)
+	assert.Contains(t, errNoGameDir.Error(), envGameDir)
+
+	entries, err := os.ReadDir(workDir)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "a refused deploy wrote into the current directory")
+}
+
+func TestDeploy_GameDirHasNoDefault(t *testing.T) {
+	t.Setenv(envGameDir, "")
+	assert.Equal(t, "", getGameDir())
+	copyDir := t.TempDir()
+	t.Setenv(envGameDir, copyDir)
+	assert.Equal(t, copyDir, requireGameDir(t))
+}

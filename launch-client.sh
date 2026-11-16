@@ -1,5 +1,6 @@
 #!/bin/bash
 # Client system test on the NESTED display only (AGENTS.md "System test for runtime and auth changes").
+# Needs NEVR_GAME_ROOT=<a copy of the install> (AGENTS.md "The game install"); NEVR_RUN_ON_INSTALL=1 names this checkout's own install instead.
 # Verifies the game directory is pristine, deploys the current BugSplat64.dll (the host) and nevr-runtime.dll (the runtime),
 # runs the client on display :101 (headless Xvfb; Xephyr when the owner watches), judges the run from the game's own JSONL log, and
 # restores the original DLL and removes the runtime it put there.
@@ -8,7 +9,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 # shellcheck source=tools/lib/game_install.sh
 source tools/lib/game_install.sh
-GAME_ROOT=$(resolve_game_root) || exit $?
+# GAME_ROOT is resolved after the arguments are read, so --help works with nothing set (resolve_game_root refuses without NEVR_GAME_ROOT).
 
 # --dll PATH deploys that BugSplat64.dll instead of the plugin-dev build (the scenario runner passes
 # the mingw-scenario build; see tools/scenario/run_scenario.py). The default is the dev build, not the release one:
@@ -65,11 +66,12 @@ while [[ $# -gt 0 ]]; do
     --save-creds) [[ $# -ge 2 ]] || { echo "ERROR: --save-creds needs an account name" >&2; exit 2; }; SAVE_GIVEN=1; SAVE_ACCOUNT=$2; shift 2 ;;
     --device-code) DEVICE_CODE=1; shift ;;
     --timeout) [[ $# -ge 2 ]] || { echo "ERROR: --timeout needs a number of seconds" >&2; exit 2; }; RUN_TIMEOUT=$2; shift 2 ;;
-    --print-game-root) echo "$GAME_ROOT"; exit 0 ;;
+    --print-game-root) GAME_ROOT=$(resolve_game_root) || exit $?; echo "$GAME_ROOT"; exit 0 ;;
     -h|--help) echo "usage: $USAGE  (default $DLL)"; exit 0 ;;
     *) echo "unknown argument: $1 (usage: $USAGE)" >&2; exit 2 ;;
   esac
 done
+GAME_ROOT=$(resolve_game_root) || exit $?
 # The sign-in choice (AGENTS.md "Client login test mechanics"). A run signs in with a stored account or with the device-code
 # flow, not both. --save-creds keeps the sign-in of a --device-code login, so it needs --device-code. Checked before anything
 # else, so a refusal here takes no lock and deploys nothing.

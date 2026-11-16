@@ -338,7 +338,7 @@ cross-compile from Linux. Dependencies come from the vcpkg manifest.
 just                # list recipes
 just build          # build desktop targets
 just verify         # the full gate (main, release prep): build + tests under Wine + invariant sensors
-just test-system-short        # quick Go system tests (needs the game binary)
+just test-system-short        # quick Go system tests (the ones that use the game need EVR_GAME_DIR=<copy of the install>/echovr, else they skip)
 just test-plugins-groundtruth # plugin tests without the game binary
 just test-android              # Quest binary-shape checks
 just dist           # the stripped release package (symbols split to dist/symbols/); a build with symbols is build/<preset>/bin/

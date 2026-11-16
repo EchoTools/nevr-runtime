@@ -589,6 +589,23 @@ class LaunchClientTest(unittest.TestCase):
         result = self.run_script("--print-game-root")
         self.assertEqual(result.stdout.strip(), str(self.game_root))
 
+    def test_an_unset_game_root_is_refused_unless_the_install_is_named_as_the_target(self):
+        """NEVR_GAME_ROOT unset or empty never falls back to the checkout's install: exit 2, naming both variables, and
+        no lock, no deploy. --help still works with nothing set."""
+        base = {k: v for k, v in self.env.items() if k not in ("NEVR_GAME_ROOT", "NEVR_RUN_ON_INSTALL")}
+        for label, extra in (("unset", {}), ("empty", {"NEVR_GAME_ROOT": ""}), ("opt-in not 1", {"NEVR_RUN_ON_INSTALL": "0"})):
+            with self.subTest(root=label):
+                for flags in (("--print-game-root",), ("--dll", str(self.dll), "--creds", ACCOUNT)):
+                    result = self.run_script(*flags, env=dict(base, **extra), auth=())
+                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                    self.assertIn("NEVR_GAME_ROOT is not set", result.stderr)
+                    self.assertIn("NEVR_RUN_ON_INSTALL=1", result.stderr)
+                    self.assertEqual(result.stdout, "")
+                self.assertFalse(self.lock.exists(), "the run lock was taken before the refusal")
+        helped = self.run_script("--help", env=base, auth=())
+        self.assertEqual(helped.returncode, 0, helped.stdout + helped.stderr)
+        self.assertIn("usage: launch-client.sh", helped.stdout)
+
     def test_print_game_root_from_a_worktree_is_the_main_checkout(self):
         main = self.tmp / "repo"
         main.mkdir()
@@ -598,6 +615,7 @@ class LaunchClientTest(unittest.TestCase):
         worktree = self.tmp / "wt"
         subprocess.run([*git, "worktree", "add", "-q", str(worktree)], check=True)
         env = {k: v for k, v in self.env.items() if k != "NEVR_GAME_ROOT"}
+        env["NEVR_RUN_ON_INSTALL"] = "1"  # the explicit opt-in to the checkout's own install
         for where in (main, worktree):
             install_scripts(where)
             out = subprocess.run([str(where / "launch-client.sh"), "--print-game-root"], env=env,
@@ -722,14 +740,15 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def test_an_install_that_holds_a_sign_in_takes_no_new_one(self):
-        # NEVR_GAME_ROOT unset: the game root is the main checkout and its echovr/ is the real install, which holds
-        # a sign-in. Neither a link nor a device-code login may join it: both runs are refused (a copy named by
+        # NEVR_GAME_ROOT unset with NEVR_RUN_ON_INSTALL=1: the game root is the main checkout and its echovr/ is the
+        # real install, which holds a sign-in. Neither a link nor a device-code login may join it: both runs are refused (a copy named by
         # NEVR_GAME_ROOT is refused by test_copy_credentials_guard.py, #1198).
         make_game_root(self.checkout)
         root = self.checkout / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/nevr/echovr"
         root.mkdir(parents=True, exist_ok=True)
         (root / ".credentials.json").write_bytes(SIGNIN)
         env = {k: v for k, v in self.env.items() if k != "NEVR_GAME_ROOT"}
+        env["NEVR_RUN_ON_INSTALL"] = "1"
         for flags in (("--creds", ACCOUNT), ("--device-code",)):
             with self.subTest(flags=flags):
                 result = self.run_script("--dll", str(self.dll), *flags, env=env, auth=())
@@ -1127,6 +1146,7 @@ class VerifyServerTest(unittest.TestCase):
     def test_verify_server_refuses_to_run_without_a_copy_named(self):
         # #1308: the install itself is never a verification target; NEVR_GAME_ROOT must name a copy.
         env = {k: v for k, v in self.env.items() if k != "NEVR_GAME_ROOT"}
+        env["NEVR_RUN_ON_INSTALL"] = "1"  # the opt-in does not make the install a verification target
         result = self.run_verify(env)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("needs NEVR_GAME_ROOT", result.stderr)
@@ -1396,6 +1416,15 @@ class LaunchServerTest(unittest.TestCase):
     def run_script(self, env=None):
         return subprocess.run([str(self.checkout / "launch-server.sh")], env=env or self.env, cwd=self.checkout,
                               capture_output=True, text=True, timeout=60)
+
+    def test_launch_server_refuses_an_unset_game_root_and_deploys_nothing(self):
+        env = {k: v for k, v in self.env.items() if k not in ("NEVR_GAME_ROOT", "NEVR_RUN_ON_INSTALL")}
+        result = self.run_script(env)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("NEVR_GAME_ROOT is not set", result.stderr)
+        self.assertIn("NEVR_RUN_ON_INSTALL=1", result.stderr)
+        self.assertFalse((self.checkout / "echovr").exists())
+        self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
 
     def test_deploys_into_the_game_root_from_a_checkout_without_echovr(self):
         started = time.monotonic()

@@ -20,7 +20,7 @@ func TestCtrlC_ClientHandlerReArmed(t *testing.T) {
 	}
 
 	dllPath := getDLLPath("BugSplat64.dll")
-	gameDir := getGameDir()
+	gameDir := requireGameDir(t)
 
 	_, err := os.Stat(dllPath)
 	if os.IsNotExist(err) {
@@ -86,7 +86,7 @@ func TestWindowedImpliesNoOvr(t *testing.T) {
 	}
 
 	dllPath := getDLLPath("BugSplat64.dll")
-	gameDir := getGameDir()
+	gameDir := requireGameDir(t)
 
 	_, err := os.Stat(dllPath)
 	if os.IsNotExist(err) {

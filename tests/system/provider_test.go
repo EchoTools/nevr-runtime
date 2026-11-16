@@ -48,7 +48,7 @@ func rvaToFile(t *testing.T, f *pe.File, rva uint32) uint32 {
 // Regression test for 2026-08-04: OVR_ORG was sent as wire value 3, which the
 // game interpreted as XBX (provider 3).
 func TestProviderStringTable_OvrOrg(t *testing.T) {
-	gameDir := getGameDir()
+	gameDir := requireGameDir(t)
 	exePath := filepath.Join(gameDir, "bin", "win10", "echovr.exe")
 
 	f, err := pe.Open(exePath)

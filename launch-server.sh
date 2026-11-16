@@ -1,15 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
-# The build comes from this checkout; the game install (echovr/) comes from the main checkout, or
-# NEVR_GAME_ROOT, so this works from a worktree. One game run at a time (shared with launch-client.sh
+# The build comes from this checkout; the game install (echovr/) comes from NEVR_GAME_ROOT, a copy of the install, which is
+# required (NEVR_RUN_ON_INSTALL=1 says "this checkout's own install" and falls back to the main checkout;
+# tools/lib/game_install.sh). One game run at a time (shared with launch-client.sh
 # and verify-server.sh): a second run would overlap this one's deployed DLL.
 cd "$(dirname "${BASH_SOURCE[0]}")"
 # shellcheck source=tools/lib/game_install.sh
 source tools/lib/game_install.sh
 GAME_ROOT=$(resolve_game_root) || exit $?
 GAME_DIR="$GAME_ROOT/echovr/bin/win10"
-[[ -d "$GAME_DIR" ]] || { echo "ERROR: no game install at $GAME_DIR (set NEVR_GAME_ROOT)" >&2; exit 2; }
+[[ -d "$GAME_DIR" ]] || { echo "ERROR: no game install at $GAME_DIR (set NEVR_GAME_ROOT to a copy of the install)" >&2; exit 2; }
 acquire_game_run_lock
 # A test launch never reaches a host browser (#1447); see tools/lib/game_install.sh block_host_browser.
 block_host_browser

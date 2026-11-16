@@ -23,9 +23,9 @@ source-invariant tests over the C++ tree and the release contract
 
 | Script | What it does |
 | --- | --- |
-| `../launch-client.sh` (repo root) | Client login test on the nested display; see AGENTS.md. Sources `lib/game_install.sh`. |
+| `../launch-client.sh` (repo root) | Client login test on the nested display; see AGENTS.md. Sources `lib/game_install.sh`. Needs `NEVR_GAME_ROOT=<a copy of the install>`; it refuses when that is unset (`NEVR_RUN_ON_INSTALL=1` names this checkout's own install instead). |
 | `../verify-server.sh` (repo root) | Instrumented dedicated-server run that restores what it deployed. Sources `lib/game_install.sh`. |
-| `lib/game_install.sh` | Shared by those two: game-root resolution, the one-run-at-a-time lock, the running-game check. |
+| `lib/game_install.sh` | Shared by those two and `launch-server.sh`: game-root resolution (`NEVR_GAME_ROOT` required), the one-run-at-a-time lock, the running-game check. |
 | `quest-install.sh` | Front end over `install-nevr-runtime quest install`: installs the signed release's APK and game data, or a local tester APK with `--artifact-dir` (run by `just quest-install`). |
 | `quest_store_build.py` | The bookkeeping of `just quest-store-build` (ADR 0042): `require` stops, naming the variable, unless `NEVR_STORE_APK`, `NEVR_STORE_OBB` and the signing keystore are usable; `check` is the cache check (exit 0 hit, 3 miss, naming the input that changed); `collect` links the signed APK and the stock `_data` into `build/quest-store`, checks them against the pins and writes `store-build.json`. One JSON line per step. |
 | `quest_store_install.py` | The headset step of the store build (`just quest-store-install`): `adb install -r`, then the stock `_data` is pushed to a staging folder, hashed on the device and moved over `/sdcard/Android/media/com.readyatdawn.r15/files/_data`. Refuses without exactly one ready device or when `build/quest-store` differs from its manifest; uninstalls nothing. |

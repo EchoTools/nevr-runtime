@@ -17,7 +17,7 @@ func TestDLLLoading_BugSplat(t *testing.T) {
 
 	// Setup
 	dllPath := getDLLPath("BugSplat64.dll")
-	gameDir := getGameDir()
+	gameDir := requireGameDir(t)
 
 	// Verify source DLL exists
 	_, err := os.Stat(dllPath)
@@ -49,7 +49,7 @@ func TestDLLLoading_AllDLLs(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	gameDir := getGameDir()
+	gameDir := requireGameDir(t)
 
 	// Verify source DLL exists
 	dllNames := []string{"nevr-runtime.dll", "BugSplat64.dll"}
@@ -90,7 +90,7 @@ func TestDLLLoading_CleanupRemovesAllDLLs(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	gameDir := getGameDir()
+	gameDir := requireGameDir(t)
 	dllNames := []string{"nevr-runtime.dll", "BugSplat64.dll"}
 
 	// Skip if DLL doesn't exist

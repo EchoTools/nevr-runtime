@@ -359,7 +359,7 @@ func TestServerTimingIdle(t *testing.T) {
 }
 
 func timingStartAndMeasure(t *testing.T) {
-	gameDir, err := filepath.Abs(getGameDir())
+	gameDir, err := filepath.Abs(requireGameDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
