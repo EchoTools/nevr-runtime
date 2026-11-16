@@ -3038,7 +3038,7 @@ verify: go-tools
     # wrapper detour while the loader lock may be held. It does so through
     # run_log_writer.h, which opens and writes with CreateFileA and WriteFile. A CRT file
     # call (fopen, freopen, fprintf or fwrite to a FILE*, an iostream file) in either
-    # takes CRT locks there; CreateFileA and WriteFile take none. The rule is AGENTS.md N43.
+    # takes CRT locks there; CreateFileA and WriteFile take none. The rule is N43 in docs/standards/n-rules.md.
     N43_RC=0; N43_TEE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/log/boot_log_tee.cpp src/runtime/log/run_log_writer.h) || N43_RC=$?
     sensor_stage1 "N43 boot tee kernel32 only" "src/runtime/log/boot_log_tee.cpp and run_log_writer.h" "$N43_RC"
     sensor_nonempty "N43 boot tee kernel32 only" "non-comment lines of boot_log_tee.cpp and run_log_writer.h" "$N43_TEE"

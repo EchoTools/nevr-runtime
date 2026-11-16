@@ -43,10 +43,10 @@ Each gate has a proof to produce. A gate you did not pass is named as not passed
 
 Read `AGENTS.md`, the global `CLAUDE.md` if you are a maintainer seat, `git log --oneline -20`, `git status`, and the
 issue the unit tracks (work starts from an existing issue: "Review, verification and landing"). Read the standard for the work you will
-do (`AGENTS.md` "For contributors", "Required reading": verification, logging, naming, planning). For C++ or build work
+do (`AGENTS.md` "For contributors", "Required reading": verification, logging, naming, planning, n-rules). For C++ or build work
 read the C++ Mingw Addendum at the end of `AGENTS.md`; a Quest change is built with the NDK, not MinGW
 (`just configure-android`), so check which of the addendum's hard stops apply to it. If a file you will change is
-guarded by an N-rule, read the rule in "The N-rules index" and the comment at the site first.
+guarded by an N-rule, look the file up in `docs/standards/n-rules.md` ("The N-rules index" in `AGENTS.md`), read the rule and the comment at the site first.
 
 Proof: your plan names the area from the table above, the issue, the N-rules in play and the standards read.
 

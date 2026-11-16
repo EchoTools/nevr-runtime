@@ -107,7 +107,7 @@ Sensor N109 fails if `${CMAKE_CURRENT_SOURCE_DIR}` returns to that target.
 returns nothing). A defect you find and do not fix gets a GitHub issue in the same turn
 (AGENTS.md "Documentation, plans and findings", "Fix it or file it, in the same turn"),
 written as a falsifiable claim (AGENTS.md "Write an issue as a falsifiable claim"). The `N<number>` rules are tags in code comments and in the
-`just verify` recipe, indexed in AGENTS.md "The N-rules index". The highest tag in
+`just verify` recipe, indexed in `docs/standards/n-rules.md` (AGENTS.md "The N-rules index" says how to look a file up). The highest tag in
 `src`, `tools` and `justfile` on origin/main is **N151**
 (`git grep -ohE '\bN[0-9]+\b' origin/main -- src tools justfile | sort -V | uniq`; `N802` in that list is a Python lint code in two `# noqa` comments, not a rule). Read the
 rule's comment at the site before changing a file the index guards. Anything asserting
@@ -188,7 +188,7 @@ The C++ addendum says warnings are errors. The MinGW targets apply it; check wit
   becomes mandatory at every startup.
 - **PLUGINS are config-driven, not globbed.** `LoadPlugins` in
   `src/runtime/ext/plugin_loader.cpp` loads the ORDERED `plugins:` list from
-  `config.yaml` (`NevrCfgPluginLoadPlan`; AGENTS.md N134). An absent or empty list loads
+  `config.yaml` (`NevrCfgPluginLoadPlan`; `docs/standards/n-rules.md` N134). An absent or empty list loads
   nothing, logs `[NEVR.PLUGIN] no plugins configured in config.yaml — loading none`, and
   an orphan DLL left in `plugins/` is ignored unless the config names it. A plugin
   declared `required: true` that fails to load or init calls `ServerFatal` (fatal on a
@@ -275,7 +275,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
 
 ## Config and service redirects
 
-- **NEVR keys come from `config.yaml`, not the game's JSON** (AGENTS.md N133; typed
+- **NEVR keys come from `config.yaml`, not the game's JSON** (`docs/standards/n-rules.md` N133; typed
   reader `src/core/nevr_config.h`). `nevr_config_yaml::Choose`
   (`src/runtime/lifecycle/config_yaml_choice.h`, resolved by `NevrCfgResolveConfigYaml` in
   `src/runtime/lifecycle/service_config.cpp`) reads `-config-file <file>`, else

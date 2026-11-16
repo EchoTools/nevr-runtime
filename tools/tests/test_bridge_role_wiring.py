@@ -139,7 +139,7 @@ class TheRedirectGivesTheServicesTheirRequestTargets(unittest.TestCase):
 
 class TheDocsDescribeTheGuard(unittest.TestCase):
     def test_the_n91_row_names_what_checks_it(self):
-        rows = [line for line in read("AGENTS.md").splitlines() if line.startswith("| N91 ")]
+        rows = [line for line in read("docs/standards/n-rules.md").splitlines() if line.startswith("| N91 ")]
         self.assertEqual(len(rows), 1)
         row = rows[0]
         self.assertIn("src/runtime/compat/socket_role.h", row)

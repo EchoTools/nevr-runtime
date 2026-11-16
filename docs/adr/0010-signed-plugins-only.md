@@ -350,8 +350,8 @@ Integration: a game copy with one signed fixture plugin and one unsigned, on the
 line of the first and the refusal line of the second, and the login's `nevr_plugins` must list the second as failed.
 
 Release contract: the packaging check for the `NEVR-PLUGIN-TRUST` literal (section 3), and the legacy targets absent from release
-inputs (section 1). `just test-winvm` runs the GTest on native Windows as the second platform. The rule is N147 in the N-rules index in
-`AGENTS.md`.
+inputs (section 1). `just test-winvm` runs the GTest on native Windows as the second platform. The rule is N147 in the N-rules index,
+`docs/standards/n-rules.md`.
 
 ## 6. Plugins people use today, and what a player sees
 

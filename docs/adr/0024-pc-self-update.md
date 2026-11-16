@@ -47,7 +47,7 @@ What exists, read from this tree:
 - The root (`src/core/nevr_root.h`: `kRoot`, `kLogs`, `kCrashes`, ...) is `%LOCALAPPDATA%\nevr\echovr`. ADR 0012 puts
   `nevr-runtime.dll` at its top and plugins in `plugins\` (#855, #856); the host links no core state (`tools/verify_host_no_core_state.py`).
 - The host's crash capture (`src/runtime/host/crash_capture.cpp`) runs inside the faulting process and writes with raw
-  Win32 calls; the same rule holds for any file it touches (AGENTS.md N70 states the same rule for the runtime's own crash path).
+  Win32 calls; the same rule holds for any file it touches (`docs/standards/n-rules.md` N70 states the same rule for the runtime's own crash path).
 - ADR 0023 defines the core: the manifest chain of `docs/reference/verifying-a-release.md` (steps 1 to 8: signature, schema,
   version floor, expiry, channel to release, every artifact and zip member), the log, and a C ABI. The core is a Rust
   library; the PC plan is reached through its CLI only. ADR 0023 section 7 designs the in-app updater for Quest and says nothing

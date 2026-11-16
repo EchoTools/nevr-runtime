@@ -57,7 +57,7 @@ A mod that changes the game's data (EchoCombat's gear is the first) reaches play
 - A consumer cannot learn from the manifest whether `requires_stock_manifest_sha256` is true; it compares the values with the
   player's own install before it applies anything. The release notes state it as a claim.
 - A plugin in the pack is unsigned (the release-signer does not sign plugins yet). Under `-require-signed-plugins` it does not load
-  (AGENTS.md N147).
+  (`docs/standards/n-rules.md` N147).
 
 ## What is not known
 
