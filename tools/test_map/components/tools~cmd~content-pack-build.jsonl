@@ -48,5 +48,7 @@
 {"file":"tools/cmd/content-pack-build/steps_tacmods.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_tacmods_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_veil.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
+{"file":"tools/cmd/content-pack-build/steps_veil_attach.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
+{"file":"tools/cmd/content-pack-build/steps_veil_attach_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_veil_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/stock_steps_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
