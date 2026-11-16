@@ -51,7 +51,10 @@ var gunPatchTables = map[uint64]map[uint64]string{
 // global level's heal bubble table (its tac-mod step changes mp_equipment, which equipmentResources already counts),
 // steps_point.go changes the explosion table, one per drone level (its tac-mod step's mp_equipment is equipmentResources,
 // its required_charge step's mp_weapon_settings is weaponSettingsResources: each resource is counted once), and
-// steps_veil.go changes only mp_equipment, which equipmentResources counts, so it adds no term.
+// steps_veil.go changes only mp_equipment, which equipmentResources counts, so it adds no term, and steps_medigun.go
+// changes mp_weapon_settings (weaponSettingsResources) and the global level's heal bubble table, the same resource
+// (Sets[0], healBubbleTable, globalLevel) as steps_buff.go's (healBubbleTableResources): each is counted once, so it adds
+// no term either.
 // (5 + 2 + 2 + 2 - 1 + 1 + 1) x 5 + 1 + 1 + 2 + 1 + 1 = 66, over both client sets.
 // The count covers every step, so a step that changes a resource it does not name fails here; what each data step
 // writes into its own tables is checked by that step's own test, and the gun patch's files by gunPatchTables above.
@@ -71,11 +74,12 @@ const (
 	dotFieldMaterialResources = 2
 	equipmentResources        = 1
 	// steps_dot_preset.go: the DOT FIELD's three activation booleans in mp_weapon_settings, which the gun patch's files
-	// do not cover; steps_point.go's required_charge is in the same resource
+	// do not cover; steps_point.go's required_charge and steps_medigun.go's ability_properties.medigun are in the same resource
 	weaponSettingsResources = 1
 	// steps_rules_terminal.go: the RULES page canvas ui_display_mpl_mm_custom_rules1, which the gun patch's files do not cover
 	rulesCanvasResources = 1
-	// steps_buff.go: the global level's heal bubble table, one resource; its tac-mod step's mp_equipment is equipmentResources
+	// steps_buff.go: the global level's heal bubble table, one resource; its tac-mod step's mp_equipment is equipmentResources.
+	// steps_medigun.go's MEDIGUN bubble rows are in the same table
 	healBubbleTableResources = 1
 )
 
