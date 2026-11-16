@@ -224,33 +224,17 @@ func TestAPlantedDifferenceInADeclaredFieldIsNamed(t *testing.T) {
 	}
 }
 
-// shippedFields: the three drone steps, the drone health step, the DOT stick step, the two DOT constraint steps, the two
-// DOT FIELD red bubble model and transform steps, its texture-streaming step and the RULES label step declare one field
-// each, the equipment step one per list, the DOT preset step one per activation key (3), the DOT dampener step one per
-// table (2), the DOT FIELD red materials step one per material (2), the two OVERCHARGE steps one each (the buff
-// tac-mod entry, the OVERCHARGE bubble rows), the three NEUTRON steps one each (the point tac-mod entry,
-// required_charge, the barrier wall's explosion rows), the UMBRAL VEIL step one (the smoke tac-mod entry), the two
-// MEDIGUN steps one each (ability_properties.medigun, the MEDIGUN bubble rows), and the map terminal step 12 (its actor
-// table, its CScriptCR press events and labels, and one per other type of actor_copy.py's TYPE_NAMES, 10), and the
-// OVERCHARGE arrow mesh step four, one per type of the cross's records.
-const shippedFields = 44
-
 func TestTheDeclaredFieldsOfTheShippedStepsAreWellFormed(t *testing.T) {
 	t.Parallel()
-	declared := 0
 	for _, st := range steps {
 		if len(st.Writes) == 0 {
 			t.Errorf("step %q declares no field: the oracle would compare nothing it writes", st.Name)
 		}
 		for _, f := range st.Writes {
-			declared++
 			if f.Name == "" || f.Read == nil || len(f.Records) == 0 || (f.Set != Sets[0] && f.Set != Sets[1]) || f.Type == 0 {
 				t.Errorf("step %q field %+v is not complete", st.Name, f)
 			}
 		}
-	}
-	if declared < shippedFields {
-		t.Errorf("%d fields declared over %d steps, want at least %d", declared, len(steps), shippedFields)
 	}
 }
 

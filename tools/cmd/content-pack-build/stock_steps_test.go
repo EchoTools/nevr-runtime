@@ -1,12 +1,16 @@
 package main
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/radpack"
@@ -41,104 +45,13 @@ var gunPatchTables = map[uint64]map[uint64]string{
 	},
 }
 
-// The resources the registered steps change, counted from the step list: the per-level steps each change one table
-// per drone level (steps_drone.go: bullets, particle effects, scripts; steps_drone_health.go: the damageable table;
-// steps_dot_stick.go: the magazine table; steps_dot_constraints.go: the rigid-attach and parented-constraint tables;
-// steps_dot_damp.go: the dampener and transform tables; steps_dot_field.go: the model and transform tables, of which the
-// transform table is the one steps_dot_damp.go already changes, so it is one resource, counted once;
-// steps_dot_field_texmat.go: the texture-streaming table), steps_equipment.go changes the one mp_equipment resource,
-// steps_dot_preset.go the one mp_weapon_settings resource, steps_dot_field_texmat.go adds the two red materials, and
-// steps_rules_terminal.go changes the one RULES canvas, in whichever client set lists it, and steps_buff.go changes the
-// global level's heal bubble table (its tac-mod step changes mp_equipment, which equipmentResources already counts),
-// steps_point.go changes the explosion table, one per drone level (its tac-mod step's mp_equipment is equipmentResources,
-// its required_charge step's mp_weapon_settings is weaponSettingsResources: each resource is counted once), and
-// steps_veil.go changes only mp_equipment, which equipmentResources counts, so it adds no term, and steps_medigun.go
-// changes mp_weapon_settings (weaponSettingsResources) and the global level's heal bubble table, the same resource
-// (Sets[0], healBubbleTable, globalLevel) as steps_buff.go's (healBubbleTableResources): each is counted once, so it adds
-// no term either, and steps_mapterm.go changes, per map level (mapTermLevels, 4: mpl_lobby_b_combat has no map buttons),
-// the level's actor table and each component table that owns a row of the REMATCH subtree; its script and transform
-// tables are levelTableSteps' and dotDampTables' resources, counted already. Which component tables those are is the
-// shipped data's and is not established without it, so they are counted as they come (mapTermComponentTables), each
-// one of actor_copy.py's TYPE_NAMES (mapTermResourcesNamed), and any other resource the step changes fails here.
-// steps_buff_fx_arrow.go changes the four records of the OVERCHARGE arrow mesh under fx_overcharge_arrow, one per type,
-// all four new resources in Sets[0] (buffArrowResources).
-// (5 + 2 + 2 + 2 - 1 + 1 + 1) x 5 + 1 + 1 + 2 + 1 + 1 + 1 x 4 = 70, plus the arrow's 4 and the map buttons' component
-// tables, over both client sets.
-// The count covers every step, so a step that changes a resource it does not name fails here; what each data step
-// writes into its own tables is checked by that step's own test, and the gun patch's files by gunPatchTables above.
-const (
-	levelTableSteps     = 5
-	dotConstraintTables = 2 // steps_dot_constraints.go: the DOT magazine's rigid-attach and parented-constraint rows
-	dotDampTables       = 2 // steps_dot_damp.go: the DOT actor's CR15DampenerCR row and CTransformCR rows
-	dotFieldTables      = 2 // steps_dot_field.go: the FIELD's CModelCRWin10 records and its CTransformCRWin10 row
-	// steps_dot_field.go's transform table is steps_dot_damp.go's CTransformCR table: both steps change it, and a
-	// resource is counted once
-	dotFieldTablesSharedWithDamp = 1
-	// steps_dot_field_texmat.go: the FIELD's CTextureStreamingCRWin10 record, one table per level
-	dotFieldTexStreamTables = 1
-	// steps_point.go: the explosion table 4af215b19b297c34 that gets the barrier wall's row, one table per level
-	pointExplosionTables = 1
-	// steps_dot_field_texmat.go: the two red material copies, mat_dot_field_bubble_a and _b, new resources
-	dotFieldMaterialResources = 2
-	equipmentResources        = 1
-	// steps_dot_preset.go: the DOT FIELD's three activation booleans in mp_weapon_settings, which the gun patch's files
-	// do not cover; steps_point.go's required_charge and steps_medigun.go's ability_properties.medigun are in the same resource
-	weaponSettingsResources = 1
-	// steps_rules_terminal.go: the RULES page canvas ui_display_mpl_mm_custom_rules1, which the gun patch's files do not cover
-	rulesCanvasResources = 1
-	// steps_buff.go: the global level's heal bubble table, one resource; its tac-mod step's mp_equipment is equipmentResources.
-	// steps_medigun.go's MEDIGUN bubble rows are in the same table
-	healBubbleTableResources = 1
-	// steps_buff_fx_arrow.go: the cross's four records under fx_overcharge_arrow, one per type; new resources in Sets[0]
-	buffArrowResources = 4
-	// steps_mapterm.go: each map level's actor table 347869ce492dc7da, which gets the three copies of the REMATCH subtree
-	mapTermActorTables = 1
-)
+// The resources the steps change are the records their declared fields name (Step.Writes): checkChanged compares them with
+// what a run really changed, so a step that changes a record it does not declare, or declares one it does not change,
+// fails there.
 
-// afterGunPatchCompare are the steps that change mp_equipment past the gun patch's (it has none of OVERCHARGE, NEUTRON and UMBRAL VEIL),
-// and the map terminal step, which rewrites the four map levels' script tables past the gun patch's (it has no map buttons),
-// so the gun patch's sha-256 values are compared before them.
-var afterGunPatchCompare = map[string]bool{buffTacmodStep: true, pointTacmodStep: true, veilStepName: true, mapTermStepName: true}
-
-// mapTermResourcesNamed checks the resources the map terminal step added: each is one of the four map levels' actor table
-// (exactly one per level) or one of its component tables that no other term counts (actor_copy.py's TYPE_NAMES without
-// CScriptCR, counted by levelTableSteps, and CTransformCR, counted by dotDampTables). It returns how many component
-// tables there are, and an error naming each resource no term names.
-func mapTermResourcesNamed(added []radpack.Key) (int, error) {
-	levels := map[int64]bool{}
-	for _, l := range mapTermLevels {
-		levels[int64(l.level)] = true
-	}
-	actors := map[int64]int{}
-	components := 0
-	var errs []error
-	for _, k := range added {
-		typ := mtTypeKey(uint64(k.Type))
-		_, named := mtTypeNames[typ]
-		switch {
-		case !levels[k.Name]:
-			errs = append(errs, fmt.Errorf("the map terminal changed %016x.%016x, which is not a map level's", uint64(k.Type), uint64(k.Name)))
-		case typ == mtActorsType:
-			actors[k.Name]++
-		case named && uint64(k.Type) != scriptTable && uint64(k.Type) != transformType:
-			components++
-		default:
-			errs = append(errs, fmt.Errorf("the map terminal changed %016x.%016x, a resource no term names", uint64(k.Type), uint64(k.Name)))
-		}
-	}
-	for _, l := range mapTermLevels {
-		if n := actors[int64(l.level)]; n != mapTermActorTables {
-			errs = append(errs, fmt.Errorf("the map terminal changed level %016x's actor table %d times, want %d", l.level, n, mapTermActorTables))
-		}
-	}
-	return components, errors.Join(errs...)
-}
-
-func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testing.T) {
-	data := os.Getenv("NEVR_STOCK_DATA")
-	if data == "" {
-		t.Skip("NEVR_STOCK_DATA is not set (a stock PC data folder: manifests/ and packages/)")
-	}
+// newStockPack opens both client sets of the stock data as Build does, with nothing changed yet.
+func newStockPack(t *testing.T, data string) *Pack {
+	t.Helper()
 	p := &Pack{gameDir: filepath.Join(data, "..", "..", "..", ".."), sets: map[string]*radpack.Set{},
 		changes: map[string]map[radpack.Key][]byte{}, scripts: map[string][]byte{}}
 	for _, setID := range Sets { // both client sets, as Build opens them: a step may change a resource in either
@@ -148,11 +61,20 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 		}
 		p.sets[setID] = s
 	}
-	// The gun patch's mp_equipment has no OVERCHARGE, NEUTRON or UMBRAL VEIL (steps_buff.go, steps_point.go, steps_veil.go
-	// add them), and its four map levels' script tables have no map buttons (steps_mapterm.go adds them), so its sha-256
-	// values are compared before those steps.
+	return p
+}
+
+func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testing.T) {
+	data := os.Getenv("NEVR_STOCK_DATA")
+	if data == "" {
+		t.Skip("NEVR_STOCK_DATA is not set (a stock PC data folder: manifests/ and packages/)")
+	}
+	p := newStockPack(t, data)
+	// The gun patch's mp_equipment has no OVERCHARGE, NEUTRON or UMBRAL VEIL (the steps that are PastGunPatch add them), and
+	// its four map levels' script tables have no map buttons (steps_mapterm.go adds them), so its sha-256 values are
+	// compared before those steps.
 	for _, st := range steps {
-		if afterGunPatchCompare[st.Name] {
+		if st.PastGunPatch {
 			continue
 		}
 		if err := st.Apply(p); err != nil {
@@ -172,57 +94,167 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 			}
 		}
 	}
-	var mapTermAdded []radpack.Key
+}
+
+// TestTheChangedResourcesAreTheDeclaredOnes is the independent check of the declarations: the expected set is what each
+// step's Writes name, the actual set is what Apply changed over the player's stock data, and checkChanged compares them.
+func TestTheChangedResourcesAreTheDeclaredOnes(t *testing.T) {
+	data := os.Getenv("NEVR_STOCK_DATA")
+	if data == "" {
+		t.Skip("NEVR_STOCK_DATA is not set (a stock PC data folder: manifests/ and packages/)")
+	}
+	p := newStockPack(t, data)
 	for _, st := range steps {
-		if !afterGunPatchCompare[st.Name] {
-			continue
-		}
-		before := map[radpack.Key]bool{}
-		for k := range p.changes[Sets[0]] {
-			before[k] = true
-		}
 		if err := st.Apply(p); err != nil {
 			t.Fatalf("%s: %v", st.Name, err)
 		}
-		if st.Name != mapTermStepName {
-			continue
+	}
+	if err := checkChanged(steps, p.changes); err != nil {
+		t.Error(err)
+	}
+	distinct := map[radpack.Key]bool{}
+	for _, setID := range Sets {
+		for k := range p.changes[setID] {
+			distinct[k] = true
 		}
-		for k := range p.changes[Sets[0]] {
-			if !before[k] {
-				mapTermAdded = append(mapTermAdded, k)
+	}
+	t.Logf("%d resources changed", len(distinct))
+}
+
+// declaredResources is the records the steps say they change: every (type, record) of every declared field. required are
+// the ones some non-Optional field names; optional the ones only Optional fields name. The set of a field is not part of
+// the key (a client set holds the RULES canvas in whichever set lists it, while its field says Sets[0]). names[key] are the
+// steps that declare the key, for messages.
+func declaredResources(list []Step) (required, optional map[radpack.Key]bool, names map[radpack.Key][]string) {
+	required, optional, names = map[radpack.Key]bool{}, map[radpack.Key]bool{}, map[radpack.Key][]string{}
+	for _, st := range list {
+		for _, f := range st.Writes {
+			for _, r := range f.Records {
+				k := radpack.Key{Type: int64(f.Type), Name: int64(r)}
+				if f.Optional {
+					optional[k] = true
+				} else {
+					required[k] = true
+				}
+				if !slices.Contains(names[k], st.Name) {
+					names[k] = append(names[k], st.Name)
+				}
 			}
 		}
 	}
-	mapTermComponentTables, err := mapTermResourcesNamed(mapTermAdded)
-	if err != nil {
-		t.Error(err)
-	}
-	t.Logf("the map terminal changed %d component tables over %d levels", mapTermComponentTables, len(mapTermLevels))
-	// The RULES canvas (steps_rules_terminal.go) is not a gun patch file, and the step changes it in whichever client set
-	// lists it: it is counted as its own term, and taken out of that set's changes so the per-set count below is the
-	// other steps' resources.
-	var canvasType, canvasName uint64 = rulesCanvasType, rulesCanvasName
-	canvas := radpack.Key{Type: int64(canvasType), Name: int64(canvasName)}
-	held := 0
-	for _, setID := range Sets {
-		if _, ok := p.changes[setID][canvas]; ok {
-			delete(p.changes[setID], canvas)
-			held++
+	return required, optional, names
+}
+
+// checkChanged compares what a run changed (p.changes) with declaredResources(list). One joined error naming each of:
+//
+//	"%016x.%016x changed in set %s and no step declares it"                         (changed, not required, not optional)
+//	"%016x.%016x is declared by %v and was not changed"                              (required, not changed in any set)
+//	"%016x.%016x changed in more than one client set (%v)"                           (a key in two sets)
+//
+// nil when none.
+func checkChanged(list []Step, changes map[string]map[radpack.Key][]byte) error {
+	required, optional, names := declaredResources(list)
+	changedIn := map[radpack.Key][]string{}
+	for _, set := range slices.Sorted(maps.Keys(changes)) {
+		for k := range changes[set] {
+			changedIn[k] = append(changedIn[k], set)
 		}
 	}
-	if held != rulesCanvasResources {
-		t.Errorf("the RULES canvas was changed in %d client sets, want %d", held, rulesCanvasResources)
+	var errs []error
+	for _, k := range slices.SortedFunc(maps.Keys(changedIn), lessKey) {
+		sets := changedIn[k]
+		if len(sets) > 1 {
+			errs = append(errs, fmt.Errorf("%s changed in more than one client set (%v)", keyText(k), sets))
+		}
+		if !required[k] && !optional[k] {
+			errs = append(errs, fmt.Errorf("%s changed in set %s and no step declares it", keyText(k), sets[0]))
+		}
 	}
-	changed := held
-	for _, setID := range Sets {
-		changed += len(p.changes[setID])
+	for _, k := range slices.SortedFunc(maps.Keys(required), lessKey) {
+		if _, ok := changedIn[k]; !ok {
+			errs = append(errs, fmt.Errorf("%s is declared by %v and was not changed", keyText(k), names[k]))
+		}
 	}
-	levelTables := levelTableSteps + dotConstraintTables + dotDampTables + dotFieldTables - dotFieldTablesSharedWithDamp + dotFieldTexStreamTables + pointExplosionTables
-	if want := levelTables*len(droneLevels) + equipmentResources + weaponSettingsResources + dotFieldMaterialResources + rulesCanvasResources + healBubbleTableResources +
-		buffArrowResources + mapTermActorTables*len(mapTermLevels) + mapTermComponentTables; changed != want {
-		t.Errorf("%d resources changed, want %d (%d level tables + %d DOT constraint tables + %d DOT dampener tables + %d DOT FIELD tables - %d shared + %d DOT FIELD texture streaming table + %d explosion table, x %d levels, mp_equipment, mp_weapon_settings, %d red materials, the RULES canvas, the global level's heal bubble table, %d OVERCHARGE arrow records, %d actor table x %d map levels and %d map-button component tables)", changed,
-			want, levelTableSteps, dotConstraintTables, dotDampTables, dotFieldTables, dotFieldTablesSharedWithDamp, dotFieldTexStreamTables, pointExplosionTables, len(droneLevels), dotFieldMaterialResources,
-			buffArrowResources, mapTermActorTables, len(mapTermLevels), mapTermComponentTables)
+	return errors.Join(errs...)
+}
+
+// keyText is a resource as the messages write it: its type and its record, in hex.
+func keyText(k radpack.Key) string {
+	return fmt.Sprintf("%016x.%016x", uint64(k.Type), uint64(k.Name))
+}
+
+// lessKey orders resources by type, then record, so the messages come in one order.
+func lessKey(a, b radpack.Key) int {
+	return cmp.Or(cmp.Compare(a.Type, b.Type), cmp.Compare(a.Name, b.Name))
+}
+
+// The vectors of checkChanged: three steps, one of them with an Optional field, over two record types and two records.
+const (
+	tA, tB, tC = 0xa, 0xb, 0xc
+	rOne, rTwo = 1, 2
+	stepOne    = "S1"
+	stepTwo    = "S2"
+	stepThree  = "S3"
+)
+
+func TestCheckChanged(t *testing.T) {
+	key := func(typ, rec uint64) radpack.Key { return radpack.Key{Type: int64(typ), Name: int64(rec)} }
+	text := func(typ, rec uint64) string { return fmt.Sprintf("%016x.%016x", typ, rec) }
+	s1 := Step{Name: stepOne, Writes: []Field{{Name: "a", Set: Sets[0], Type: tA, Records: []uint64{rOne, rTwo}}}}
+	s2 := Step{Name: stepTwo, Writes: []Field{
+		{Name: "a again", Set: Sets[0], Type: tA, Records: []uint64{rTwo}},
+		{Name: "b, optional", Set: Sets[0], Type: tB, Records: []uint64{rOne}, Optional: true},
+	}}
+	s3 := Step{Name: stepThree, Writes: []Field{{Name: "b", Set: Sets[0], Type: tB, Records: []uint64{rOne}}}}
+	list12, list123 := []Step{s1, s2}, []Step{s1, s2, s3}
+	ch := func(by map[string][]radpack.Key) map[string]map[radpack.Key][]byte {
+		out := map[string]map[radpack.Key][]byte{}
+		for set, keys := range by {
+			out[set] = map[radpack.Key][]byte{}
+			for _, k := range keys {
+				out[set][k] = []byte{}
+			}
+		}
+		return out
 	}
-	t.Log(fmt.Sprintf("%d resources match the gun patch's", len(p.changes[Sets[0]])))
+	a1, a2, b1, c1 := key(tA, rOne), key(tA, rTwo), key(tB, rOne), key(tC, rOne)
+	cases := []struct {
+		name    string
+		list    []Step
+		changes map[string]map[radpack.Key][]byte
+		want    []string // substrings of the error; none means nil
+	}{
+		{"V1 the optional record absent", list12, ch(map[string][]radpack.Key{Sets[0]: {a1, a2}}), nil},
+		{"V2 the optional record present", list12, ch(map[string][]radpack.Key{Sets[0]: {a1, a2, b1}}), nil},
+		{"V3 an undeclared record", list12, ch(map[string][]radpack.Key{Sets[0]: {a1, a2, c1}}),
+			[]string{text(tC, rOne), "no step declares it"}},
+		{"V4 a declared record not changed", list12, ch(map[string][]radpack.Key{Sets[0]: {a1}}),
+			[]string{text(tA, rTwo), stepOne, "was not changed"}},
+		{"V5 a record in two client sets", list12, ch(map[string][]radpack.Key{Sets[0]: {a1, a2}, Sets[1]: {a1}}),
+			[]string{"more than one client set"}},
+		{"V6 a required record of a later step not changed", list123, ch(map[string][]radpack.Key{Sets[0]: {a1, a2}}),
+			[]string{text(tB, rOne), stepThree, "was not changed"}},
+		{"V7 the set is not part of the key", list12, ch(map[string][]radpack.Key{Sets[1]: {a1, a2}}), nil},
+		{"V8 nothing changed", list12, ch(map[string][]radpack.Key{}),
+			[]string{text(tA, rOne), text(tA, rTwo)}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := checkChanged(c.list, c.changes)
+			if len(c.want) == 0 {
+				if err != nil {
+					t.Errorf("want nil, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("want an error naming %q, got nil", c.want)
+			}
+			for _, w := range c.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("error %q does not name %q", err, w)
+				}
+			}
+		})
+	}
 }

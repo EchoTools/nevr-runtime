@@ -59,7 +59,7 @@ const (
 
 func init() {
 	steps = append(steps,
-		Step{Name: buffTacmodStep, Apply: buffTacmodList,
+		Step{Name: buffTacmodStep, Apply: buffTacmodList, PastGunPatch: true,
 			Writes: []Field{{Name: "gear_table.tacmods: the buff entry", Set: Sets[0], Type: jsonResourceType,
 				Records: []uint64{equipmentName}, Read: readTacmod(buffTacmod.Name)}}},
 		Step{Name: buffBubbleStep, Apply: buffBubbles,

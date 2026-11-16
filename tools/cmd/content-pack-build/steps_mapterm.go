@@ -75,7 +75,7 @@ var mapTermLevels = [mapTermLevelCount]mapTermLevel{
 }
 
 func init() {
-	steps = append(steps, Step{Name: mapTermStepName, Apply: mapTerminal, Writes: mapTermWrites()})
+	steps = append(steps, Step{Name: mapTermStepName, Apply: mapTerminal, PastGunPatch: true, Writes: mapTermWrites()})
 }
 
 // mapTermWrites declares what the step adds, in each of the four map levels: the map buttons' actors and the REMATCH and
@@ -89,14 +89,15 @@ func mapTermWrites() []Field {
 	for _, l := range mapTermLevels {
 		levels = append(levels, l.level)
 	}
-	field := func(name string, typ string, read func([]byte) ([]byte, error)) Field {
+	// optional: the field is changed only when the stock data holds a button's row in that table (Field.Optional).
+	field := func(name string, typ string, read func([]byte) ([]byte, error), optional bool) Field {
 		// A type that does not parse is Type 0, which the declared fields' well-formedness test refuses.
 		t, _ := strconv.ParseUint(typ, mapTermTypeBase, mapTermTypeBits)
-		return Field{Name: name, Set: Sets[0], Type: t, Records: levels, Read: read}
+		return Field{Name: name, Set: Sets[0], Type: t, Records: levels, Read: read, Optional: optional}
 	}
 	out := []Field{
-		field("map button actors and the REMATCH and LOBBY transforms", mtActorsType, readMapTermActors),
-		field("map buttons' press events and labels", mapTermScript, readMapTermScript),
+		field("map button actors and the REMATCH and LOBBY transforms", mtActorsType, readMapTermActors, false),
+		field("map buttons' press events and labels", mapTermScript, readMapTermScript, false),
 	}
 	for _, t := range mtSortedNames() {
 		name := mtTypeNames[t]
@@ -104,9 +105,9 @@ func mapTermWrites() []Field {
 		case mapTermScript:
 			continue
 		case mtInstanceType:
-			out = append(out, field("map buttons' "+name+" records", t, readMapTermInstanceRows))
+			out = append(out, field("map buttons' "+name+" records", t, readMapTermInstanceRows, true))
 		default:
-			out = append(out, field("map buttons' "+name+" rows", t, readMapTermRows(name)))
+			out = append(out, field("map buttons' "+name+" rows", t, readMapTermRows(name), true))
 		}
 	}
 	return out

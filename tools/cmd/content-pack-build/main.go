@@ -169,6 +169,9 @@ type Step struct {
 	// another build's output of the same records. A step compares only what it declares: a byte it does not declare
 	// is not its claim.
 	Writes []Field
+	// PastGunPatch: the step changes a resource past the combat gun patch's files (stock_steps_test.go compares the gun
+	// patch's sha-256 values with the pack as the steps that are not PastGunPatch leave it).
+	PastGunPatch bool
 }
 
 // Field is one part of a record a step writes: the same part of each named record of Set and Type is read out by Read
@@ -180,6 +183,10 @@ type Field struct {
 	Type    uint64
 	Records []uint64
 	Read    func(record []byte) ([]byte, error)
+	// Optional: the step changes this record only when the stock data holds what it works on (steps_mapterm.go: a
+	// component table only when it owns a row of the REMATCH subtree). A record no step names as required may be absent
+	// from the changes; a record that is changed is still named.
+	Optional bool
 }
 
 // steps is the build's list, in order. The EchoCombat pack's steps join it one slice at a time (#600).

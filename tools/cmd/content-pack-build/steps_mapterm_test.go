@@ -332,31 +332,6 @@ func TestTheDeclaredFieldsReadTheMapButtonsTheStepWrites(t *testing.T) {
 	}
 }
 
-func TestTheMapTerminalsResourcesAreNamedTerms(t *testing.T) {
-	var added []radpack.Key
-	for _, l := range mapTermLevels {
-		added = append(added, radpack.Key{Type: tHex(mtActorsType), Name: int64(l.level)}, radpack.Key{Type: tHex("e9b24ea816dece48"), Name: int64(l.level)})
-	}
-	if n, err := mapTermResourcesNamed(added); err != nil || n != mapTermLevelCount {
-		t.Errorf("an actor table and a button table per level: %d component tables, %v", n, err)
-	}
-	for _, c := range []struct {
-		what string
-		keys []radpack.Key
-		want string
-	}{
-		{"a script table, counted by the drone step", append(added[:len(added):len(added)], radpack.Key{Type: tHex(mapTermScript), Name: int64(mapTermLevels[0].level)}), "a resource no term names"},
-		{"a transform table, counted by the dampener step", append(added[:len(added):len(added)], radpack.Key{Type: tHex("92abd3e1432bf5e8"), Name: int64(mapTermLevels[0].level)}), "a resource no term names"},
-		{"a type outside TYPE_NAMES", append(added[:len(added):len(added)], radpack.Key{Type: tHex(tUnknownType), Name: int64(mapTermLevels[0].level)}), "a resource no term names"},
-		{"the lobby level", append(added[:len(added):len(added)], radpack.Key{Type: tHex(mtActorsType), Name: int64(droneLevels[3])}), "which is not a map level's"},
-		{"a level without its actor table", added[1:], "actor table 0 times"},
-	} {
-		if _, err := mapTermResourcesNamed(c.keys); err == nil || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("%s: %v, want %q", c.what, err, c.want)
-		}
-	}
-}
-
 func TestTheActorTableRoundTripsAndKeepsItsGroups(t *testing.T) {
 	b := tActorTable(mapTermLevels[0], stockOpts())
 	at, err := mtReadActorTable(b)

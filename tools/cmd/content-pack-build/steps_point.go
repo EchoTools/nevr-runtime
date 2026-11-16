@@ -63,7 +63,7 @@ const (
 
 func init() {
 	steps = append(steps,
-		Step{Name: pointTacmodStep, Apply: pointTacmod,
+		Step{Name: pointTacmodStep, Apply: pointTacmod, PastGunPatch: true,
 			Writes: []Field{{Name: "gear_table.tacmods: the point entry", Set: Sets[0], Type: jsonResourceType,
 				Records: []uint64{equipmentName}, Read: readTacmod(pointEntry.Name)}}},
 		Step{Name: pointSettingsStep, Apply: pointSettings,
