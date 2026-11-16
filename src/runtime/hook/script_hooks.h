@@ -48,7 +48,9 @@ struct Slot {
 };
 
 /// Adds rows to the table. Called at boot, before the game loads its first script; a row added after a script is
-/// loaded applies from that script's next load.
+/// loaded applies from that script's next load. One owner per hooked function (ADR 0039): a row whose (script, rva) is
+/// already registered, by another table or earlier in this one, is refused with a Warning that names both rows, and the
+/// first owner's row stays. The same rule holds for slots (a second replacement of one slot would overwrite the first).
 void Register(const Hook* rows, std::size_t count);
 void Register(const Slot* slots, std::size_t count);
 

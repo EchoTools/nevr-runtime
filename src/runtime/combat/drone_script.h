@@ -105,6 +105,9 @@ void SetTokenForTest(std::uint8_t* token);
 /// once at boot, under the same gate as DroneFix (combat.cpp). A refused hook (the script's bytes differ) runs stock.
 void Register();
 
+/// Only the hook table's row, with no write into the game image. Register calls it; the owners test calls it alone.
+void RegisterHooks();
+
 /// The two stubs DroneFix calls through the token (+0x28, +0x30). Each does nothing unless its detonator node
 /// functions are loaded and pinned and the context is enabled.
 void __fastcall SpawnDeathEffect(void* ctx);

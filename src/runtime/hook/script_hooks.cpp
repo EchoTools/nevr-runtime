@@ -101,16 +101,53 @@ void Remove(const std::vector<void*>& targets, std::uint64_t script) {
   }
 }
 
+void LogRefusedRow(std::uint64_t script, std::uint32_t rva, const char* name, const char* owner) {
+  Log(EchoVR::LogLevel::Warning,
+      "[NEVR.SCRIPT] hook row refused script=%016llx rva=0x%x name=\"%s\" owner=\"%s\" (one owner per hooked function, "
+      "ADR 0039: the first owner's row stays and this row is not installed, so this module's change to the function does "
+      "not apply)",
+      static_cast<unsigned long long>(script), rva, name, owner);
+}
+
 }  // namespace
 
+// ADR 0039: one owner per hooked function. A second detour at one address is refused by MinHook (PatchDetour) and would
+// take the whole script back to stock, so the second row is refused here, at registration, and the first owner keeps
+// the function. `name` is the first owner's row name.
 void Register(const Hook* rows, std::size_t count) {
   std::lock_guard<std::mutex> lock(g_mu);
-  g_rows.insert(g_rows.end(), rows, rows + count);
+  for (std::size_t i = 0; i < count; ++i) {
+    const Hook* owner = nullptr;
+    for (const Hook& h : g_rows) {
+      if (h.script == rows[i].script && h.rva == rows[i].rva) {
+        owner = &h;
+        break;
+      }
+    }
+    if (owner != nullptr) {
+      LogRefusedRow(rows[i].script, rows[i].rva, rows[i].name, owner->name);
+      continue;
+    }
+    g_rows.push_back(rows[i]);
+  }
 }
 
 void Register(const Slot* slots, std::size_t count) {
   std::lock_guard<std::mutex> lock(g_mu);
-  g_slots.insert(g_slots.end(), slots, slots + count);
+  for (std::size_t i = 0; i < count; ++i) {
+    const Slot* owner = nullptr;
+    for (const Slot& s : g_slots) {
+      if (s.script == slots[i].script && s.rva == slots[i].rva) {
+        owner = &s;
+        break;
+      }
+    }
+    if (owner != nullptr) {
+      LogRefusedRow(slots[i].script, slots[i].rva, slots[i].name, owner->name);
+      continue;
+    }
+    g_slots.push_back(slots[i]);
+  }
 }
 
 void OnLoaded(std::uint64_t script, void* base) {

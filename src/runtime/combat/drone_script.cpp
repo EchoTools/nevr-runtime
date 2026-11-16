@@ -208,6 +208,10 @@ void Register() {
     void* sound = reinterpret_cast<void*>(&PlayDeathSound);
     Store(g_token, kTokenSpawnStub, spawn);
     Store(g_token, kTokenSoundStub, sound);
+    RegisterHooks();
+}
+
+void RegisterHooks() {
     static const nevr_script_hooks::Hook kRows[] = {
         {kScript, kDispatchRva, kDispatchBytes, sizeof kDispatchBytes, reinterpret_cast<void*>(&nevr_drone_dispatch_stub),
          &nevr_drone_dispatch_original, "drone script dispatcher: death token context"},

@@ -1434,10 +1434,15 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_rules_button DISCOVERY_MODE PRE_TEST)
 
     # #600: the per-script hook table and the CScriptResource load/free wraps, against fake script images under MinHook.
+    # The production tables are linked in too: R1's test registers every one of them together (ADR 0039).
+    set(NEVR_SCRIPT_TABLE_SOURCES combat/announcer_callouts.cpp combat/capture_scores.cpp combat/capture_time.cpp
+      combat/clock_pause.cpp combat/dot_script.cpp combat/drone_script.cpp combat/orb_pause.cpp combat/point_rate.cpp
+      combat/rules_button.cpp combat/script_guard.cpp combat/shared_magazine.cpp combat/station_cells.cpp
+      combat/team_ready.cpp combat/unlock_time.cpp "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp")
     add_executable(test_script_hooks tests/test_script_hooks.cpp hook/script_hooks.cpp hook/script_resource_hook.cpp
-      hook/hook_guard.cpp)
+      hook/hook_guard.cpp ${NEVR_SCRIPT_TABLE_SOURCES})
     set_source_files_properties(tests/test_script_hooks.cpp hook/script_hooks.cpp hook/script_resource_hook.cpp
-      hook/hook_guard.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+      hook/hook_guard.cpp ${NEVR_SCRIPT_TABLE_SOURCES} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_definitions(test_script_hooks PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
     target_include_directories(test_script_hooks PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_script_hooks PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)

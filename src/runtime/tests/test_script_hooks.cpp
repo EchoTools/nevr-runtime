@@ -22,6 +22,20 @@
 
 #include "core/hooking.h"
 #include "core/logging.h"
+#include "runtime/combat/announcer_callouts.h"
+#include "runtime/combat/capture_scores.h"
+#include "runtime/combat/capture_time.h"
+#include "runtime/combat/clock_pause.h"
+#include "runtime/combat/dot_script.h"
+#include "runtime/combat/drone_script.h"
+#include "runtime/combat/orb_pause.h"
+#include "runtime/combat/point_rate.h"
+#include "runtime/combat/rules_button.h"
+#include "runtime/combat/script_guard.h"
+#include "runtime/combat/shared_magazine.h"
+#include "runtime/combat/station_cells.h"
+#include "runtime/combat/team_ready.h"
+#include "runtime/combat/unlock_time.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/script_hooks.h"
 #include "runtime/hook/script_resource_hook.h"
@@ -162,6 +176,98 @@ TEST_F(ScriptHooks, APinWhoseBytesDifferRefusesTheWholeScript) {
   EXPECT_EQ(Count("hook not installed script=97d0806e6ea89130 name=\"pin B\"", EchoVR::LogLevel::Warning), 1);
   EXPECT_EQ(Count("script hooks refused script=97d0806e6ea89130", EchoVR::LogLevel::Warning), 1);
   sh::OnUnloading(kScript, s_.base);
+}
+
+// ADR 0039: one owner per hooked function. MinHook refuses a second detour at one address, which takes the whole script
+// back to stock (V12: no chain exists on PC), so Register refuses the second row at registration and the first stays.
+TEST_F(ScriptHooks, ASecondTableAtOneScriptAndRvaIsRefusedAndTheFirstOwnerKeepsTheFunction) {
+  const sh::Hook first[] = {Row(kRvaA, kPrologue, reinterpret_cast<void*>(&DetourA), &g_origA, "owner one")};
+  const sh::Hook second[] = {Row(kRvaA, kPrologue, reinterpret_cast<void*>(&DetourB), &g_origB, "owner two"),
+                             Row(kRvaB, kPrologue, reinterpret_cast<void*>(&DetourB), &g_origB, "owner two other")};
+  g_origB = nullptr;
+  sh::Register(first, 1);
+  sh::Register(second, 2);
+  EXPECT_EQ(Count("hook row refused script=97d0806e6ea89130 rva=0x100 name=\"owner two\" owner=\"owner one\" (one owner "
+                  "per hooked function, ADR 0039",
+                  EchoVR::LogLevel::Warning),
+            1);
+  sh::OnLoaded(kScript, s_.base);
+  EXPECT_EQ(Count("script hooks refused", EchoVR::LogLevel::Warning), 0) << "the script is not taken back to stock";
+  EXPECT_EQ(Count("script hooks installed script=97d0806e6ea89130", EchoVR::LogLevel::Info), 1);
+  EXPECT_EQ(Count("hooks=2", EchoVR::LogLevel::Info), 1) << "the first owner's row and the second table's other row";
+  EXPECT_EQ(s_.Call(kRvaA), 11) << "the first owner's detour runs";
+  EXPECT_EQ(s_.Call(kRvaB), 21) << "the second table's row at another function is kept";
+  sh::OnUnloading(kScript, s_.base);
+  EXPECT_EQ(s_.Call(kRvaA), 1);
+}
+
+TEST_F(ScriptHooks, ADuplicateInsideOneTableIsRefusedToo) {
+  const sh::Hook rows[] = {Row(kRvaA, kPrologue, reinterpret_cast<void*>(&DetourA), &g_origA, "first"),
+                           Row(kRvaA, kPrologue, reinterpret_cast<void*>(&DetourB), &g_origB, "again")};
+  sh::Register(rows, 2);
+  EXPECT_EQ(Count("name=\"again\" owner=\"first\"", EchoVR::LogLevel::Warning), 1);
+  sh::OnLoaded(kScript, s_.base);
+  EXPECT_EQ(s_.Call(kRvaA), 11);
+  sh::OnUnloading(kScript, s_.base);
+}
+
+TEST_F(ScriptHooks, TheSameRvaInAnotherScriptIsAnotherFunction) {
+  sh::Hook other = Row(kRvaA, kPrologue, reinterpret_cast<void*>(&DetourB), &g_origB, "other script");
+  other.script = kScript + 1;
+  const sh::Hook first[] = {Row(kRvaA, kPrologue, reinterpret_cast<void*>(&DetourA), &g_origA, "owner one")};
+  sh::Register(first, 1);
+  sh::Register(&other, 1);
+  EXPECT_EQ(Count("hook row refused", EchoVR::LogLevel::Warning), 0);
+}
+
+TEST_F(ScriptHooks, ASecondSlotAtOneScriptAndRvaIsRefused) {
+  static void* r1 = nullptr;
+  static void* r2 = nullptr;
+  static std::atomic<void*> m1{nullptr};
+  static std::atomic<void*> m2{nullptr};
+  const sh::Slot slots[] = {sh::Slot{kScript, 0x300, reinterpret_cast<void*>(&DetourA), &r1, &m1, "slot owner one"},
+                            sh::Slot{kScript, 0x300, reinterpret_cast<void*>(&DetourB), &r2, &m2, "slot owner two"}};
+  sh::Register(slots, 2);
+  EXPECT_EQ(Count("hook row refused script=97d0806e6ea89130 rva=0x300 name=\"slot owner two\" owner=\"slot owner one\"",
+                  EchoVR::LogLevel::Warning),
+            1);
+}
+
+// Every table the runtime registers, registered together as combat.cpp does: none is refused for sharing a function.
+TEST_F(ScriptHooks, EveryProductionTableTogetherRefusesNothing) {
+  namespace c = nevr_combat;
+  static volatile std::uint8_t mailbox[0x40] = {};
+  static volatile std::uint64_t equip_cell = 0;
+  c::drone_script::RegisterHooks();
+  c::script_guard::ResetForTest();
+  c::script_guard::Register(&equip_cell, false);
+  c::dot_script::ResetForTest();
+  c::dot_script::Register();
+  c::shared_magazine::ResetForTest();
+  c::shared_magazine::Register();
+  c::team_ready::ResetForTest();
+  c::team_ready::Register();
+  c::rules_button::ResetForTest();
+  c::rules_button::Register();
+  c::announcer::ResetForTest();
+  c::announcer::Register();
+  c::orb_pause::ResetForTest();
+  c::orb_pause::Register(mailbox);
+  c::point_rate::ResetForTest();
+  c::point_rate::Register(mailbox);
+  c::capture_scores::ResetForTest();
+  c::capture_scores::Register(mailbox);
+  c::capture_time::ResetForTest();
+  c::capture_time::Register(mailbox);
+  c::clock_pause::ResetForTest();
+  c::clock_pause::Register(mailbox);
+  c::unlock_time::ResetForTest();
+  c::unlock_time::Register(mailbox);
+  c::station_cells::ResetForTest();
+  c::station_cells::Register(mailbox);
+  EXPECT_EQ(Count("hook row refused", EchoVR::LogLevel::Warning), 0)
+      << "two production tables hook one (script, rva): one of them must give the function up";
+  EXPECT_EQ(Count("registered", EchoVR::LogLevel::Info), 13) << "all thirteen modules that log a registration ran";
 }
 
 TEST_F(ScriptHooks, TheLoadedBaseIsKnownFromTheLoadToTheLastFree) {
