@@ -6,7 +6,8 @@
 // It checks the form, never the truth of a claim: the sections "## Search statement", "## Symbols", "## Mutants" and
 // "## Platform parity" are present and not empty, a section "## Commands and results" or "## Evidence" names an exit code,
 // a commit whose subject is a fix (type fix) has "## Siblings", the message names an issue (Closes, Fixes, Resolves,
-// Refs, Part of or Completes #N), and a Co-Authored-By trailer is present.
+// Refs, Part of or Completes #N) unless its Conventional Commit type is docs, which needs none, and a Co-Authored-By
+// trailer is present.
 //
 // Exit codes: 0 the message carries everything; 1 something is missing (each missing item is printed); 2 the message
 // could not be read or a flag is wrong.

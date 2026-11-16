@@ -1,5 +1,7 @@
 // Package evidence checks a commit message for what "What a landed commit carries" (AGENTS.md) lists. It reads the
-// form only; whether a claim is true is the review's.
+// form only; whether a claim is true is the review's. Every commit names an issue (Closes, Fixes, Resolves, Refs, Part of
+// or Completes #N) except one whose Conventional Commit type is docs: a one-shot documentation change has no issue, and
+// its message is its record. A docs commit that names one still passes.
 package evidence
 
 import (
@@ -7,12 +9,27 @@ import (
 	"strings"
 )
 
-var (
-	issueRef  = regexp.MustCompile(`(?mi)\b(closes|fixes|resolves|refs|part of|completes) #\d+`)
-	fixType   = regexp.MustCompile(`^fix(\([^)]*\))?!?:`)
-	exitWord  = regexp.MustCompile(`(?i)\bexit[ :=]*\d+|\brc[ :=]*\d+`)
-	trailerRe = regexp.MustCompile(`(?m)^Co-Authored-By: .+`)
+const (
+	typeFix  = "fix"
+	typeDocs = "docs"
 )
+
+var (
+	issueRef = regexp.MustCompile(`(?mi)\b(closes|fixes|resolves|refs|part of|completes) #\d+`)
+	// subjectType is the Conventional Commits 1.0.0 prefix of a subject: type, optional scope, optional "!", colon.
+	subjectType = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*)(\([^)]*\))?!?:`)
+	exitWord    = regexp.MustCompile(`(?i)\bexit[ :=]*\d+|\brc[ :=]*\d+`)
+	trailerRe   = regexp.MustCompile(`(?m)^Co-Authored-By: .+`)
+)
+
+// commitType returns the lower-cased Conventional Commit type of a subject line, or "" when the subject does not parse.
+func commitType(subject string) string {
+	m := subjectType.FindStringSubmatch(subject)
+	if m == nil {
+		return ""
+	}
+	return strings.ToLower(m[1])
+}
 
 // section returns the body of the "## name" section (heading matched by prefix) and whether it exists.
 func section(msg, prefix string) (string, bool) {
@@ -60,10 +77,11 @@ func Missing(msg string) []string {
 		missing = append(missing, "an exit code in the commands section (\"exit 0\")")
 	}
 	subject, _, _ := strings.Cut(msg, "\n")
-	if fixType.MatchString(subject) {
+	kind := commitType(subject)
+	if kind == typeFix {
 		need("Siblings")
 	}
-	if !issueRef.MatchString(msg) {
+	if kind != typeDocs && !issueRef.MatchString(msg) {
 		missing = append(missing, "an issue reference (Closes #N or Refs #N)")
 	}
 	if !trailerRe.MatchString(msg) {

@@ -64,12 +64,19 @@ func TestPlantedMissingSectionIsRefused(t *testing.T) {
 }
 
 func TestPlantedNoExitIssueTrailer(t *testing.T) {
-	for _, c := range []struct{ from, to string }{
-		{"exit 0", "ran"}, {"Refs #1", "later"}, {"Co-Authored-By:", "By:"},
+	feat := strings.Replace(good, "docs: a change", "feat: a change", 1)
+	for _, c := range []struct{ msg, from, to string }{
+		{good, "exit 0", "ran"}, {feat, "Refs #1", "later"}, {good, "Co-Authored-By:", "By:"},
 	} {
-		if code, out := runOn(t, strings.Replace(good, c.from, c.to, 1)); code != 1 {
+		if code, out := runOn(t, strings.Replace(c.msg, c.from, c.to, 1)); code != 1 {
 			t.Errorf("%q: code %d: %s", c.from, code, out)
 		}
+	}
+}
+
+func TestDocsNeedsNoIssue(t *testing.T) {
+	if code, out := runOn(t, strings.Replace(good, " (Refs #1)", "", 1)); code != 0 {
+		t.Fatalf("code %d: %s", code, out)
 	}
 }
 

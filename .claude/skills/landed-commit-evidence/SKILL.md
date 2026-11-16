@@ -16,7 +16,7 @@ sections say what each item is; this skill is the order of writing it and the ch
    `## Siblings` (a fix only: the shape, the `git grep`, a verdict per hit), `## Symbols` (edited; read, not edited),
    `## Commands and results` (each command run on the tree from step 1, with its `exit N`; what was not run),
    `## Mutants` (see `mutant-proof`), `## Platform parity`.
-4. Name the issue (`Closes #N` or `Refs #N`) and add the trailers the repo's commit-identity rule lists, with a
+4. Name the issue (`Closes #N` or `Refs #N`; a `docs` commit needs none, its message is its record) and add the trailers the repo's commit-identity rule lists, with a
    `Co-Authored-By` for every person whose work is integrated.
 5. Run `go -C tools run ./cmd/commit-evidence -file <message file>`. Exit 1 prints each missing item: write it, run again.
 6. Commit with `git commit -F <message file>`; after landing is chosen, `go -C tools run ./cmd/commit-evidence -rev HEAD`.
