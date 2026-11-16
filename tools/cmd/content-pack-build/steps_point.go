@@ -63,10 +63,11 @@ const (
 
 func init() {
 	steps = append(steps,
-		Step{Name: pointTacmodStep, Apply: pointTacmod, PastGunPatch: true,
+		Step{Name: pointTacmodStep, Apply: pointTacmod, PastGunPatch: true, After: []string{equipmentListsStep}, // mp_equipment's gear table row
+
 			Writes: []Field{{Name: "gear_table.tacmods: the point entry", Set: Sets[0], Type: jsonResourceType,
 				Records: []uint64{equipmentName}, Read: readTacmod(pointEntry.Name)}}},
-		Step{Name: pointSettingsStep, Apply: pointSettings,
+		Step{Name: pointSettingsStep, Apply: pointSettings, After: []string{medigunSettingsStep}, // weapon settings' record
 			Writes: []Field{{Name: "ability_properties.point.required_charge", Set: Sets[0], Type: jsonResourceType,
 				Records: []uint64{weaponSettingsName}, Read: readPointRequiredCharge}}},
 		Step{Name: pointExplosionStep, Apply: forEachLevel(explosionTable, pointExplosionRow),

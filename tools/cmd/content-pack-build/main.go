@@ -172,6 +172,11 @@ type Step struct {
 	// PastGunPatch: the step changes a resource past the combat gun patch's files (stock_steps_test.go compares the gun
 	// patch's sha-256 values with the pack as the steps that are not PastGunPatch leave it).
 	PastGunPatch bool
+	// After and Before name steps (by Step.Name) that run before and after this one. OrderFree names steps that write a
+	// record this step also writes and whose relative order changes no output byte (the declaring step's own test shows
+	// both orders). A step that writes a record another step writes declares one of the three (steps_order_test.go
+	// enforces it).
+	After, Before, OrderFree []string
 }
 
 // Field is one part of a record a step writes: the same part of each named record of Set and Type is read out by Read
@@ -197,7 +202,12 @@ func main() {
 }
 
 func run(_ context.Context, args []string, getenv func(string) string, _ io.Reader, stdout, stderr io.Writer) int {
-	return runWith(steps, args, getenv, stdout, stderr)
+	list, err := productionSteps()
+	if err != nil {
+		fmt.Fprintf(stderr, "content-pack-build: %v\n", err)
+		return 1
+	}
+	return runWith(list, args, getenv, stdout, stderr)
 }
 
 func runWith(list []Step, args []string, getenv func(string) string, stdout, stderr io.Writer) int {

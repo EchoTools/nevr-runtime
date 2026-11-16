@@ -75,7 +75,10 @@ var mapTermLevels = [mapTermLevelCount]mapTermLevel{
 }
 
 func init() {
-	steps = append(steps, Step{Name: mapTermStepName, Apply: mapTerminal, PastGunPatch: true, Writes: mapTermWrites()})
+	// After the FIELD transform and the drone script: the transform and script tables of the four map levels are records
+	// both steps write.
+	steps = append(steps, Step{Name: mapTermStepName, Apply: mapTerminal, PastGunPatch: true, Writes: mapTermWrites(),
+		After: []string{dotFieldTransformStep, droneScriptStep}})
 }
 
 // mapTermWrites declares what the step adds, in each of the four map levels: the map buttons' actors and the REMATCH and

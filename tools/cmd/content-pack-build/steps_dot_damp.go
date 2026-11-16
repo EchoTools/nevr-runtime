@@ -36,6 +36,9 @@ import (
 // table order (readDotTranslations). This step
 // leaves every other byte of both tables as it was. Base: stock rows (the tool reads his extract root; whether that root is stock
 // or his gun patch for these two tables is S-BASE's question, PLAN-v5 4.4, and no gun-patch value is imported here).
+// dotDampStep is the dampener step; the FIELD transform step names it in After.
+const dotDampStep = "DOT FIELD dampener starts off and its nodes sit at the origin"
+
 const (
 	dampenerTable = 0x2b292830e51c4fd2 // CSymbol64("CR15DampenerCRWin10")
 	transformType = 0x92abd3e1432bf5e8 // CSymbol64("CTransformCRWin10")
@@ -62,7 +65,7 @@ const (
 
 func init() {
 	steps = append(steps, Step{
-		Name:  "DOT FIELD dampener starts off and its nodes sit at the origin",
+		Name:  dotDampStep,
 		Apply: dotDampApply,
 		Writes: []Field{
 			{Name: "dampener row of the DOT actor, enabled u32 +0x18 and damping f32 +0x20, +0x24", Set: Sets[0],

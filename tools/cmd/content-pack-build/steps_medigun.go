@@ -146,10 +146,10 @@ const (
 
 func init() {
 	steps = append(steps,
-		Step{Name: medigunSettingsStep, Apply: medigunSettings,
+		Step{Name: medigunSettingsStep, Apply: medigunSettings, After: []string{dotPresetStepName}, // mp_weapon_settings
 			Writes: []Field{{Name: "ability_properties.medigun", Set: Sets[0], Type: jsonResourceType,
 				Records: []uint64{weaponSettingsName}, Read: readMedigunTuning}}},
-		Step{Name: medigunBubblesStep, Apply: medigunBubbles,
+		Step{Name: medigunBubblesStep, Apply: medigunBubbles, After: []string{buffBubbleStep}, // the global level's heal bubble table
 			Writes: []Field{{Name: "heal bubble rows of the MEDIGUN bubble", Set: Sets[0], Type: healBubbleTable,
 				Records: []uint64{globalLevel}, Read: readRowsWhere(0, mediBubble)}}},
 	)

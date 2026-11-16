@@ -78,6 +78,9 @@ const (
 	dotFieldResourcesPerStep = 5
 )
 
+// dotFieldTransformStep is the FIELD transform step; the map terminal after it names it in After.
+const dotFieldTransformStep = "DOT FIELD red bubble: transform records"
+
 // The actor is dotMagazineActor (steps_dot_stick.go), the same id as fix_dot_field.py:67's DOT_ACTOR; the transform
 // table type is transformType (steps_dot_damp.go), fix_dot_field.py:55's TRANSFORM_CR.
 func init() {
@@ -85,7 +88,8 @@ func init() {
 		Step{Name: "DOT FIELD red bubble: model records", Apply: forEachLevelBytes(modelTableType, addFieldModel),
 			Writes: []Field{{Name: "FIELD model record, entry and instance of the DOT actor, and its bit in the three bitsets",
 				Set: Sets[0], Type: modelTableType, Records: droneLevels, Read: readFieldModel}}},
-		Step{Name: "DOT FIELD red bubble: transform records", Apply: forEachLevelBytes(transformType,
+		// After the dampener: the dampener refuses the transform row this step appends (dotDampStep, steps_dot_damp.go).
+		Step{Name: dotFieldTransformStep, After: []string{dotDampStep}, Apply: forEachLevelBytes(transformType,
 			func(b []byte) ([]byte, error) { return addFieldTransform(b, dotFieldRadius) }),
 			Writes: []Field{{Name: "FIELD transform row of the DOT actor, whole", Set: Sets[0], Type: transformType,
 				Records: droneLevels, Read: readFieldTransform}}},

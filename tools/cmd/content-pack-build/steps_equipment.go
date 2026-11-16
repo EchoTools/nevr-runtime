@@ -36,13 +36,17 @@ var equipmentAdds = []struct {
 	{"ordnances", []gearEntry{{"loc", "TRANSLOCATOR"}, {"dot", "DOT FIELD"}, {"drone", "DRONE"}}},
 }
 
+// equipmentListsStep is the mp_equipment list step; the tac mod steps after it name it in After.
+const equipmentListsStep = "equipment lists offer magnum, smg, chain, rifle, loc, dot and drone"
+
 func init() {
 	var writes []Field
 	for _, add := range equipmentAdds {
 		writes = append(writes, Field{Name: "gear_table." + add.list + ": the added entries", Set: Sets[0], Type: jsonResourceType,
 			Records: []uint64{equipmentName}, Read: readAddedGear(add.list)})
 	}
-	steps = append(steps, Step{Name: "equipment lists offer magnum, smg, chain, rifle, loc, dot and drone", Apply: equipmentLists, Writes: writes})
+	// After the OVERCHARGE tac mod: both write mp_equipment's one gear table record, the tac mod step's entry and this one's.
+	steps = append(steps, Step{Name: equipmentListsStep, Apply: equipmentLists, Writes: writes, After: []string{buffTacmodStep}})
 }
 
 // readAddedGear is a reader of the entries (name and display_name, as JSON lines) of gear_table.<list> that equipmentAdds

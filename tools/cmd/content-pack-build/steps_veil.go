@@ -36,7 +36,7 @@ const veilStepName = "equipment tacmods offer UMBRAL VEIL"
 var veilGear = gearEntry{Name: "smoke", DisplayName: "UMBRAL VEIL"} // fix_smoke.py:76, CSymbol64("smoke") 0xe32dc7c9d4804fb5 (:77)
 
 func init() {
-	steps = append(steps, Step{Name: veilStepName, Apply: veilTacmod, PastGunPatch: true,
+	steps = append(steps, Step{Name: veilStepName, Apply: veilTacmod, PastGunPatch: true, After: []string{pointTacmodStep}, // gear table row
 		Writes: []Field{{Name: "gear_table.tacmods: the smoke entry", Set: Sets[0], Type: jsonResourceType,
 			Records: []uint64{equipmentName}, Read: readTacmod(veilGear.Name)}}})
 }

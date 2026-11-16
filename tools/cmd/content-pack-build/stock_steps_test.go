@@ -73,7 +73,7 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 	// The gun patch's mp_equipment has no OVERCHARGE, NEUTRON or UMBRAL VEIL (the steps that are PastGunPatch add them), and
 	// its four map levels' script tables have no map buttons (steps_mapterm.go adds them), so its sha-256 values are
 	// compared before those steps.
-	for _, st := range steps {
+	for _, st := range mustProductionSteps(t) {
 		if st.PastGunPatch {
 			continue
 		}
@@ -104,12 +104,12 @@ func TestTheChangedResourcesAreTheDeclaredOnes(t *testing.T) {
 		t.Skip("NEVR_STOCK_DATA is not set (a stock PC data folder: manifests/ and packages/)")
 	}
 	p := newStockPack(t, data)
-	for _, st := range steps {
+	for _, st := range mustProductionSteps(t) {
 		if err := st.Apply(p); err != nil {
 			t.Fatalf("%s: %v", st.Name, err)
 		}
 	}
-	if err := checkChanged(steps, p.changes); err != nil {
+	if err := checkChanged(mustProductionSteps(t), p.changes); err != nil {
 		t.Error(err)
 	}
 	distinct := map[radpack.Key]bool{}

@@ -31,6 +31,9 @@ const (
 	effectsLen        = 0x10
 )
 
+// droneScriptStep is the drone's script step; the map terminal names it in After.
+const droneScriptStep = "drone actor runs script 190ed14fe6c74dd3"
+
 // droneLevels are the five combat levels whose tables carry the drone: mpl_combat_combustion, _dyson, _gauss, _fission
 // and mpl_lobby_b_combat (#1420 names the same five).
 var droneLevels = []uint64{0x42670f2bed45703c, 0x43e2da7914642604, 0x43e2da7a0c623a19, 0xcb9977f7fc2b4526, 0xdf5ca7b7dfa383d4}
@@ -43,7 +46,7 @@ func init() {
 		Step{Name: "drone bullet gets the assault bullet's particle rows", Apply: forEachLevel(particleTableType, droneParticleRows),
 			Writes: []Field{{Name: "particle rows of the drone bullet", Set: Sets[0], Type: particleTableType, Records: droneLevels,
 				Read: readRowsWhere(keyOff, droneBullet)}}},
-		Step{Name: "drone actor runs script 190ed14fe6c74dd3", Apply: forEachLevel(scriptTable, droneScriptRow),
+		Step{Name: droneScriptStep, Apply: forEachLevel(scriptTable, droneScriptRow),
 			Writes: []Field{{Name: "script rows of script 190ed14fe6c74dd3 for the drone actor", Set: Sets[0], Type: scriptTable, Records: droneLevels,
 				Read: readScriptRowsOfDrone}}},
 	)

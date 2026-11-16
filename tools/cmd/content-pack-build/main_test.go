@@ -220,64 +220,6 @@ func TestRefusalsWriteNothing(t *testing.T) {
 	}
 }
 
-func TestTheProductionStepsAreTheEchoCombatOnesInOrder(t *testing.T) {
-	want := []string{
-		// steps_buff.go first: the files' init functions run in file-name order
-		"equipment lists offer the OVERCHARGE tac mod",
-		"each combat player's actor gets OVERCHARGE's own heal bubble",
-		// steps_buff_fx_arrow.go after steps_buff.go, before steps_dot_constraints.go, by file name
-		"OVERCHARGE's purple arrow mesh: the cross's four records under fx_overcharge_arrow",
-		"DOT FIELD magazine drops its leftover rigid-attach rows",
-		"DOT FIELD magazine drops its leftover parented-constraint rows",
-		"DOT FIELD dampener starts off and its nodes sit at the origin",
-		// steps_dot_field.go after steps_dot_damp.go: the files' init functions run in file-name order, and the dampener
-		// step refuses the FIELD transform row the second step appends.
-		"DOT FIELD red bubble: model records",
-		"DOT FIELD red bubble: transform records",
-		// steps_dot_field_texmat.go after steps_dot_field.go, by file name
-		"DOT FIELD red bubble: materials",
-		"DOT FIELD red bubble: texture streaming records",
-		"DOT FIELD arms by remote trigger, not on impact",
-		"drone bullet takes the assault bullet's effects",
-		"drone bullet gets the assault bullet's particle rows",
-		"drone actor runs script 190ed14fe6c74dd3",
-		"damageable health of actor 10e40287a9bf5a13 9999 to 70",
-		"equipment lists offer magnum, smg, chain, rifle, loc, dot and drone",
-		// steps_mapterm.go after steps_equipment.go, before steps_medigun.go, by file name
-		"post-match terminal gets three map buttons",
-		// steps_medigun.go after steps_mapterm.go, before steps_point.go, by file name
-		"weapon settings get ability_properties.medigun",
-		"heal-bubble table gets a MEDIGUN bubble per player actor",
-		// steps_point.go after steps_equipment.go, before steps_rules_terminal.go, by file name
-		"equipment tacmods offer point (NEUTRON)",
-		"point settings get required_charge",
-		"barrier wall gets the stun mine's explosion row",
-		"RULES page labels the capture point's two times",
-		// steps_veil.go after steps_tacmods.go, last by file name
-		"equipment tacmods offer UMBRAL VEIL",
-	}
-	// Steps of the other data pieces (steps_<feature>.go, each registered from its own init) may sit between these and
-	// are checked by their own tests; these must keep their relative order and each must be present once.
-	seen := map[string]int{}
-	for _, st := range steps {
-		seen[st.Name]++
-	}
-	for _, w := range want {
-		if seen[w] != 1 {
-			t.Errorf("step %q is registered %d times, want once", w, seen[w])
-		}
-	}
-	at := 0
-	for _, st := range steps {
-		if at < len(want) && st.Name == want[at] {
-			at++
-		}
-	}
-	if at != len(want) {
-		t.Fatalf("the production steps do not hold %q in order from step %d of %d", want[at], at, len(want))
-	}
-}
-
 func TestThePackIdRuleIsTheRuntimes(t *testing.T) {
 	header, err := os.ReadFile(filepath.Join("..", "..", "..", "src", "runtime", "content", "pack_rules.h"))
 	if err != nil {
