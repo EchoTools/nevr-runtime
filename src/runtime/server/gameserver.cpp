@@ -79,13 +79,13 @@ void CallScheduleReturnToLobby() {
 using namespace nevr_game_server;
 
 // D1/N78: this file defines no ::Log. A second strong definition of the same
-// mangled symbol as src/core/logging.cpp (both linked into BugSplat64.dll) is an
+// mangled symbol as src/core/logging.cpp (both linked into nevr-runtime.dll) is an
 // ODR violation, and the two would not be equivalent: a copy calling
 // EchoVR::WriteLog unconditionally, versus logging.cpp, which null-checks it and
 // falls back to stderr. Which one every Log() call in the DLL bound to would be
 // link-order dependent — and if the unguarded one won, every early-boot log line
 // would be a null function-pointer call and the stderr fallback would silently
-// not exist. common/logging.h declares the guarded one; this file includes it.
+// not exist. core/logging.h declares the guarded one; this file includes it.
 
 // Subscribe to internal broadcaster (UDP) events
 uint16_t ListenForBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId, BOOL isMsgReliable, VOID* func) {
