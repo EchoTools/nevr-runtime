@@ -43,8 +43,9 @@ var gunPatchTables = map[uint64]map[uint64]string{
 // The resources the registered steps change, counted from the step list: the per-level steps each change one table
 // per drone level (steps_drone.go: bullets, particle effects, scripts; steps_drone_health.go: the damageable table;
 // steps_dot_stick.go: the magazine table; steps_dot_constraints.go: the rigid-attach and parented-constraint tables),
-// steps_equipment.go changes the one mp_equipment resource, and steps_dot_preset.go the one mp_weapon_settings
-// resource. (5 + 2) x 5 + 1 + 1 = 37.
+// steps_equipment.go changes the one mp_equipment resource, steps_dot_preset.go the one mp_weapon_settings
+// resource, and steps_rules_terminal.go the one RULES canvas, in whichever client set lists it.
+// (5 + 2) x 5 + 1 + 1 + 1 = 38, over both client sets.
 // The count covers every step, so a step that changes a resource it does not name fails here; what each data step
 // writes into its own tables is checked by that step's own test, and the gun patch's files by gunPatchTables above.
 const (
@@ -54,6 +55,8 @@ const (
 	// steps_dot_preset.go: the DOT FIELD's three activation booleans in mp_weapon_settings, which the gun patch's files
 	// do not cover
 	weaponSettingsResources = 1
+	// steps_rules_terminal.go: the RULES page canvas ui_display_mpl_mm_custom_rules1, which the gun patch's files do not cover
+	rulesCanvasResources = 1
 )
 
 func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testing.T) {
@@ -61,12 +64,15 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 	if data == "" {
 		t.Skip("NEVR_STOCK_DATA is not set (a stock PC data folder: manifests/ and packages/)")
 	}
-	s, _, err := radpack.OpenSet(data, Sets[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := &Pack{gameDir: filepath.Join(data, "..", "..", "..", ".."), sets: map[string]*radpack.Set{Sets[0]: s},
+	p := &Pack{gameDir: filepath.Join(data, "..", "..", "..", ".."), sets: map[string]*radpack.Set{},
 		changes: map[string]map[radpack.Key][]byte{}, scripts: map[string][]byte{}}
+	for _, setID := range Sets { // both client sets, as Build opens them: a step may change a resource in either
+		s, _, err := radpack.OpenSet(data, setID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.sets[setID] = s
+	}
 	for _, st := range steps {
 		if err := st.Apply(p); err != nil {
 			t.Fatalf("%s: %v", st.Name, err)
@@ -85,8 +91,27 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 			}
 		}
 	}
-	if n, want := len(p.changes[Sets[0]]), (levelTableSteps+dotConstraintTables)*len(droneLevels)+equipmentResources+weaponSettingsResources; n != want {
-		t.Errorf("%d resources changed, want %d (%d level tables + %d DOT constraint tables, x %d levels, mp_equipment, and mp_weapon_settings)", n,
+	// The RULES canvas (steps_rules_terminal.go) is not a gun patch file, and the step changes it in whichever client set
+	// lists it: it is counted as its own term, and taken out of that set's changes so the per-set count below is the
+	// other steps' resources.
+	var canvasType, canvasName uint64 = rulesCanvasType, rulesCanvasName
+	canvas := radpack.Key{Type: int64(canvasType), Name: int64(canvasName)}
+	held := 0
+	for _, setID := range Sets {
+		if _, ok := p.changes[setID][canvas]; ok {
+			delete(p.changes[setID], canvas)
+			held++
+		}
+	}
+	if held != rulesCanvasResources {
+		t.Errorf("the RULES canvas was changed in %d client sets, want %d", held, rulesCanvasResources)
+	}
+	changed := held
+	for _, setID := range Sets {
+		changed += len(p.changes[setID])
+	}
+	if want := (levelTableSteps+dotConstraintTables)*len(droneLevels) + equipmentResources + weaponSettingsResources + rulesCanvasResources; changed != want {
+		t.Errorf("%d resources changed, want %d (%d level tables + %d DOT constraint tables, x %d levels, mp_equipment, mp_weapon_settings, and the RULES canvas)", changed,
 			want, levelTableSteps, dotConstraintTables, len(droneLevels))
 	}
 	t.Log(fmt.Sprintf("%d resources match the gun patch's", len(p.changes[Sets[0]])))

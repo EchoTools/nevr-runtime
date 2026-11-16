@@ -230,6 +230,7 @@ func TestTheProductionStepsAreTheEchoCombatOnesInOrder(t *testing.T) {
 		"drone actor runs script 190ed14fe6c74dd3",
 		"damageable health of actor 10e40287a9bf5a13 9999 to 70",
 		"equipment lists offer magnum, smg, chain, rifle, loc, dot and drone",
+		"RULES page labels the capture point's two times",
 	}
 	// Steps of the other data pieces (steps_<feature>.go, each registered from its own init) may sit between these and
 	// are checked by their own tests; these must keep their relative order and each must be present once.
