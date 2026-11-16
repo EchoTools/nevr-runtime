@@ -4,6 +4,18 @@
 // device follows, src/cdn/cdn_plan.cpp) and its bytes do not change. The added manifest's labels follow, in its order.
 //
 //	cargo-merge -base <manifest.json.zst> -base-sha256 <hex> -add <manifest.json.zst> -add-sha256 <hex> -out <dir>
+//	            [-stock-data <dir> -stock-set <id>...] [-add-blobs <dir>] [-allow-unchecked-tables]
+//
+// Each label of the added manifest (after -exclude-type and the move of its empties) is checked for script_undelivered
+// (internal/scriptgate): a CScriptResource record, entry or empty, whose script is neither in the stock sets -stock-data and
+// -stock-set read nor in the label's own `scripts` list refuses the merge, naming the label, the script and the level. The
+// rows of a level table (d99f6bbd8009c92c) are in the table's blob, which the merge does not otherwise read: with -add-blobs
+// <dir> (a folder holding blobs/sha256/<hex>, as cargo-pack writes it) each such table is read and its rows are checked. A table
+// whose rows cannot be read refuses the merge, naming the label and the table, unless -allow-unchecked-tables is given: then the
+// merge goes on, the tables are listed in the summary's script_tables_unchecked and the run log has a Warning naming them, and
+// they are never counted as delivered. A label's `scripts` list (src/cdn/cdn_manifest.cpp ReadScript: name, platform,
+// stock_source, stock_sha256) is the scripts the label delivers; a list entry delivers its script only to a record of the
+// entry's own platform (scriptgate.Listed), and an added label is written with its list, in the input's order.
 //
 // Both inputs are zstd frames pinned by their sha256: a frame that does not hash to its pin is refused before it is
 // read. Input keys the tool does not know are refused, so nothing is dropped. A label name in both inputs is refused, and
@@ -37,6 +49,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
+	"github.com/EchoTools/nevr-runtime/tools/internal/scriptgate"
 )
 
 const (
@@ -54,6 +67,7 @@ const (
 	keyLabels     = "labels"
 	keyEntries    = "entries"
 	keyEmpty      = "empty"
+	keyScripts    = "scripts"
 )
 
 var (
@@ -96,6 +110,16 @@ type labelIn struct {
 	entries []json.RawMessage
 	keys    []entryKey
 	empty   []emptyDoc
+	scripts []json.RawMessage   // the label's `scripts` list, each entry's exact bytes, in the input's order
+	listed  []scriptgate.Listed // the (platform, name) of each entry of scripts
+}
+
+// scriptEntry is one entry of a label's `scripts` list (src/cdn/cdn_manifest.cpp ReadScript's kScriptKeys).
+type scriptEntry struct {
+	Name        string `json:"name"`
+	Platform    string `json:"platform"`
+	StockSource string `json:"stock_source"`
+	StockSha256 string `json:"stock_sha256"`
 }
 
 // manifestIn is an input manifest in document order.
@@ -119,6 +143,8 @@ type mergeResult struct {
 	Labels []labelReport
 	// Dropped counts the entries the exclusion dropped, per excluded type (every excluded type is named, 0 when absent).
 	Dropped map[string]int
+	// TablesUnchecked is "label/table" for each level table the script check could not read.
+	TablesUnchecked []string
 }
 
 // summary is the one line cargo-merge prints.
@@ -128,6 +154,8 @@ type summary struct {
 	ManifestBytes  int            `json:"manifest_frame_bytes"`
 	TextBytes      int            `json:"manifest_text_bytes"`
 	Dropped        map[string]int `json:"dropped"`
+	// TablesUnchecked is the level tables (label, name) whose rows were not read for want of -add-blobs.
+	TablesUnchecked []string `json:"script_tables_unchecked"`
 }
 
 func main() {
@@ -149,6 +177,9 @@ func run(args []string, stdout, stderr io.Writer, log *slog.Logger) int {
 	addPath := fs.String("add", "", "the added manifest frame")
 	addSha := fs.String("add-sha256", "", "the sha256 the added frame must hash to")
 	out := fs.String("out", "", "the output directory; the merged manifest is written as "+manifestName)
+	addBlobs := fs.String("add-blobs", "", "a folder holding the added set's blobs/sha256/<hex>, so the rows of its level tables are checked")
+	allowUnchecked := fs.Bool("allow-unchecked-tables", false, "merge level tables whose blobs are not under -add-blobs, with their rows unchecked (a Warning names them)")
+	stock := scriptgate.Register(fs)
 	var exclude excludeTypes
 	fs.Var(&exclude, "exclude-type", "a type (0x and 16 hex digits) whose entries the added label drops; repeatable")
 	if err := fs.Parse(args); err != nil {
@@ -156,6 +187,11 @@ func run(args []string, stdout, stderr io.Writer, log *slog.Logger) int {
 	}
 	if *basePath == "" || *addPath == "" || *out == "" || fs.NArg() != 0 || !hexSha.MatchString(*baseSha) || !hexSha.MatchString(*addSha) {
 		fmt.Fprintln(stderr, "usage: cargo-merge -base <frame> -base-sha256 <hex> -add <frame> -add-sha256 <hex> -out <dir>")
+		return exitUsage
+	}
+	gate, err := stock.Gate()
+	if err != nil {
+		fmt.Fprintln(stderr, "cargo-merge:", err)
 		return exitUsage
 	}
 	baseFrame, err := os.ReadFile(*basePath)
@@ -166,14 +202,14 @@ func run(args []string, stdout, stderr io.Writer, log *slog.Logger) int {
 	if err != nil {
 		return refuse(stderr, log, err)
 	}
-	res, err := mergeExcluding(baseFrame, *baseSha, addFrame, *addSha, exclude)
+	res, err := mergeExcluding(baseFrame, *baseSha, addFrame, *addSha, exclude, scriptCheck(gate, *addBlobs, *allowUnchecked, log))
 	if err != nil {
 		return refuse(stderr, log, err)
 	}
 	if err := writeOnce(filepath.Join(*out, manifestName), res.Frame); err != nil {
 		return refuse(stderr, log, err)
 	}
-	line, err := json.Marshal(summary{Labels: res.Labels, ManifestSha256: res.Sha256, ManifestBytes: len(res.Frame), TextBytes: len(res.Text), Dropped: res.Dropped})
+	line, err := json.Marshal(summary{Labels: res.Labels, ManifestSha256: res.Sha256, ManifestBytes: len(res.Frame), TextBytes: len(res.Text), Dropped: res.Dropped, TablesUnchecked: res.TablesUnchecked})
 	if err != nil {
 		return refuse(stderr, log, err)
 	}
@@ -223,12 +259,17 @@ func framedText(frame []byte, pinned, which string) ([]byte, error) {
 
 // merge joins the two pinned frames into one manifest frame.
 func merge(baseFrame []byte, baseSha string, addFrame []byte, addSha string) (*mergeResult, error) {
-	return mergeExcluding(baseFrame, baseSha, addFrame, addSha, nil)
+	return mergeExcluding(baseFrame, baseSha, addFrame, addSha, nil, nil)
 }
 
+// addCheck reads the added manifest's labels, after exclusion and the move of the empties, and refuses the merge or lists
+// the level tables it could not read.
+type addCheck func(add *manifestIn) (tablesUnchecked []string, err error)
+
 // mergeExcluding is merge with the types dropped from the added label: each of its entries of an excluded type is left
-// out of the merged text (the blobs are not the merge's to touch). The base's labels are never filtered.
-func mergeExcluding(baseFrame []byte, baseSha string, addFrame []byte, addSha string, exclude []string) (*mergeResult, error) {
+// out of the merged text (the blobs are not the merge's to touch). The base's labels are never filtered. A non-nil check
+// runs on the added labels as they will be merged (run passes the script_undelivered check; merge, a pure join, passes nil).
+func mergeExcluding(baseFrame []byte, baseSha string, addFrame []byte, addSha string, exclude []string, check addCheck) (*mergeResult, error) {
 	baseText, err := framedText(baseFrame, baseSha, "base")
 	if err != nil {
 		return nil, err
@@ -252,6 +293,12 @@ func mergeExcluding(baseFrame []byte, baseSha string, addFrame []byte, addSha st
 		return nil, err
 	}
 	dropped := excludeEntries(&add, exclude)
+	var unchecked []string
+	if check != nil {
+		if unchecked, err = check(&add); err != nil {
+			return nil, err
+		}
+	}
 	if err := checkCollisions(base, add); err != nil {
 		return nil, err
 	}
@@ -263,7 +310,7 @@ func mergeExcluding(baseFrame []byte, baseSha string, addFrame []byte, addSha st
 	if err != nil {
 		return nil, fmt.Errorf("manifest frame: %w", err)
 	}
-	return &mergeResult{Frame: frame, Sha256: sha256Hex(frame), Text: text, Labels: reports, Dropped: dropped}, nil
+	return &mergeResult{Frame: frame, Sha256: sha256Hex(frame), Text: text, Labels: reports, Dropped: dropped, TablesUnchecked: unchecked}, nil
 }
 
 // excludeEntries drops the entries of the excluded types from the added manifest's labels, and counts them per type. Every
@@ -364,11 +411,13 @@ func parseLabels(dec *json.Decoder) ([]labelIn, error) {
 	return labels, nil
 }
 
-// parseLabelBody reads a label's entries and its own empty records. Any other key is refused.
+// parseLabelBody reads a label's entries, its own empty records and its `scripts` list. Any other key is refused, and so is a
+// list entry with another key, with no platform or with a name that is not 0x and hex: the list is never read as empty.
 func parseLabelBody(l *labelIn) error {
 	var body struct {
 		Entries []json.RawMessage `json:"entries"`
 		Empty   []emptyDoc        `json:"empty"`
+		Scripts []json.RawMessage `json:"scripts"`
 	}
 	d := json.NewDecoder(bytes.NewReader(l.raw))
 	d.DisallowUnknownFields()
@@ -389,6 +438,23 @@ func parseLabelBody(l *labelIn) error {
 		}
 	}
 	l.empty = body.Empty
+	for _, raw := range body.Scripts {
+		var s scriptEntry
+		d := json.NewDecoder(bytes.NewReader(raw))
+		d.DisallowUnknownFields()
+		if err := d.Decode(&s); err != nil {
+			return fmt.Errorf("scripts entry: %w", err)
+		}
+		name, err := scriptgate.ParseHex(s.Name)
+		if err != nil {
+			return fmt.Errorf("scripts entry %s: name: %w", s.Name, err)
+		}
+		if s.Platform == "" {
+			return fmt.Errorf("scripts entry %s has no platform", s.Name)
+		}
+		l.listed = append(l.listed, scriptgate.Listed{Platform: s.Platform, Name: name})
+	}
+	l.scripts = body.Scripts
 	return nil
 }
 
@@ -521,7 +587,8 @@ func encodeMerged(base, add manifestIn) ([]byte, []labelReport, error) {
 	return text, reports, nil
 }
 
-// encodeLabel writes an added label: its entries as they were, and its empty records when it has any.
+// encodeLabel writes an added label: its entries as they were, its empty records when it has any, and its `scripts` list when
+// it has one (the list the script check read, so the merged label delivers what the check counted on).
 func encodeLabel(l labelIn) ([]byte, error) {
 	entries := l.entries
 	if entries == nil {
@@ -539,6 +606,13 @@ func encodeLabel(l labelIn) ([]byte, error) {
 			return nil, err
 		}
 		fmt.Fprintf(&b, `,"%s":%s`, keyEmpty, em)
+	}
+	if len(l.scripts) > 0 {
+		sc, err := json.Marshal(l.scripts)
+		if err != nil {
+			return nil, err
+		}
+		fmt.Fprintf(&b, `,"%s":%s`, keyScripts, sc)
 	}
 	b.WriteByte('}')
 	return b.Bytes(), nil

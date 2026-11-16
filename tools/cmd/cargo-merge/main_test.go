@@ -33,6 +33,11 @@ const (
 	// baseLabelEntries is the number of entries lobby_posters holds in the production manifest.
 	baseLabelEntries = 11
 	hexDigits        = 64
+	// scriptRecordType is CScriptResource: the combat label's script records are undelivered (no stock set, no scripts list), so a
+	// run over the real manifest drops them to pass the script_undelivered check. Its level tables' blobs are not in testdata,
+	// so the run also passes allowUnchecked (-allow-unchecked-tables).
+	scriptRecordType = "0x991421b41de58370"
+	allowUnchecked   = "-allow-unchecked-tables"
 	badSha           = "0000000000000000000000000000000000000000000000000000000000000000"
 )
 
@@ -251,7 +256,7 @@ func TestRunWritesTheManifestAndPrintsItsSha(t *testing.T) {
 	t.Parallel()
 	out := filepath.Join(t.TempDir(), "merged")
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"-base", prodFile, "-base-sha256", prodSha, "-add", combatFile, "-add-sha256", combatSha, "-out", out},
+	code := run([]string{"-base", prodFile, "-base-sha256", prodSha, "-add", combatFile, "-add-sha256", combatSha, "-exclude-type", scriptRecordType, allowUnchecked, "-out", out},
 		&stdout, &stderr, quiet())
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr.String())
@@ -344,7 +349,7 @@ func entryTypes(t *testing.T, text []byte, label string) map[string]int {
 
 func TestExcludeTypeDropsItsEntriesFromTheMergedLabel(t *testing.T) {
 	t.Parallel()
-	res, err := mergeExcluding(readFile(t, prodFile), prodSha, readFile(t, combatFile), combatSha, []string{scriptImageType})
+	res, err := mergeExcluding(readFile(t, prodFile), prodSha, readFile(t, combatFile), combatSha, []string{scriptImageType}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +388,7 @@ func TestExcludeTypeLeavesTheBaseLabelAlone(t *testing.T) {
 	t.Parallel()
 	baseFrame := readFile(t, prodFile)
 	// 0x489bb35d53ca50e9 is the Quest payload type of lobby_posters: the exclusion is for the merged-in label only.
-	res, err := mergeExcluding(baseFrame, prodSha, readFile(t, combatFile), combatSha, []string{"0x489bb35d53ca50e9"})
+	res, err := mergeExcluding(baseFrame, prodSha, readFile(t, combatFile), combatSha, []string{"0x489bb35d53ca50e9"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +407,7 @@ func TestExcludeTypeLeavesTheBaseLabelAlone(t *testing.T) {
 func TestExcludeTypeIsRepeatableAndCountsEveryTypeNamed(t *testing.T) {
 	t.Parallel()
 	absent := "0x0000000000000001"
-	res, err := mergeExcluding(readFile(t, prodFile), prodSha, readFile(t, combatFile), combatSha, []string{scriptImageType, absent})
+	res, err := mergeExcluding(readFile(t, prodFile), prodSha, readFile(t, combatFile), combatSha, []string{scriptImageType, absent}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +421,7 @@ func TestRunPrintsTheDroppedCountsPerType(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "merged")
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"-base", prodFile, "-base-sha256", prodSha, "-add", combatFile, "-add-sha256", combatSha,
-		"-exclude-type", scriptImageType, "-out", out}, &stdout, &stderr, quiet())
+		"-exclude-type", scriptImageType, "-exclude-type", scriptRecordType, allowUnchecked, "-out", out}, &stdout, &stderr, quiet())
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr.String())
 	}

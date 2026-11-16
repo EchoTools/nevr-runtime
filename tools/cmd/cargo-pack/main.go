@@ -3,8 +3,14 @@
 // (the lobby posters). cargo-extract does the same for the game's own packages; the frames and the manifest are the same
 // shape, so cargo-publish sends either.
 //
-//	cargo-pack -spec <spec.json> -out <dir> -max-window <bytes>
-//	cargo-pack -content-pack <dir> -label <label> -platform <platform> -out <dir> -max-window <bytes>
+//	cargo-pack -spec <spec.json> -out <dir> -max-window <bytes> [-stock-data <dir> -stock-set <id>...]
+//	cargo-pack -content-pack <dir> -label <label> -platform <platform> -out <dir> -max-window <bytes> [-stock-data <dir> -stock-set <id>...]
+//
+// A label that names a script neither in the stock manifest (the sets -stock-data and -stock-set read) nor in its own
+// `scripts` list is refused as script_undelivered, naming the label, the script and the level (internal/scriptgate): a
+// CScriptResource record of any size, or a row of a level table d99f6bbd8009c92c. With no -stock-set no script is stock. A
+// label's `scripts` list is the pack's rekeys of its platform (-content-pack); a spec label has none. A list entry delivers its
+// script only to a record of the entry's own platform (scriptgate.Listed).
 //
 // The second form reads a content pack (docs/reference/content-packs.md: <dir> holds content.json, manifests/ and packages/)
 // as data and makes one label of the records the pack's own packages store: every record whose chunk is in a listed package
@@ -39,11 +45,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"sync"
 
 	"github.com/klauspost/compress/zstd"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/runlog"
+	"github.com/EchoTools/nevr-runtime/tools/internal/scriptgate"
 )
 
 const (
@@ -171,6 +179,7 @@ func run(args []string, stdout, stderr io.Writer, log *slog.Logger) int {
 	platformName := fs.String("platform", "", "the platform of the records of a content pack")
 	out := fs.String("out", "", "the output directory")
 	maxWindow := fs.Uint64("max-window", 0, "the largest zstd window a frame may ask for, in bytes")
+	stock := scriptgate.Register(fs)
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -179,9 +188,13 @@ func run(args []string, stdout, stderr io.Writer, log *slog.Logger) int {
 		fmt.Fprintln(stderr, "usage: cargo-pack -spec <spec.json> -out <dir> -max-window <bytes>\n       cargo-pack -content-pack <dir> -label <label> -platform <platform> -out <dir> -max-window <bytes>")
 		return exitUsage
 	}
+	gate, err := stock.Gate()
+	if err != nil {
+		fmt.Fprintln(stderr, "cargo-pack:", err)
+		return exitUsage
+	}
 	var recs []record
 	var scripts []scriptDoc
-	var err error
 	if bySpec {
 		recs, err = specRecords(*specPath)
 	} else {
@@ -192,7 +205,7 @@ func run(args []string, stdout, stderr io.Writer, log *slog.Logger) int {
 	}
 	var sum *summary
 	if err == nil {
-		sum, err = buildLabeled(recs, map[string][]scriptDoc{*label: scripts}, *out, *maxWindow, log)
+		sum, err = buildLabeled(recs, map[string][]scriptDoc{*label: scripts}, *out, *maxWindow, log, gate)
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, "cargo-pack:", err)
@@ -314,14 +327,72 @@ func specRecords(specPath string) ([]record, error) {
 	return recs, nil
 }
 
+// listedGate is gate with each label's `scripts` list added to what that label delivers (scriptgate.Gate.WithListed). An entry
+// whose name is not the manifest's 0x and hex is an error: the list is never read as empty.
+func listedGate(gate scriptgate.Gate, scripts map[string][]scriptDoc) (scriptgate.Gate, error) {
+	for label, list := range scripts {
+		entries := make([]scriptgate.Listed, 0, len(list))
+		for _, s := range list {
+			name, err := scriptgate.ParseHex(s.Name)
+			if err != nil {
+				return gate, fmt.Errorf("label %s: scripts entry %s: name: %w", label, s.Name, err)
+			}
+			entries = append(entries, scriptgate.Listed{Platform: s.Platform, Name: name})
+		}
+		gate = gate.WithListed(label, entries)
+	}
+	return gate, nil
+}
+
+// checkScripts refuses every label that names a script nothing delivers (scriptgate.Reason), all labels reported together.
+func checkScripts(recs []record, gate scriptgate.Gate, log *slog.Logger) error {
+	byLabel := map[string][]scriptgate.Record{}
+	var labels []string
+	for _, r := range recs {
+		typ, err := scriptgate.ParseHex(r.typ)
+		if err != nil {
+			return fmt.Errorf("%s %s: type: %w", r.typ, r.name, err)
+		}
+		name, err := scriptgate.ParseHex(r.name)
+		if err != nil {
+			return fmt.Errorf("%s %s: name: %w", r.typ, r.name, err)
+		}
+		if _, ok := byLabel[r.label]; !ok {
+			labels = append(labels, r.label)
+		}
+		data := r.data
+		if data == nil {
+			data = []byte{} // the bytes are known: a record of 0 bytes has no rows
+		}
+		byLabel[r.label] = append(byLabel[r.label], scriptgate.Record{Platform: r.platform, Type: typ, Name: name, Data: data})
+	}
+	sort.Strings(labels)
+	var refusals []error
+	for _, l := range labels {
+		res, err := gate.Check(l, byLabel[l])
+		if err != nil {
+			return err
+		}
+		if ref := scriptgate.Refusal(l, res.Undelivered); ref != nil {
+			refusals = append(refusals, ref)
+		}
+	}
+	if len(refusals) > 0 {
+		return errors.Join(refusals...)
+	}
+	log.Info("script gate passed", "labels", len(labels))
+	return nil
+}
+
 // build frames every record, checks the set whole, and only then writes the objects and the manifest frame.
-func build(recs []record, out string, maxWindow uint64, log *slog.Logger) (*summary, error) {
-	return buildLabeled(recs, nil, out, maxWindow, log)
+func build(recs []record, out string, maxWindow uint64, log *slog.Logger, gate scriptgate.Gate) (*summary, error) {
+	return buildLabeled(recs, nil, out, maxWindow, log, gate)
 }
 
 // buildLabeled is build with each label's `scripts` list (label -> entries): a list is written on its label's entry, and a label
-// with records is the only one it can name.
-func buildLabeled(recs []record, scripts map[string][]scriptDoc, out string, maxWindow uint64, log *slog.Logger) (*summary, error) {
+// with records is the only one it can name. Each list is also the label's own delivered scripts in the script check
+// (listedGate), so a record that names a script the label lists passes.
+func buildLabeled(recs []record, scripts map[string][]scriptDoc, out string, maxWindow uint64, log *slog.Logger, gate scriptgate.Gate) (*summary, error) {
 	type built struct {
 		doc   entryDoc
 		label string
@@ -345,6 +416,13 @@ func buildLabeled(recs []record, scripts map[string][]scriptDoc, out string, max
 			continue
 		}
 		todo = append(todo, r)
+	}
+	gate, err := listedGate(gate, scripts)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkScripts(recs, gate, log); err != nil {
+		return nil, err
 	}
 	fr, err := newFramer(maxWindow)
 	if err != nil {

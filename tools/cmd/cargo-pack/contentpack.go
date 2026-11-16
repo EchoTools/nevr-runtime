@@ -29,6 +29,11 @@ const (
 	maxContentJSON    = 1 << 20 // a content.json is a few KiB; a bound on a file read whole
 )
 
+// manifestHexPrefix goes before a rekey's 16-hex name and stock source in the label's `scripts` list: content.json writes the
+// script's file name (16 hex), the manifest a symbol as 0x and hex (src/cdn/cdn_format.h ParseHex64, which
+// src/cdn/cdn_manifest.cpp ReadScript applies to `name` and `stock_source`; a bare name is bad_script).
+const manifestHexPrefix = "0x"
+
 var (
 	scriptHex = regexp.MustCompile("^[0-9a-f]{16}$") // a script's name: the game's 16-hex file name
 	sha256Hex = regexp.MustCompile("^[0-9a-f]{64}$")
@@ -100,7 +105,8 @@ func readContentDoc(dir string) (contentDoc, error) {
 }
 
 // contentPackScripts is the label's `scripts` list: the pack's `rekeys` of the label's platform, each a copy the runtime makes
-// from a stock script on the player's machine (src/cdn/cdn_manifest.h). Only the entry is read; no script byte is in the pack
+// from a stock script on the player's machine (src/cdn/cdn_manifest.h). Its `name` and `stock_source` are written 0x and the 16 hex
+// (manifestHexPrefix). Only the entry is read; no script byte is in the pack
 // or in the set. An entry whose name or stock source is not 16 lowercase hex, whose stock_sha256 is not 64 lowercase hex, whose
 // copy is its own source, whose platform is unknown, or whose name is listed twice is refused. The list is sorted by name.
 func contentPackScripts(dir, label, platformName string, log *slog.Logger) ([]scriptDoc, error) {
@@ -131,7 +137,7 @@ func contentPackScripts(dir, label, platformName string, log *slog.Logger) ([]sc
 		}
 		seen[r.Name+r.Platform] = true
 		if r.Platform == platformName {
-			out = append(out, r)
+			out = append(out, scriptDoc{Name: manifestHexPrefix + r.Name, Platform: r.Platform, StockSource: manifestHexPrefix + r.StockSource, StockSha256: r.StockSha256})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

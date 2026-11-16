@@ -12,6 +12,8 @@ import (
 	"crypto/sha256"
 
 	"github.com/klauspost/compress/zstd"
+
+	"github.com/EchoTools/nevr-runtime/tools/internal/scriptgate"
 )
 
 const (
@@ -213,7 +215,7 @@ func packSpec(specPath, out string, window uint64) (*summary, error) {
 	if err != nil {
 		return nil, err
 	}
-	return build(recs, out, window, quiet())
+	return build(recs, out, window, quiet(), scriptgate.Gate{})
 }
 
 // emptyLabel is the part of a manifest this test reads: each label's entries and its empty records.

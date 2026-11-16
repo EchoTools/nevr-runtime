@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/EchoTools/nevr-runtime/tools/internal/radpack"
+	"github.com/EchoTools/nevr-runtime/tools/internal/scriptgate"
 )
 
 const (
@@ -127,7 +129,7 @@ func TestARecordOfZeroBytesIsListedAsEmptyAndHasNoObject(t *testing.T) {
 		{label: "l", platform: "windows-x86_64", typ: "0x0000000000000001", name: "0x0000000000000002", align: testAlign},
 	}
 	out := t.TempDir()
-	sum, err := build(recs, out, testWindow, quiet())
+	sum, err := build(recs, out, testWindow, quiet(), scriptgate.Gate{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +292,7 @@ func TestTheSameKeyOnTwoPlatformsIsTwoRecords(t *testing.T) {
 	r := record{label: "l", typ: "0x0000000000000001", name: "0x0000000000000001", align: testAlign, data: body(smallBytes, seedB)}
 	r2 := r
 	r2.platform, r.platform = "android-arm64", "windows-x86_64"
-	sum, err := build([]record{r, r2}, t.TempDir(), testWindow, quiet())
+	sum, err := build([]record{r, r2}, t.TempDir(), testWindow, quiet(), scriptgate.Gate{})
 	if err != nil || len(sum.Objects) != objectsOfTwoPlatforms {
 		t.Fatalf("objects = %v, err %v", sum, err)
 	}
@@ -409,7 +411,7 @@ func TestTheSameRecordInTwoSetsAtDifferentAlignmentsIsRefused(t *testing.T) {
 func TestAnAlignmentThatIsNotAPowerOfTwoIsRefusedInAPackToo(t *testing.T) {
 	for _, align := range []uint32{0, notPowerOfTwo, aboveMaxAlign} {
 		r := record{label: "l", platform: "windows-x86_64", typ: "0x0000000000000001", name: "0x0000000000000001", align: align, data: body(smallBytes, seedA)}
-		if _, err := build([]record{r}, t.TempDir(), testWindow, quiet()); err == nil {
+		if _, err := build([]record{r}, t.TempDir(), testWindow, quiet(), scriptgate.Gate{}); err == nil {
 			t.Errorf("alignment %d accepted", align)
 		}
 	}
@@ -461,6 +463,13 @@ func fixtureRekey(name, source, platformName string) scriptDoc {
 	return scriptDoc{Name: name, Platform: platformName, StockSource: source, StockSha256: shaOf([]byte("stock " + source))}
 }
 
+// listedRekey is fixtureRekey as the label's `scripts` list writes it: name and stock source are 0x and the 16 hex.
+func listedRekey(name, source, platformName string) scriptDoc {
+	r := fixtureRekey(name, source, platformName)
+	r.Name, r.StockSource = manifestHexPrefix+name, manifestHexPrefix+source
+	return r
+}
+
 // packedLabel runs cargo-pack over the pack and returns the manifest's label as written.
 func packedLabel(t *testing.T, dir, platformName string) (labelDoc, int) {
 	t.Helper()
@@ -490,7 +499,7 @@ func TestARekeyOfThePackIsTheLabelsScriptsListWithItsSha256AndNoScriptByte(t *te
 	dir := makePack(t, nil)
 	withRekeys(t, dir, []scriptDoc{fixtureRekey(otherCopy, otherSource, "windows-x86_64"), fixtureRekey(copyName, copySource, "windows-x86_64")})
 	label, blobs := packedLabel(t, dir, "windows-x86_64")
-	want := []scriptDoc{fixtureRekey(copyName, copySource, "windows-x86_64"), fixtureRekey(otherCopy, otherSource, "windows-x86_64")}
+	want := []scriptDoc{listedRekey(copyName, copySource, "windows-x86_64"), listedRekey(otherCopy, otherSource, "windows-x86_64")}
 	if len(label.Scripts) != len(want) || label.Scripts[0] != want[0] || label.Scripts[1] != want[1] {
 		t.Fatalf("label scripts = %+v, want %+v (sorted by name, each with the sha-256 of its stock source)", label.Scripts, want)
 	}
@@ -530,6 +539,47 @@ func TestAMalformedRekeyIsRefused(t *testing.T) {
 		withRekeys(t, dir, list)
 		if _, err := contentPackScripts(dir, "combat_content", "windows-x86_64", quiet()); err == nil {
 			t.Errorf("%s: the rekey was read", what)
+		}
+	}
+}
+
+// The `scripts` list cargo-pack writes is, byte for byte, the form the runtime's parser accepts (src/cdn/cdn_manifest.cpp
+// ReadScript): exactly the keys kScriptKeys names, in this order; `name` and `stock_source` through ParseHex64
+// (src/cdn/cdn_format.h: "0x" then lowercase hex digits, at most 16; src/quest/tests/cdn_manifest_test.cpp refuses a bare
+// name as bad_script); `stock_sha256` through IsSha256Hex (64 lowercase hex); a name that is not its own stock source.
+func TestTheScriptsListIsTheFormTheRuntimeParses(t *testing.T) {
+	dir := makePack(t, nil)
+	withRekeys(t, dir, []scriptDoc{fixtureRekey(copyName, copySource, "windows-x86_64")})
+	out := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"-content-pack", dir, "-label", "combat_content", "-platform", "windows-x86_64", "-out", out, "-max-window", fmt.Sprint(testWindow)}, &stdout, &stderr, quiet()); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	mframe, err := os.ReadFile(filepath.Join(out, manifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var top struct {
+		Labels map[string]struct {
+			Scripts json.RawMessage `json:"scripts"`
+		} `json:"labels"`
+	}
+	if err := json.Unmarshal(decode(t, mframe), &top); err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"name":"0x00000000000000c1","platform":"windows-x86_64","stock_source":"0x190ed14fe6c74dd3","stock_sha256":"` +
+		shaOf([]byte("stock "+copySource)) + `"}]`
+	if got := string(top.Labels["combat_content"].Scripts); got != want {
+		t.Fatalf("scripts list = %s\nwant          %s (the runtime's ReadScript form)", got, want)
+	}
+	symbol := regexp.MustCompile("^0x[0-9a-f]{1,16}$") // cdn_format.h ParseHex64
+	var list []map[string]string
+	if err := json.Unmarshal(top.Labels["combat_content"].Scripts, &list); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range list {
+		if !symbol.MatchString(e["name"]) || !symbol.MatchString(e["stock_source"]) || !sha256Hex.MatchString(e["stock_sha256"]) || e["name"] == e["stock_source"] {
+			t.Errorf("entry %v is not one ReadScript accepts", e)
 		}
 	}
 }
