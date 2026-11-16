@@ -43,17 +43,22 @@ var gunPatchTables = map[uint64]map[uint64]string{
 // The resources the registered steps change, counted from the step list: the per-level steps each change one table
 // per drone level (steps_drone.go: bullets, particle effects, scripts; steps_drone_health.go: the damageable table;
 // steps_dot_stick.go: the magazine table; steps_dot_constraints.go: the rigid-attach and parented-constraint tables;
-// steps_dot_damp.go: the dampener and transform tables),
+// steps_dot_damp.go: the dampener and transform tables; steps_dot_field.go: the model and transform tables, of which the
+// transform table is the one steps_dot_damp.go already changes, so it is one resource, counted once),
 // steps_equipment.go changes the one mp_equipment resource, steps_dot_preset.go the one mp_weapon_settings
 // resource, and steps_rules_terminal.go the one RULES canvas, in whichever client set lists it.
-// (5 + 2 + 2) x 5 + 1 + 1 + 1 = 48, over both client sets.
+// (5 + 2 + 2 + 2 - 1) x 5 + 1 + 1 + 1 = 53, over both client sets.
 // The count covers every step, so a step that changes a resource it does not name fails here; what each data step
 // writes into its own tables is checked by that step's own test, and the gun patch's files by gunPatchTables above.
 const (
 	levelTableSteps     = 5
 	dotConstraintTables = 2 // steps_dot_constraints.go: the DOT magazine's rigid-attach and parented-constraint rows
 	dotDampTables       = 2 // steps_dot_damp.go: the DOT actor's CR15DampenerCR row and CTransformCR rows
-	equipmentResources  = 1
+	dotFieldTables      = 2 // steps_dot_field.go: the FIELD's CModelCRWin10 records and its CTransformCRWin10 row
+	// steps_dot_field.go's transform table is steps_dot_damp.go's CTransformCR table: both steps change it, and a
+	// resource is counted once
+	dotFieldTablesSharedWithDamp = 1
+	equipmentResources           = 1
 	// steps_dot_preset.go: the DOT FIELD's three activation booleans in mp_weapon_settings, which the gun patch's files
 	// do not cover
 	weaponSettingsResources = 1
@@ -112,9 +117,10 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 	for _, setID := range Sets {
 		changed += len(p.changes[setID])
 	}
-	if want := (levelTableSteps+dotConstraintTables+dotDampTables)*len(droneLevels) + equipmentResources + weaponSettingsResources + rulesCanvasResources; changed != want {
-		t.Errorf("%d resources changed, want %d (%d level tables + %d DOT constraint tables + %d DOT dampener tables, x %d levels, mp_equipment, mp_weapon_settings, and the RULES canvas)", changed,
-			want, levelTableSteps, dotConstraintTables, dotDampTables, len(droneLevels))
+	levelTables := levelTableSteps + dotConstraintTables + dotDampTables + dotFieldTables - dotFieldTablesSharedWithDamp
+	if want := levelTables*len(droneLevels) + equipmentResources + weaponSettingsResources + rulesCanvasResources; changed != want {
+		t.Errorf("%d resources changed, want %d (%d level tables + %d DOT constraint tables + %d DOT dampener tables + %d DOT FIELD tables - %d shared, x %d levels, mp_equipment, mp_weapon_settings, and the RULES canvas)", changed,
+			want, levelTableSteps, dotConstraintTables, dotDampTables, dotFieldTables, dotFieldTablesSharedWithDamp, len(droneLevels))
 	}
 	t.Log(fmt.Sprintf("%d resources match the gun patch's", len(p.changes[Sets[0]])))
 }

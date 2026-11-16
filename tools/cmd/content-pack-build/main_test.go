@@ -225,6 +225,10 @@ func TestTheProductionStepsAreTheEchoCombatOnesInOrder(t *testing.T) {
 		"DOT FIELD magazine drops its leftover rigid-attach rows",
 		"DOT FIELD magazine drops its leftover parented-constraint rows",
 		"DOT FIELD dampener starts off and its nodes sit at the origin",
+		// steps_dot_field.go after steps_dot_damp.go: the files' init functions run in file-name order, and the dampener
+		// step refuses the FIELD transform row the second step appends.
+		"DOT FIELD red bubble: model records",
+		"DOT FIELD red bubble: transform records",
 		"DOT FIELD arms by remote trigger, not on impact",
 		"drone bullet takes the assault bullet's effects",
 		"drone bullet gets the assault bullet's particle rows",

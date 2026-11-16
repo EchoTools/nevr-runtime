@@ -32,8 +32,9 @@ import (
 //
 // Declared fields (Step.Writes, what the stage82 oracle compares for this step): in each level of droneLevels, the
 // CR15DampenerCR row of the DOT actor, its u32 at +0x18 and its two f32 at +0x20 and +0x24 (readDotDampener); and the
-// CTransformCR rows of the DOT actor, the three f32 at +0x30 of each, in table order (readDotTranslations). Every other
-// byte of both tables is the stock one. Base: stock rows (the tool reads his extract root; whether that root is stock
+// CTransformCR rows of the DOT actor but its FIELD row (steps_dot_field.go's), the three f32 at +0x30 of each, in
+// table order (readDotTranslations). This step
+// leaves every other byte of both tables as it was. Base: stock rows (the tool reads his extract root; whether that root is stock
 // or his gun patch for these two tables is S-BASE's question, PLAN-v5 4.4, and no gun-patch value is imported here).
 const (
 	dampenerTable = 0x2b292830e51c4fd2 // CSymbol64("CR15DampenerCRWin10")
@@ -124,7 +125,8 @@ func readDotDampener(b []byte) ([]byte, error) {
 }
 
 // readDotTranslations is the transform step's declared field: the three translation f32 at +0x30 of every DOT row, in
-// table order.
+// table order, but the DOT FIELD row steps_dot_field.go appends after this step (isFieldRow): that row keeps the arc
+// bubble's translation, and it is that step's declared field (readFieldTransform), not this one's.
 func readDotTranslations(b []byte) ([]byte, error) {
 	t, err := radpack.ParseRowTable(b)
 	if err != nil {
@@ -135,7 +137,7 @@ func readDotTranslations(b []byte) ([]byte, error) {
 	}
 	var out []byte
 	for _, r := range t.Rows {
-		if radpack.U64(r, keyOff) == dotMagazineActor {
+		if radpack.U64(r, keyOff) == dotMagazineActor && !isFieldRow(r) {
 			out = append(out, r[transformMoveOff:transformMoveEnd]...)
 		}
 	}
