@@ -17,6 +17,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -708,6 +710,29 @@ func TestLivePrefixPutsBlobsAtTheRootAndManifestsUnderV1(t *testing.T) {
 	}
 	for k := range want {
 		t.Errorf("missing key %s", k)
+	}
+}
+
+func TestKeySetPerPrefix(t *testing.T) {
+	dir, frame := writeSet(t, [][]byte{[]byte("alpha")})
+	blob := blobsDir + sha256Hex(zstdFrame(t, []byte("alpha")))
+	cases := map[string][]string{
+		livePrefix: {blob, "v1/manifest.json.zst", manifestsKeyDir + sha256Hex(frame) + manifestFrameExt},
+		"v2/":      {blob, "v2/manifest.json.zst", "v2/manifests/" + sha256Hex(frame) + manifestFrameExt},
+	}
+	for prefix, want := range cases {
+		p, err := buildPlan(dir, prefix)
+		if err != nil {
+			t.Fatalf("%s: %v", prefix, err)
+		}
+		var got []string
+		for _, o := range p.Objects {
+			got = append(got, o.Key)
+		}
+		sort.Strings(want)
+		if !slices.Equal(got, want) {
+			t.Errorf("prefix %s: keys = %v, want %v", prefix, got, want)
+		}
 	}
 }
 

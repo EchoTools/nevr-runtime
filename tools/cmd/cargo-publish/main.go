@@ -15,7 +15,8 @@
 //
 // Blobs are written at <prefix>blobs/sha256/<hex>, except under the prefix v1/ (the layout of a client with the default
 // base URL, docs/adr/0045-cdn-texture-delivery.md decision 5): there the blobs are at blobs/sha256/<hex> in the bucket root and
-// the manifests at v1/manifests/<sha> and v1/manifest.json.zst. Every blob is sent first, then the by-hash manifest, then
+// the manifests at v1/manifests/<sha> and v1/manifest.json.zst. The prefix v2/ (the manifest of labels that carry scripts)
+// shares those same root blobs and writes v2/manifests/<sha>.json.zst and v2/manifest.json.zst; v1 keys are never written under it. Every blob is sent first, then the by-hash manifest, then
 // <prefix>manifest.json.zst, and an error stops the later phases.
 //
 // Every read whose answer decides a write or proves one goes to the bucket through the S3 API on the endpoint, signed like
@@ -81,7 +82,9 @@ const (
 	plainManifestName = "manifest.json"
 	manifestFrameName = "manifest.json.zst"
 	manifestsKeyDir   = "v1/manifests/"
+	manifestsKeyDirV2 = "v2/manifests/"
 	livePrefix        = "v1/"         // the ADR 0045 layout: blobs at the bucket root, manifests under v1/
+	livePrefixV2      = "v2/"         // the same layout for the schema whose labels carry scripts: shared blobs, manifests under v2/
 	stagingPrefix     = "v1-staging/" // a staging set stays whole under it: its by-hash manifest is kept at <prefix>manifests/
 	manifestFrameExt  = ".json.zst"
 	liveManifestKey   = "v1/manifest.json" // never written by this tool
@@ -252,18 +255,22 @@ func buildPlan(dir, prefix string) (plan, error) {
 	return p, nil
 }
 
-// blobBase is where a set's blobs go: under its prefix, except for the live prefix v1/, whose blobs are at the bucket root
+// blobBase is where a set's blobs go: under its prefix, except for the live prefixes v1/ and v2/, whose blobs are the one
+// shared, immutable set at the bucket root
 // (docs/adr/0045-cdn-texture-delivery.md decision 5: a client with the default base URL reads <base>blobs/sha256/<hex>).
 func blobBase(prefix string) string {
-	if prefix == livePrefix {
+	if prefix == livePrefix || prefix == livePrefixV2 {
 		return ""
 	}
 	return prefix
 }
 
-// manifestsDirFor is the folder the by-hash copy of the manifest goes to: the shared v1/manifests/, except for a set under
+// manifestsDirFor is the folder the by-hash copy of the manifest goes to: v2/manifests/ for the prefix v2/, else the shared v1/manifests/, except for a set under
 // the staging prefix, which writes nothing outside it (what reaches v1/ is a separate, deliberate publish).
 func manifestsDirFor(prefix string) string {
+	if prefix == livePrefixV2 {
+		return manifestsKeyDirV2
+	}
 	if strings.HasPrefix(prefix, stagingPrefix) {
 		return prefix + "manifests/"
 	}
