@@ -13,16 +13,17 @@ import (
 // tools/fix_dot_field.py (82ad7ba) gives the DOT magazine a visible field by copying the arc mine's arming bubble
 // (model component ARC_BUBBLE f775b4bf32c0bf2f, "fx_arc_mine", of actor ARC_ACTOR) onto the DOT as FIELD
 // (51b9f7653ecac7cb) of DOT_ACTOR, in each of the five combat levels (fix_dot_field.py:60-66, :253-262). This slice builds
-// two of its three record kinds; the texture-streaming record, the red model's files and its two red materials are
-// G-DOT-FIELD-2, and the script-image edits (the .rdata scene-set constant, the flag bytes, LINKS: fix_dot_field.py:189-233)
-// are H-DOTF, which this tool does not do.
+// two of its three record kinds; the texture-streaming record and the two red materials are steps_dot_field_texmat.go,
+// and the script-image edits (the .rdata scene-set constant, the flag bytes, LINKS: fix_dot_field.py:189-233) are
+// H-DOTF, which this tool does not do. The red model's own files are built by no step (KNOWN-WRONG #2242, see
+// steps_dot_field_texmat.go).
 //
 //  1. Model table (CModelCRWin10, fix_dot_field.py:140-166). The root has six arrays: the model records (+0 component,
 //     +8 actor), three bitsets, the per-model entries (+0 model asset, +0x10 component) and the per-model instances (+0
 //     component, +8 actor, +0x20 model asset, +0x30 component); records, entries and instances are parallel. The arc
 //     bubble's record, entry and instance are each copied to the end of their array with the component set to FIELD, the
-//     actor to DOT_ACTOR and the model asset to RED_MODEL (CSymbol64("fx_dot_field_bubble"), fix_dot_field.py:79; the
-//     asset is a copy of the arc's model that G-DOT-FIELD-2 makes), and the new model's bit in each bitset is the arc
+//     actor to DOT_ACTOR and the model asset to RED_MODEL (CSymbol64("fx_dot_field_bubble"), fix_dot_field.py:79; his
+//     tool makes the asset as a copy of the arc's model, which no step here does), and the new model's bit in each bitset is the arc
 //     bubble's (a bitset word is added when the new index passes the last word).
 //  2. Transform table (CTransformCRWin10, fix_dot_field.py:169-186, :256). A copy of the arc bubble's record is appended
 //     with the component set to FIELD, the actor (+8, and +0x58 where the arc's is there) to DOT_ACTOR, and its scale
@@ -136,25 +137,29 @@ func readFieldModel(b []byte) ([]byte, error) {
 }
 
 // readFieldTransform is the transform step's declared field: the one FIELD row of the DOT actor, whole.
-func readFieldTransform(b []byte) ([]byte, error) {
+func readFieldTransform(b []byte) ([]byte, error) { return readFieldRow(b, "transform") }
+
+// readFieldRow is the one FIELD row of the DOT actor, whole, of a row table of the named kind (the transform table here,
+// the texture-streaming table in steps_dot_field_texmat.go).
+func readFieldRow(b []byte, kind string) ([]byte, error) {
 	t, err := radpack.ParseRowTable(b)
 	if err != nil {
 		return nil, err
 	}
 	if t.Size < keyOff+u64Len {
-		return nil, fmt.Errorf("transform rows of %d bytes end before the actor at +%#x", t.Size, keyOff)
+		return nil, fmt.Errorf("%s rows of %d bytes end before the actor at +%#x", kind, t.Size, keyOff)
 	}
 	var row []byte
 	for i, r := range t.Rows {
 		if isFieldRow(r) {
 			if row != nil {
-				return nil, fmt.Errorf("two FIELD transform rows of the DOT actor (row %d is the second)", i)
+				return nil, fmt.Errorf("two FIELD %s rows of the DOT actor (row %d is the second)", kind, i)
 			}
 			row = r
 		}
 	}
 	if row == nil {
-		return nil, fmt.Errorf("no FIELD transform row of the DOT actor among %d", len(t.Rows))
+		return nil, fmt.Errorf("no FIELD %s row of the DOT actor among %d", kind, len(t.Rows))
 	}
 	return append([]byte(nil), row...), nil
 }

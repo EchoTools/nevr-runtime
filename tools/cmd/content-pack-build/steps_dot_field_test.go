@@ -375,7 +375,8 @@ func TestTheDOTFieldStepsChangeTheFiveCombatLevelsAndNoOther(t *testing.T) {
 	p := &Pack{sets: map[string]*radpack.Set{Sets[0]: s}, changes: map[string]map[radpack.Key][]byte{}, scripts: map[string][]byte{}}
 	ran := 0
 	for _, st := range steps {
-		if !strings.HasPrefix(st.Name, "DOT FIELD red bubble") {
+		// the model and transform steps only: steps_dot_field_texmat.go's two steps share the name's prefix
+		if st.Name != "DOT FIELD red bubble: model records" && st.Name != "DOT FIELD red bubble: transform records" {
 			continue
 		}
 		ran++

@@ -225,9 +225,10 @@ func TestAPlantedDifferenceInADeclaredFieldIsNamed(t *testing.T) {
 }
 
 // shippedFields: the three drone steps, the drone health step, the DOT stick step, the two DOT constraint steps, the two
-// DOT FIELD red bubble steps and the RULES label step declare one field each, the equipment step one per list, the DOT
-// preset step one per activation key (3), and the DOT dampener step one per table (2).
-const shippedFields = 17
+// DOT FIELD red bubble model and transform steps, its texture-streaming step and the RULES label step declare one field
+// each, the equipment step one per list, the DOT preset step one per activation key (3), the DOT dampener step one per
+// table (2), and the DOT FIELD red materials step one per material (2).
+const shippedFields = 20
 
 func TestTheDeclaredFieldsOfTheShippedStepsAreWellFormed(t *testing.T) {
 	t.Parallel()

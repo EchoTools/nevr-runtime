@@ -229,6 +229,9 @@ func TestTheProductionStepsAreTheEchoCombatOnesInOrder(t *testing.T) {
 		// step refuses the FIELD transform row the second step appends.
 		"DOT FIELD red bubble: model records",
 		"DOT FIELD red bubble: transform records",
+		// steps_dot_field_texmat.go after steps_dot_field.go, by file name
+		"DOT FIELD red bubble: materials",
+		"DOT FIELD red bubble: texture streaming records",
 		"DOT FIELD arms by remote trigger, not on impact",
 		"drone bullet takes the assault bullet's effects",
 		"drone bullet gets the assault bullet's particle rows",
