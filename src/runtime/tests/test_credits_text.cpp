@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "runtime/hook/near_alloc.h"
+#include "runtime/patch/credits_block.h"
 #include "runtime/patch/credits_text.h"
 
 namespace {
@@ -396,6 +397,18 @@ TEST(CreditsTextRecord, BuiltRecordCarriesTheCounts) {
   EXPECT_STREQ(out,
                "[NEVR.PATCH] credits_text built block_lines=8 block_bytes=60 longest_line=18 over_review=0 "
                "game_bytes=30091 total_bytes=30152 buffer=0x180001000");
+}
+
+// ---- the generated block (#938, D2): the combat assets heading lists he_is_the_cat ----
+
+TEST(CreditsTextIngame, CombatAssetsHeadingIsFollowedByHeTheCat) {
+  // The heading's line, a blank line, then its one name. A heading with no name shows nowhere, so
+  // this also holds the entry's heading id: removing it from credits.json removes this text.
+  const std::string text(nevr_credits_block::kText, nevr_credits_block::kSize);
+  const std::string heading = "COMBAT GEAR ART AND SOUND CC BY 4.0\n\n";
+  const std::size_t at = text.find(heading);
+  ASSERT_NE(at, std::string::npos) << text;
+  EXPECT_EQ(text.substr(at + heading.size(), std::strlen("he_is_the_cat")), "he_is_the_cat");
 }
 
 // ---- memory near the code (the real function, under Wine) ----

@@ -54,7 +54,7 @@ nEVR is a community project, built on other people's work and tested by the peop
 - **AvaGoosa**: Named in the thank-you strings of the Echo VR installer's patcher.
 - **Elominator**: Named in the thank-you strings of the Echo VR installer's patcher.
 - **h4ck3r210**: Named in the thank-you strings of the Echo VR installer's patcher.
-- **he_is_the_cat**: Named in the thank-you strings of the Echo VR installer's patcher. Tested nevr-runtime in #nevr-runtime-testing.
+- **he_is_the_cat**: Named in the thank-you strings of the Echo VR installer's patcher. Tested nevr-runtime in #nevr-runtime-testing. Authored the combat gear art and sound under CC BY 4.0 (the drone model, the umbral veil and point sounds, the voice lines, the HD icons and the Dyson combat map navigation data) and the EchoCombat code under MIT.
 - **sprockee**: Named in the thank-you strings of the Echo VR installer's patcher.
 
 Thank you to everyone in #nevr-runtime-testing, named or not.

@@ -146,6 +146,7 @@ class SharedFile(unittest.TestCase):
                 {"id": "code-contributions", "ingame": "CODE CONTRIBUTIONS",
                  "names": ["babs", "brysonak", "chinmayee5599", "Coastermaster77", "DC Coffey", "Dualgame", "Ducky",
                            "EchoCombat", "kfc", "marshmallow-mia", "MyGuyChromium", "Xenomega"]},
+                {"id": "combat-assets", "ingame": "COMBAT GEAR ART AND SOUND CC BY 4.0", "names": ["he_is_the_cat"]},
                 {"id": "thanks", "ingame": "THANKS", "names": THANKS},
                 {"id": "testers", "ingame": "TESTERS",
                  "names": ["arii", "berg", "Crafter", "CyanoTex", "DinkyBoi", "Grumpy", "he_is_the_cat",
@@ -241,7 +242,7 @@ class SharedFile(unittest.TestCase):
     def test_someone_under_another_heading_is_also_a_tester_if_they_tested(self):
         for name in ("marshmallow-mia", "Crafter", "Trodd-", "DinkyBoi", "berg", "zebra", "Nebula", "he_is_the_cat"):
             self.assertIn("testers", self.entry(name)["headings"], name)
-        self.assertEqual(self.entry("he_is_the_cat")["headings"], ["thanks", "testers"])
+        self.assertEqual(self.entry("he_is_the_cat")["headings"], ["thanks", "testers", "combat-assets"])
         self.assertEqual(self.entry("marshmallow-mia")["headings"], ["code-contributions", "testers"])
 
     def test_trodd_is_one_entry_shown_as_trodd_dash_under_people_and_testers(self):
@@ -550,6 +551,9 @@ class IngameText(unittest.TestCase):
             "DC Coffey   Dualgame   Ducky   EchoCombat\n"
             "kfc   marshmallow-mia   MyGuyChromium   Xenomega\n"
             "\n\n\n"
+            "COMBAT GEAR ART AND SOUND CC BY 4.0\n\n"
+            "he_is_the_cat\n"
+            "\n\n\n"
             "THANKS\n\n"
             "AvaGoosa   Elominator   h4ck3r210   he_is_the_cat\n"
             "marshmallow_mia   sprockee\n"
@@ -569,7 +573,7 @@ class IngameText(unittest.TestCase):
         )
         self.assertEqual(self.tool.ingame_text(self.data), expected.encode("cp1252"))
         self.assertTrue(expected.startswith("CODE CONTRIBUTIONS\n\nbabs   brysonak   chinmayee5599   Coastermaster77\n"))
-        self.assertEqual(expected.count("\n"), 36, "rows: 3 + 2 + 4 + 1 + 1 for the five groups; 8 + 7 + 9 + 6 + 6 lines")
+        self.assertEqual(expected.count("\n"), 42, "rows: 3 + 1 + 2 + 4 + 1 + 1 for the six groups; 8 + 6 + 7 + 9 + 6 + 6 lines")
 
     def test_groups_are_separated_by_three_blank_lines(self):
         data = self.data_with({"ONE": ["a", "b"], "TWO": ["c"]})

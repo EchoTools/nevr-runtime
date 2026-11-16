@@ -2,6 +2,7 @@
   "schema": 1,
   "headings": [
     {"id": "code-contributions", "ingame": "CODE CONTRIBUTIONS"},
+    {"id": "combat-assets", "ingame": "COMBAT GEAR ART AND SOUND CC BY 4.0"},
     {"id": "thanks", "ingame": "THANKS"},
     {"id": "testers", "ingame": "TESTERS"},
     {"id": "lounge-staff", "ingame": "ECHO VR LOUNGE STAFF"},
@@ -225,12 +226,14 @@
     {
       "name": "he_is_the_cat",
       "section": "thanks",
-      "headings": ["thanks", "testers"],
+      "headings": ["thanks", "testers", "combat-assets"],
       "link": "",
-      "what": "Named in the thank-you strings of the Echo VR installer's patcher. Tested nevr-runtime in #nevr-runtime-testing.",
+      "what": "Named in the thank-you strings of the Echo VR installer's patcher. Tested nevr-runtime in #nevr-runtime-testing. Authored the combat gear art and sound under CC BY 4.0 (the drone model, the umbral veil and point sounds, the voice lines, the HD icons and the Dyson combat map navigation data) and the EchoCombat code under MIT.",
       "sources": [
         "echoApkPatch credit strings",
-        "tested in #nevr-runtime-testing (Discord)"
+        "tested in #nevr-runtime-testing (Discord)",
+        "https://github.com/heisthecat31/EchoCombat",
+        "named by the project owner"
       ]
     },
     {
