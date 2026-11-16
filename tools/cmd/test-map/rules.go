@@ -123,4 +123,6 @@ var about = []string{
 	"A file's tests are its own, then those of each scanner whose globs match it. A test id is a target below, or",
 	"gtest:<binary> (just test-auth-unit <binary>), just:<recipe>, go:<package under tools/> (go -C tools test -count=1 ./<package>)",
 	"or pytest:<name> (tools/tests/<name>.py). {preset} in a target is the build preset, else mingw-release.",
+	"A land runs only the fast unit tests: the heavy ids (internal/testmap heavy.go) are listed and skipped by test-changed,",
+	"and run by test-changed -heavy.",
 }

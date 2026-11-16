@@ -544,7 +544,7 @@ whole suites among them (`just test-full`, `just verify`, `just test-tools` with
 binary) are the owner's alone.
 
 ```sh
-just test-changed             # The tests that cover this branch's change, from tools/test_map.json (-n: the plan only)
+just test-changed             # The fast unit tests that cover this branch's change, from tools/test_map.json (-n: the plan only; -heavy: the heavy suites too)
 just test-map                 # Write tools/test_map.json from the build trees (-check: compare, write nothing)
 just test-full                # The full suite: verify and the suites verify does not run (owner only)
 just test-auth-unit test_x    # Build and run the named GTest binaries only
@@ -845,8 +845,13 @@ your seat name, for example `claude-main` or `codex`.
   moved file is its old path and its new one), looks each path up in `tools/test_map.json` (the path, then the component
   of its directory, then that file's tests: the build, the GTest binaries that compile it, the Quest and scripting
   groups, the Go packages and pytest files that read it, the checks such as `verify_pe_contract.py` for
-  `src/runtime/host/`, and the scanners that read every file of its kind), and runs exactly those, one at a time, each printed with
-  its exit code (`tools/cmd/test-changed`). Quote its output, the plan lines and the summary, in the commit message. A
+  `src/runtime/host/`, and the scanners that read every file of its kind), and runs those that are fast unit tests, one at a
+  time, each printed with its exit code (`tools/cmd/test-changed`). A land runs the unit tests for the changed code and
+  finishes in about a minute: the heavy ids, which are the `just test-android` and `just test-quest-*` recipes and any
+  id whose fastest recorded run is over 10 s (`tools/internal/testmap/heavy.go`, the one place that says it), are not
+  run; each is printed as `skipped heavy <id>` with its fastest recorded time and the reason. `test-changed -heavy` runs
+  them too, for the runs that call for them; they stay in the map and the repo. The build step stays, because the gtests
+  read what it builds. Quote its output, the plan lines and the summary, in the commit message. A
   changed path the map does not cover fails the command, naming the path: the fix is `just test-map` run in the branch and
   the map it writes committed in the same branch. The map is written by `just test-map` (`tools/cmd/test-map`) from the
   build trees, never by hand: the mingw-release, quest-host-<group>, android-arm64 and scripting trees, looked for in the

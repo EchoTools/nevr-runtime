@@ -1,6 +1,6 @@
 // Command test-changed runs the tests that cover a branch's change, and nothing else (AGENTS.md, "Builds"):
 //
-//	test-changed [-repo dir] [-map file] [-base origin/main] [-preset name] [-n]
+//	test-changed [-repo dir] [-map file] [-base origin/main] [-preset name] [-n] [-heavy]
 //
 // The change is what `git diff --name-only --no-renames -z $(git merge-base origin/main HEAD)` lists: the branch's commits
 // and its uncommitted edits to tracked files. --no-renames makes a file moved between two components show as a deletion
@@ -20,6 +20,11 @@
 // Every test runs from the checkout's top directory without DISPLAY and WAYLAND_DISPLAY (a GTest under Wine must not
 // reach the desktop) and with PRESET set to -preset (default $PRESET, else mingw-release), so the build and the tests
 // read one build tree. -n prints the plan and runs nothing.
+//
+// A land runs only the fast unit tests: an id testmap.Classify calls heavy (the Android and Quest suites, and any id whose
+// fastest recorded run is over testmap.HeavyBound) is left out of the run, and each one is printed as "skipped heavy"
+// with its fastest recorded time and the reason, and recorded in the plan. -heavy runs every selected id, heavy or not,
+// for the runs that call for them. The heavy set is internal/testmap's heavy.go, the one place that says it.
 //
 // Exit codes: 0 every test passed, or the change needs none; 1 a test failed; 2 a flag, git, the map or the results file is
 // wrong; 3 a changed path is not in the map; 127 a program a test starts is not on PATH; 130 interrupted between tests;
@@ -115,6 +120,7 @@ func run(ctx context.Context, args []string, env []string, stdout, stderr io.Wri
 	base := flags.String("base", "origin/main", "the ref whose merge-base with HEAD the change is measured from")
 	preset := flags.String("preset", "", "the build preset: {preset} in the map and PRESET for the tests (default $PRESET, else "+testmap.DefaultPreset+")")
 	dry := flags.Bool("n", false, "print the plan and run nothing")
+	heavy := flags.Bool("heavy", false, "run the heavy tests too (a land runs only the fast unit tests)")
 	if err := flags.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -129,7 +135,7 @@ func run(ctx context.Context, args []string, env []string, stdout, stderr io.Wri
 		*preset = testmap.DefaultPreset
 	}
 	return runlog.Invocation(tool, args, getenv, stderr, func(log *slog.Logger) int {
-		r := &runner{ctx: ctx, env: env, getenv: getenv, stdout: stdout, stderr: stderr, log: log, preset: *preset}
+		r := &runner{ctx: ctx, env: env, getenv: getenv, stdout: stdout, stderr: stderr, log: log, preset: *preset, heavy: *heavy}
 		return r.do(*repo, *mapFile, *base, *dry)
 	})
 }
@@ -142,6 +148,7 @@ type runner struct {
 	log            *slog.Logger
 	preset         string
 	repo           string
+	heavy          bool
 }
 
 func (r *runner) say(format string, a ...any) { fmt.Fprintf(r.stdout, tool+": "+format+"\n", a...) }
@@ -272,7 +279,20 @@ func (r *runner) do(repo, mapFile, base string, dry bool) int {
 		components = append(components, c.component)
 		all = append(all, c.tests...)
 	}
-	steps, err := r.plan(m, m.Order(all))
+	selected := m.Order(all)
+	var skipped []testmap.HeavyID
+	if !r.heavy {
+		var unit []string
+		if unit, skipped, err = testmap.SplitHeavy(selected); err != nil {
+			return r.fail(exitUsage, "%v", err)
+		}
+		selected = unit
+	}
+	for _, h := range skipped {
+		r.say("skipped heavy %s (%s): %s; run test-changed -heavy for it", h.ID, measuredText(h.Millis), h.Reason)
+		r.log.Info("skipped_heavy", "test", h.ID, "rule", h.Rule, "fastest_ms", h.Millis, "reason", h.Reason)
+	}
+	steps, err := r.plan(m, selected)
 	if err != nil {
 		return r.fail(exitUsage, "%v", err)
 	}
@@ -282,7 +302,11 @@ func (r *runner) do(repo, mapFile, base string, dry bool) int {
 	}
 	r.log.Info("plan", "base", base, "merge_base", mb, "paths", paths, "components", components, "tests", ids, "preset", r.preset)
 	if len(ids) == 0 {
-		r.say("no tests to run: no changed path's component has any")
+		if len(skipped) > 0 {
+			r.say("no tests to run: every test of the change is heavy (listed above)")
+		} else {
+			r.say("no tests to run: no changed path's component has any")
+		}
 		return 0
 	}
 	r.say("%d test(s), in this order: %s", len(ids), strings.Join(ids, " "))
@@ -302,6 +326,17 @@ func (r *runner) do(repo, mapFile, base string, dry bool) int {
 	}
 	return r.runSteps(steps, results)
 }
+
+// measuredText is a heavy id's fastest recorded run for the "skipped heavy" line.
+func measuredText(ms int64) string {
+	if ms <= 0 {
+		return "no run time kept"
+	}
+	return fmt.Sprintf("fastest run %.0f s", float64(ms)/millisPerSecond)
+}
+
+// millisPerSecond converts the run log's milliseconds to the seconds the line prints.
+const millisPerSecond = 1000
 
 // describe is what the map says about one path, for the plan's line.
 func describe(lk testmap.Lookup) string {

@@ -136,6 +136,7 @@ const testMap = `{"schema": 2,
  "components": [
   {"name": "src/a", "dir": "src/a", "files": {"src/a/x.cpp": ["build", "gtest:test_a", "gtest:test_b", "seams"]}},
   {"name": "tools", "dir": "tools", "files": {"tools/y.py": ["pytest:test_y", "go:cmd/x"], "tools/test_map.json": ["go:internal/testmap"]}},
+  {"name": "src/h", "dir": "src/h", "files": {"src/h/x.cpp": ["build", "gtest:test_h", "just:test-quest-foo", "just:test-android", "pytest:test_launch_client", "pytest:test_fast"]}},
   {"name": "src", "dir": "src", "files": {"src/old.cpp": ["gtest:test_old"]}},
   {"name": "docs", "dir": "docs", "none": {"docs/a.md": "no test reads it"}}
  ]}
@@ -215,6 +216,7 @@ func newFixture(t *testing.T) *fixture {
 	f.write("tools/test_map.json", testMap)
 	f.write("src/a/x.cpp", "x\n")
 	f.write("src/old.cpp", "old\n")
+	f.write("src/h/x.cpp", "h\n")
 	f.write("tools/y.py", "y\n")
 	f.write("docs/a.md", "a\n")
 	f.commit("base")
@@ -723,5 +725,87 @@ func TestABrokenMapOrABaseThatIsNotThereIsAUsageError(t *testing.T) {
 	f.write("tools/test_map.json", testMap)
 	if code, _, errs := f.run("-base", "origin/nothing"); code != exitUsage || !strings.Contains(errs, "git merge-base origin/nothing HEAD") {
 		t.Errorf("missing base: exit %d, stderr %s", code, errs)
+	}
+}
+
+// heavyChange makes the change of src/h/x.cpp, whose tests are one unit gtest, one unit pytest and four heavy ids.
+func heavyChange(f *fixture) {
+	f.write("src/h/x.cpp", "h2\n")
+	f.commit("change h")
+}
+
+func TestALandSkipsTheHeavyTestsAndListsEachWithItsTimeAndReason(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	heavyChange(f)
+	code, out, errs := f.run()
+	if code != 0 {
+		t.Fatalf("exit %d\n%s\n%s", code, out, errs)
+	}
+	want := []string{
+		"just build",
+		"just test-auth-unit test_h",
+		"python3 tools/run_tool_tests.py tools/tests/test_fast.py",
+	}
+	if got := f.calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("calls = %q\nwant %q", got, want)
+	}
+	for _, line := range []string{
+		"skipped heavy just:test-android (fastest run 3 s): it builds and runs the Android or Quest toolchain",
+		"skipped heavy just:test-quest-foo (no run time kept): it builds and runs the Android or Quest toolchain",
+		"skipped heavy pytest:test_launch_client (fastest run 31 s): its fastest recorded run is over the 10 s bound of a land test",
+	} {
+		if !strings.Contains(out, line) {
+			t.Errorf("output lacks %q:\n%s", line, out)
+		}
+	}
+	if !strings.Contains(out, "3 test(s), in this order: build gtest:test_h pytest:test_fast") {
+		t.Errorf("the plan line names a heavy test or is missing:\n%s", out)
+	}
+	skipped := 0
+	for _, r := range testkit.RunLogRecords(t, f.env, tool) {
+		if r["event"] == "skipped_heavy" {
+			skipped++
+		}
+	}
+	if skipped != 3 {
+		t.Errorf("the run log has %d skipped_heavy records, want 3", skipped)
+	}
+}
+
+func TestTheHeavyFlagRunsTheHeavyTestsToo(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	heavyChange(f)
+	code, out, errs := f.run("-heavy")
+	if code != 0 {
+		t.Fatalf("exit %d\n%s\n%s", code, out, errs)
+	}
+	want := []string{
+		"just build",
+		"just test-auth-unit test_h",
+		"just test-android",
+		"just test-quest-foo",
+		"python3 tools/run_tool_tests.py tools/tests/test_fast.py",
+		"python3 tools/run_tool_tests.py tools/tests/test_launch_client.py",
+	}
+	if got := f.calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("calls = %q\nwant %q", got, want)
+	}
+	if strings.Contains(out, "skipped heavy") {
+		t.Errorf("-heavy skipped a test:\n%s", out)
+	}
+}
+
+func TestADryRunNamesTheSkippedHeavyTestsAndRunsNothing(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	heavyChange(f)
+	code, out, _ := f.run("-n")
+	if code != 0 || !strings.Contains(out, "skipped heavy just:test-android") {
+		t.Errorf("exit %d, output:\n%s", code, out)
+	}
+	if got := f.calls(); len(got) != 0 {
+		t.Errorf("-n ran %q", got)
 	}
 }

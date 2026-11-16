@@ -821,3 +821,25 @@ func TestBuildMapOneComponentPerDirectoryAndNoTestNoReasonIsExit1(t *testing.T) 
 		t.Errorf("a file with no test and no reason: %v, want a failure with exit %d", err, exitUncovered)
 	}
 }
+
+// A map whose heavy measurements name an id it cannot run is not written: the generator stops with the cause, so a test
+// that was deleted or renamed cannot leave a stale heavy entry behind. This test swaps the package's list, so it does
+// not run in parallel with the others.
+func TestAStaleHeavyMeasurementStopsTheGenerator(t *testing.T) {
+	saved := testmap.Measured
+	t.Cleanup(func() { testmap.Measured = saved })
+	testmap.Measured = append(append([]testmap.Measurement(nil), saved...), testmap.Measurement{ID: "pytest:", Millis: testmap.HeavyBound.Milliseconds() + 1})
+	f := newFixture(t)
+	f.write("docs/x.md", "")
+	f.track()
+	code, _, stderr := f.run()
+	if code != exitCannotMake {
+		t.Fatalf("exit %d, want %d: %s", code, exitCannotMake, stderr)
+	}
+	if !strings.Contains(stderr, `heavy measurement "pytest:"`) {
+		t.Errorf("stderr does not name the entry: %q", stderr)
+	}
+	if _, err := os.Stat(f.out); err == nil {
+		t.Errorf("the generator wrote %s although it refused", f.out)
+	}
+}

@@ -185,6 +185,9 @@ func (g *generator) do() int {
 	if err != nil {
 		return g.fail(err)
 	}
+	if err := testmap.Validate(mp, testmap.Measured); err != nil {
+		return g.fail(err)
+	}
 	var buf bytes.Buffer
 	if err := testmap.Encode(&buf, mp); err != nil {
 		return g.fail(err)
