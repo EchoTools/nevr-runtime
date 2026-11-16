@@ -42,12 +42,14 @@ var gunPatchTables = map[uint64]map[uint64]string{
 
 // The resources the registered steps change, counted from the step list: the per-level steps each change one table
 // per drone level (steps_drone.go: bullets, particle effects, scripts; steps_drone_health.go: the damageable table;
-// steps_dot_stick.go: the magazine table), and steps_equipment.go changes the one mp_equipment resource. 5 x 5 + 1 = 26.
+// steps_dot_stick.go: the magazine table; steps_dot_constraints.go: the rigid-attach and parented-constraint tables),
+// and steps_equipment.go changes the one mp_equipment resource. (5 + 2) x 5 + 1 = 36.
 // The count covers every step, so a step that changes a resource it does not name fails here; what each data step
 // writes into its own tables is checked by that step's own test, and the gun patch's files by gunPatchTables above.
 const (
-	levelTableSteps    = 5
-	equipmentResources = 1
+	levelTableSteps     = 5
+	dotConstraintTables = 2 // steps_dot_constraints.go: the DOT magazine's rigid-attach and parented-constraint rows
+	equipmentResources  = 1
 )
 
 func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testing.T) {
@@ -79,9 +81,9 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 			}
 		}
 	}
-	if n, want := len(p.changes[Sets[0]]), levelTableSteps*len(droneLevels)+equipmentResources; n != want {
-		t.Errorf("%d resources changed, want %d (%d level tables x %d levels, and mp_equipment)", n, want,
-			levelTableSteps, len(droneLevels))
+	if n, want := len(p.changes[Sets[0]]), (levelTableSteps+dotConstraintTables)*len(droneLevels)+equipmentResources; n != want {
+		t.Errorf("%d resources changed, want %d (%d level tables + %d DOT constraint tables, x %d levels, and mp_equipment)", n,
+			want, levelTableSteps, dotConstraintTables, len(droneLevels))
 	}
 	t.Log(fmt.Sprintf("%d resources match the gun patch's", len(p.changes[Sets[0]])))
 }
