@@ -239,6 +239,7 @@ set(PATCHES_SOURCES
     "${CMAKE_SOURCE_DIR}/src/cdn/cdn_validate.cpp"
     "${CMAKE_SOURCE_DIR}/src/cdn/cdn_manifest.cpp"
     "${CMAKE_SOURCE_DIR}/src/cdn/cdn_plan.cpp"
+    "${CMAKE_SOURCE_DIR}/src/cdn/cdn_script_gate.cpp"
     "${CMAKE_SOURCE_DIR}/src/cdn/cdn_store.cpp"
     "${CMAKE_SOURCE_DIR}/src/cdn/cdn_run.cpp"
     "${CMAKE_SOURCE_DIR}/src/cdn/cdn_prefetch.cpp"
@@ -560,7 +561,7 @@ set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp P
 # The CDN core and its PC Env: the core includes no windows.h, and env_windows.cpp and windows_map_fs.cpp define NOMINMAX themselves, so
 # neither takes the PCH.
 set_source_files_properties(${CMAKE_SOURCE_DIR}/src/cdn/cdn_limits.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_validate.cpp
-  ${CMAKE_SOURCE_DIR}/src/cdn/cdn_manifest.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_plan.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_store.cpp
+  ${CMAKE_SOURCE_DIR}/src/cdn/cdn_manifest.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_plan.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_script_gate.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_store.cpp
   ${CMAKE_SOURCE_DIR}/src/cdn/cdn_run.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_prefetch.cpp ${CMAKE_SOURCE_DIR}/src/cdn/cdn_resolver.cpp
   ${CMAKE_SOURCE_DIR}/src/cdn/cdn_service.cpp ${CMAKE_SOURCE_DIR}/src/cdn/env_windows.cpp
   ${CMAKE_SOURCE_DIR}/src/cdn/windows_map_fs.cpp

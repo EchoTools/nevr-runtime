@@ -15,6 +15,7 @@
 #include "cdn/cdn_env.h"
 #include "cdn/cdn_manifest.h"
 #include "cdn/cdn_plan.h"
+#include "cdn/cdn_script_gate.h"
 #include "cdn/cdn_store.h"
 
 namespace nevr_cdn {
@@ -43,6 +44,13 @@ struct RunConfig {
   // (cdn/cdn_prefetch.h), one after another, and ends at the first object that cannot be had, so a caller that waits for it knows the
   // store is whole when RunResult::stopped is empty and `failed` is 0. Off: the background fetch, which counts a failed object and goes on.
   bool first_run = false;
+  // The game's script folder with its trailing separator (`<exe dir>\scripts\` on the PC): the script gate (cdn_script_gate.h) asks it
+  // whether a script a label names is on disk, before both mounts. Empty (the Quest's): the gate is not applied and one
+  // `cdn_scripts_gate result=off reason=no_script_dir` is written for each half that mounts.
+  std::string script_dir;
+  // Runs before the gate, for the manifest of each mount: it registers the `scripts` copies of every label and reports what it
+  // held and refused (cdn_script_gate.h). Unset: nothing is held and nothing is refused.
+  ScriptRegistrar registrar;
 };
 
 // Receives a mounted set. The set is never freed by the worker: a request being filled from its shadow must stay valid.

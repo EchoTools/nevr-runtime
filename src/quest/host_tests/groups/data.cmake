@@ -37,7 +37,7 @@ nevr_ht_test(pack_test GROUP data HOST TIMEOUT 300 ENV ${_data_env}
 # The CDN texture delivery (docs/adr/0045-cdn-texture-delivery.md): the shared pure core in src/cdn (and the shadow builder in src/core), built here as the sentinel builds
 # it (no exceptions; nlohmann::json is used through its non-throwing calls only).
 nevr_ht_obj(o_cdn_resource_shadow GROUP data NOEXC HOST SRC src/core/resource_shadow.cpp)
-foreach(f cdn_limits cdn_validate cdn_manifest cdn_plan cdn_store cdn_run cdn_resolver cdn_service)
+foreach(f cdn_limits cdn_validate cdn_manifest cdn_plan cdn_script_gate cdn_store cdn_run cdn_resolver cdn_service)
   nevr_ht_obj(o_cdn_${f} GROUP data NOEXC HOST SRC src/cdn/${f}.cpp)
 endforeach()
 nevr_ht_test(resource_shadow_test GROUP data HOST NOEXC TIMEOUT 120
@@ -45,7 +45,7 @@ nevr_ht_test(resource_shadow_test GROUP data HOST NOEXC TIMEOUT 120
 # The first-run prefetch (docs/adr/0045-cdn-texture-delivery.md, the first-run hold): every object of a manifest, before the engine. cdn_run.cpp
 # drives it, so every target that links cdn_run links it.
 nevr_ht_obj(o_cdn_cdn_prefetch GROUP data NOEXC HOST SRC src/cdn/cdn_prefetch.cpp)
-set(_cdn_objs o_cdn_device_memory o_cdn_resource_shadow o_cdn_cdn_limits o_cdn_cdn_validate o_cdn_cdn_manifest o_cdn_cdn_plan o_cdn_cdn_store o_cdn_cdn_run o_cdn_cdn_prefetch o_data_sha256)
+set(_cdn_objs o_cdn_device_memory o_cdn_resource_shadow o_cdn_cdn_limits o_cdn_cdn_validate o_cdn_cdn_manifest o_cdn_cdn_plan o_cdn_cdn_script_gate o_cdn_cdn_store o_cdn_cdn_run o_cdn_cdn_prefetch o_data_sha256)
 nevr_ht_test(device_memory_test GROUP data HOST TIMEOUT 120
   SRC src/quest/tests/device_memory_test.cpp OBJS o_cdn_device_memory)
 nevr_ht_test(cdn_limits_test GROUP data HOST TIMEOUT 120

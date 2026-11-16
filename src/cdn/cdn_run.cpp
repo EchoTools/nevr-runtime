@@ -80,6 +80,38 @@ void SayMounted(Env& env, const char* source, const Mounted& m, std::uint64_t ms
   env.Event(m.refused != 0 ? EventLevel::kWarn : EventLevel::kInfo, "cdn_mounted", fields);
 }
 
+// The policy a mount uses: the config's, with every label whose scripts are not delivered off (cdn_script_gate.h). The registrar runs
+// first, so the gate knows what it held. `source` is "boot" or "fetch".
+Policy GatedPolicy(Env& env, const RunConfig& config, const Manifest& manifest, const char* source) {
+  if (config.script_dir.empty()) {
+    env.Event(EventLevel::kInfo, "cdn_scripts_gate",
+              {{"result", "off"}, {"reason", "no_script_dir"}, {"source", source},
+               {"consequence", "no label is checked for the scripts it names before it is mounted"}});
+    return config.policy;
+  }
+  ScriptRegistration registration;
+  if (config.registrar) registration = config.registrar(manifest, config.platform);
+  const auto present = [&env, &config](std::uint64_t hash) {
+    std::int64_t handle = 0;
+    std::uint64_t size = 0;
+    if (!env.OpenBlob(config.script_dir + ScriptHash16(hash) + ".dll", &handle, &size)) return false;
+    env.CloseBlob(handle);
+    return true;
+  };
+  const auto held = [&registration](const std::string& label, std::uint64_t hash) {
+    return std::find(registration.held.begin(), registration.held.end(), std::make_pair(label, hash)) != registration.held.end();
+  };
+  // The labels the registrar listed for each label's `scripts` are R10b's to wire (PLAN-v5 5.3): until then no label lists one.
+  const auto listed = [](const std::string&, std::uint64_t) { return false; };
+  std::vector<GatedLabel> gated = GateRefusals(registration.refused);
+  for (GatedLabel& g : GateScripts(manifest, config.platform, present, held, listed)) {
+    const bool refusedAlready = std::any_of(gated.begin(), gated.end(), [&g](const GatedLabel& r) { return r.label == g.label; });
+    if (!refusedAlready) gated.push_back(std::move(g));
+  }
+  SayGated(env, gated, config.policy, config.script_dir, source);
+  return ApplyGate(gated, config.policy);
+}
+
 // The limits of this run, from the device: one line with every number, or the missing fact by name.
 Limits LoadLimits(Env& env, const std::string& dir) {
   DeviceFacts facts;
@@ -364,7 +396,7 @@ bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish) {
   }
   ReportRefusals(env, manifest, "boot");
   const std::uint64_t mountStarted = env.NowMs();
-  std::unique_ptr<Mounted> mounted(new Mounted(Mount(env, *store, manifest, config.platform, config.policy)));
+  std::unique_ptr<Mounted> mounted(new Mounted(Mount(env, *store, manifest, config.platform, GatedPolicy(env, config, manifest, "boot"))));
   const std::uint64_t mountMs = env.NowMs() - mountStarted;
   SayMounted(env, "boot", *mounted, mountMs);
   if (!mounted->shadow) return false;
@@ -665,7 +697,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
   if (changed || result.fetched != 0) {
     store->EndWrites();  // the mount opens the store files this run appended to; on the PC an open append handle refuses that open
     const std::uint64_t mountStarted = env.NowMs();
-    std::unique_ptr<Mounted> mounted(new Mounted(Mount(env, *store, manifest, config.platform, config.policy)));
+    std::unique_ptr<Mounted> mounted(new Mounted(Mount(env, *store, manifest, config.platform, GatedPolicy(env, config, manifest, "fetch"))));
     const std::uint64_t mountMs = env.NowMs() - mountStarted;
     if (mounted->shadow || mounted->refused != 0 || mounted->missing != 0) SayMounted(env, "fetch", *mounted, mountMs);
     if (mounted->shadow) {

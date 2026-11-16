@@ -1,5 +1,8 @@
 #include "runtime/lifecycle/cdn_start.h"
 
+#include <winsock2.h>  // before windows.h: core/logging.h pulls it in
+#include <windows.h>
+
 #include <atomic>
 #include <string>
 
@@ -8,6 +11,7 @@
 #include "cdn/env_windows.h"
 #include "core/logging.h"
 #include "core/nevr_root.h"
+#include "runtime/content/content_pack.h"
 #include "runtime/patch/plugin_assets.h"
 #include "runtime/combat/announcer_callouts.h"
 
@@ -17,6 +21,23 @@ namespace {
 
 // The CDN's folder under the cache: <nevr root>\cache\cdn.
 constexpr const char* kCdnCacheName = "cdn";
+
+// Where the game looks for the script DLLs a CScriptResource record names: `<exe dir>\scripts\`, with the trailing separator, in UTF-8,
+// the spelling WindowsEnv::OpenBlob converts back (env_windows.cpp), so a game folder with a non-ASCII character is found; the exe path is
+// read wide, as map_channel.cpp's ExeDir and map_scripts_install.cpp's SetPolicy read it. Empty when the exe's path cannot be read, in
+// which case the CDN's script gate is not applied (cdn_run.h).
+std::string GameScriptDir() {
+  constexpr DWORD kPathChars = MAX_PATH * 2;
+  wchar_t exe[kPathChars];
+  const DWORD n = GetModuleFileNameW(nullptr, exe, kPathChars);
+  if (n == 0 || n >= kPathChars) return std::string();
+  const std::wstring path(exe, n);
+  const std::size_t cut = path.find_last_of(L"\\/");
+  if (cut == std::wstring::npos) return std::string();
+  const std::string dir = nevr_content::Narrow(path.substr(0, cut));
+  if (dir.empty()) return std::string();
+  return dir + "\\scripts\\";
+}
 
 // Written once per published set, read from any thread. Sets are never freed, so a reader may keep the pointer.
 std::atomic<const nevr_cdn::Mounted*> g_published{nullptr};
@@ -44,7 +65,10 @@ bool Start() noexcept {
   }
   const std::string dir = nevr_root::Join(nevr_root::CacheDir(root), kCdnCacheName);
   const nevr_cdn::Settings settings{};
-  const nevr_cdn::RunConfig config = nevr_cdn::MakeRunConfig(settings, dir, nevr_cdn::kWindowsX64);
+  nevr_cdn::RunConfig config = nevr_cdn::MakeRunConfig(settings, dir, nevr_cdn::kWindowsX64);
+  // The script gate (cdn_script_gate.h) reads the game's script folder. The registrar of the `scripts` copies is wired by PLAN-v5 R10b:
+  // until then none is set, so no script is held and no label lists one.
+  config.script_dir = GameScriptDir();
   // The Env holds no state, so one object for the process lifetime (the fetch thread outlives every caller) is all it needs.
   static nevr_cdn::WindowsEnv env;
   // The boot mount publishes on this thread inside Start; the fetch thread it spawns is another thread.

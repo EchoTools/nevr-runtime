@@ -14,6 +14,7 @@
 #include <nlohmann/json.hpp>
 
 #include "cdn/cdn_run.h"
+#include "cdn/cdn_script_gate.h"
 #include "quest/tests/cdn_fake_env.h"
 #include "quest/tests/cdn_zstd_support.h"
 #include "quest/tests/test_check.h"
@@ -49,6 +50,8 @@ struct World {
   std::string label = "game";
   std::vector<json> extra_entries;  // entries that point at no object
   json empty = json::array();
+  std::string other_label;      // a second label, when set, holding other_objs (the gate turns off one label, never its neighbour)
+  std::vector<Obj> other_objs;
   nc::RunConfig config;
 
   explicit World(int n = 4) {
@@ -77,11 +80,17 @@ struct World {
     for (const json& e : extra_entries) entries.push_back(e);
     json labels = json::object();
     labels[label] = json{{"entries", entries}};
+    if (!other_label.empty()) {
+      json others = json::array();
+      for (const Obj& o : other_objs) others.push_back(EntryOf(o, other_label));
+      labels[other_label] = json{{"entries", others}};
+    }
     return json{{"schema", "nevr-cargo-manifest"}, {"schema_version", 1}, {"labels", labels}, {"empty", empty}}.dump();
   }
   void Serve(FakeEnv& env) const {
     env.server[std::string(kBase) + kManifestPath] = Response{200, cdn_test::ZstdFrameOf(ManifestText()), std::string::npos, ""};
     for (const Obj& o : objs) env.server[std::string(kBase) + "blobs/sha256/" + o.sha] = Response{200, o.frame, std::string::npos, ""};
+    for (const Obj& o : other_objs) env.server[std::string(kBase) + "blobs/sha256/" + o.sha] = Response{200, o.frame, std::string::npos, ""};
   }
 };
 
@@ -847,6 +856,272 @@ void AKillAfterAnyStepLeavesAnHonestStoreAndTheNextLaunchFinishes() {
 
 }  // namespace
 
+namespace {
+
+// ── the script gate (src/cdn/cdn_script_gate.h; PLAN-v5 5.2) ────────────────────────────────────────────────────────────────
+constexpr const char* kScriptTypeText = "0x991421b41de58370";
+constexpr std::uint64_t kScriptType = 0x991421b41de58370ULL;
+constexpr const char* kScriptName = "0x94ba7ca39fc97e1a";
+constexpr std::uint64_t kScriptHash = 0x94ba7ca39fc97e1aULL;
+constexpr const char* kScriptDir = "/game/scripts/";
+constexpr const char* kScriptFile = "/game/scripts/94ba7ca39fc97e1a.dll";
+constexpr const char* kScriptHash16Text = "94ba7ca39fc97e1a";
+constexpr const char* kCombat = "combat_content";
+constexpr std::uint64_t kScriptRecordBytes = 4;  // the 6.18.1 shape: a CScriptResource record is a name, not a file
+constexpr std::size_t kScriptFrameBytes = 40;
+
+// The real 6.18.1 shape: combat_content holds a 4-byte entry of the script type and four ordinary objects, and lists no `scripts`.
+World CombatWorld() {
+  World w;
+  w.label = kCombat;
+  w.Add(kScriptRecordBytes, kScriptFrameBytes, 's', kScriptTypeText, kScriptName);
+  return w;
+}
+
+bool Serves(const nc::Mounted* set, std::uint64_t type, std::uint64_t name) {
+  nevr_shadow::Found f;
+  return set != nullptr && set->shadow != nullptr && set->shadow->Find(type, name, &f);
+}
+
+// What a player has who fetched before the gate existed: every object stored, the manifest saved, the set mounted.
+std::shared_ptr<cdn_test::Fs> StoredBeforeTheGate(const World& w) {
+  FakeEnv first;
+  w.Serve(first);
+  Captured cap;
+  nc::FetchAndMount(first, w.config, cap.Sink(), kGo);
+  QCHECK(cap.sets.size() == 1 && Serves(cap.sets[0], kScriptType, kScriptHash));  // an ungated run mounts the script record
+  return first.fs_;
+}
+
+nc::RunConfig GatedConfig(const World& w) {
+  nc::RunConfig c = w.config;
+  c.script_dir = kScriptDir;
+  return c;
+}
+
+// Case 1: the boot mount, from the saved manifest, with no file under scripts\.
+void ABootRefusesALabelWhoseFourByteScriptRecordNamesNoFileOnDisk() {
+  const World w = CombatWorld();
+  const std::shared_ptr<cdn_test::Fs> fs = StoredBeforeTheGate(w);
+  FakeEnv env(fs);
+  Captured cap;
+  QCHECK(!nc::MountFromCache(env, GatedConfig(w), cap.Sink()) && cap.sets.empty());
+  const auto refused = env.EventsNamed("cdn_mount");
+  QCHECK(refused.size() == 1);
+  if (refused.size() == 1) {
+    QCHECK(FakeEnv::Value(refused[0], "label") == kCombat && FakeEnv::Value(refused[0], "result") == "refused" &&
+           FakeEnv::Value(refused[0], "reason") == "script_undelivered" && FakeEnv::Value(refused[0], "scripts") == kScriptHash16Text &&
+           FakeEnv::Value(refused[0], "source") == "boot" && refused[0].find("\"level\":\"warn\"") != std::string::npos &&
+           refused[0].find("consequence") != std::string::npos);
+  }
+  QCHECK(env.requests.empty());
+}
+
+// The gate turns off the label that names the script, and only that label.
+void TheGateTurnsOffOneLabelAndMountsItsNeighbour() {
+  World w = CombatWorld();
+  w.other_label = "game";
+  World neighbour(0);
+  neighbour.Add(777, 200, 'q', kArchive, "0x7000");
+  w.other_objs = neighbour.objs;
+  const std::shared_ptr<cdn_test::Fs> fs = StoredBeforeTheGate(w);
+  FakeEnv env(fs);
+  Captured cap;
+  QCHECK(nc::MountFromCache(env, GatedConfig(w), cap.Sink()) && cap.sets.size() == 1);
+  QCHECK(cap.sets[0]->labels.size() == 1 && cap.sets[0]->labels[0] == "game");
+  QCHECK(!Serves(cap.sets[0], kScriptType, kScriptHash) && Serves(cap.sets[0], 0x2a41cf1c1d9e5d32ULL, 0x7000));
+  const auto refused = env.EventsNamed("cdn_mount");
+  QCHECK(refused.size() == 1 && FakeEnv::Value(refused[0], "label") == kCombat);
+}
+
+// Case 2: the same through FetchAndMount, with every blob already stored (only the manifest changed, so the fetch mounts).
+void AFetchRefusesTheSameLabelWithEveryBlobAlreadyStored() {
+  const World w = CombatWorld();
+  const std::shared_ptr<cdn_test::Fs> fs = StoredBeforeTheGate(w);
+  World changed = w;
+  changed.empty.push_back(json{{"type", kArchive}, {"name", "0x5000"}, {"align", 4}});  // a new manifest text, no new object
+  FakeEnv env(fs);
+  changed.Serve(env);
+  Captured cap;
+  const nc::RunResult r = nc::FetchAndMount(env, GatedConfig(changed), cap.Sink(), kGo);
+  QCHECK(r.manifest_loaded && r.fetched == 0 && !r.published && cap.sets.empty());
+  const auto refused = env.EventsNamed("cdn_mount");
+  QCHECK(refused.size() == 1);
+  if (refused.size() == 1) {
+    QCHECK(FakeEnv::Value(refused[0], "reason") == "script_undelivered" && FakeEnv::Value(refused[0], "source") == "fetch" &&
+           FakeEnv::Value(refused[0], "scripts") == kScriptHash16Text);
+  }
+}
+
+// Case 3: the file is on disk under the name, and the label lists no `scripts` (a stock script, or one a content pack serves): mounted.
+void AScriptOnDiskUnderANameOutsideTheLabelsListMountsTheLabel() {
+  const World w = CombatWorld();
+  const std::shared_ptr<cdn_test::Fs> fs = StoredBeforeTheGate(w);
+  fs->files[kScriptFile] = "a stock script";
+  FakeEnv env(fs);
+  Captured cap;
+  QCHECK(nc::MountFromCache(env, GatedConfig(w), cap.Sink()) && cap.sets.size() == 1);
+  QCHECK(Serves(cap.sets[0], kScriptType, kScriptHash));
+  QCHECK(env.EventsNamed("cdn_mount").empty());
+  QCHECK(env.open_blobs() == 1);  // the store file; the existence probe closed its handle
+}
+
+// Case 4: a record of 0 bytes of the script type is refused like an entry.
+void AScriptRecordOfZeroBytesIsRefusedLikeAnEntry() {
+  World w(4);
+  w.label = kCombat;
+  w.empty.push_back(json{{"type", kScriptTypeText}, {"name", kScriptName}, {"align", 4}});
+  const std::shared_ptr<cdn_test::Fs> fs = StoredBeforeTheGate(w);
+  FakeEnv env(fs);
+  Captured cap;
+  QCHECK(!nc::MountFromCache(env, GatedConfig(w), cap.Sink()) && cap.sets.empty());
+  const auto refused = env.EventsNamed("cdn_mount");
+  QCHECK(refused.size() == 1 && FakeEnv::Value(refused[0], "reason") == "script_undelivered" &&
+         FakeEnv::Value(refused[0], "scripts") == kScriptHash16Text);
+  fs->files[kScriptFile] = "a stock script";
+  FakeEnv present(fs);
+  Captured cap2;
+  QCHECK(nc::MountFromCache(present, GatedConfig(w), cap2.Sink()) && cap2.sets.size() == 1 && cap2.sets[0]->empty_records == 1);
+}
+
+// With no script folder (the Quest's) the gate is not applied, and one Info line says so for the half that mounted.
+void NoScriptDirLeavesTheGateOffAndSaysSo() {
+  const World w = CombatWorld();
+  const std::shared_ptr<cdn_test::Fs> fs = StoredBeforeTheGate(w);
+  FakeEnv env(fs);
+  Captured cap;
+  QCHECK(nc::MountFromCache(env, w.config, cap.Sink()) && cap.sets.size() == 1);
+  const auto off = env.EventsNamed("cdn_scripts_gate");
+  QCHECK(off.size() == 1 && FakeEnv::Value(off[0], "result") == "off" && FakeEnv::Value(off[0], "reason") == "no_script_dir" &&
+         off[0].find("\"level\":\"info\"") != std::string::npos && off[0].find("consequence") != std::string::npos);
+  QCHECK(env.EventsNamed("cdn_mount").empty());
+}
+
+nc::Manifest ScriptManifest() {
+  nc::Manifest m;
+  m.labels.push_back(kCombat);
+  nc::Entry e;
+  e.label = kCombat;
+  e.platform = nc::kAndroidArm64.name;
+  e.type = kScriptType;
+  e.name = kScriptHash;
+  m.entries.push_back(e);
+  return m;
+}
+
+// Case 6 (X8): a file on disk under a name the label's own `scripts` list names is not ours, so the label is refused, not mounted.
+// `listed` is a fake here: the manifest field that answers it is another piece's (PLAN-v5 R3).
+void AFileOnDiskUnderAListedNameIsShadowingAndRefusesTheLabel() {
+  const nc::Manifest m = ScriptManifest();
+  const auto yes = [](const std::string&, std::uint64_t) { return true; };
+  const auto no = [](const std::string&, std::uint64_t) { return false; };
+  const auto onDisk = [](std::uint64_t) { return true; };
+  const auto absent = [](std::uint64_t) { return false; };
+
+  std::vector<nc::GatedLabel> g = nc::GateScripts(m, nc::kAndroidArm64, onDisk, no, yes);  // listed, on disk, not held
+  QCHECK(g.size() == 1 && g[0].label == kCombat && g[0].reason == "script_shadowed" && g[0].scripts.size() == 1 && g[0].scripts[0] == kScriptHash);
+
+  FakeEnv env;
+  nc::SayGated(env, g, nc::Policy{}, kScriptDir, "boot");
+  QCHECK(env.records.size() == 1);
+  if (env.records.size() == 1) {
+    const cdn_test::Record& r = env.records[0];
+    QCHECK(r.name == "cdn_mount" && r.level == nc::EventLevel::kWarn && r.Get("reason") == "script_shadowed" &&
+           r.Get("path") == kScriptFile && r.Get("label") == kCombat && !r.Get("consequence").empty());
+  }
+  // A label the player turned off has nothing to refuse: no line.
+  FakeEnv quiet;
+  nc::Policy off;
+  off.overrides[kCombat] = nc::LabelState::kOff;
+  nc::SayGated(quiet, g, off, kScriptDir, "boot");
+  QCHECK(quiet.records.empty());
+
+  QCHECK(nc::GateScripts(m, nc::kAndroidArm64, onDisk, no, no).empty());     // not listed: present counts (case 3)
+  QCHECK(nc::GateScripts(m, nc::kAndroidArm64, onDisk, yes, yes).empty());   // listed and held: ours
+  QCHECK(nc::GateScripts(m, nc::kAndroidArm64, absent, yes, yes).empty());
+  g = nc::GateScripts(m, nc::kAndroidArm64, absent, no, yes);                // listed, nothing on disk, not held
+  QCHECK(g.size() == 1 && g[0].reason == "script_undelivered");
+  g = nc::GateScripts(m, nc::kAndroidArm64, absent, yes, no);                // held, not listed: counts as delivered
+  QCHECK(g.empty());
+  // Both at once: the label is reported as shadowed, with the shadowed name only.
+  nc::Manifest two = m;
+  nc::Entry second = two.entries[0];
+  second.name = kScriptHash + 1;
+  two.entries.push_back(second);
+  g = nc::GateScripts(two, nc::kAndroidArm64, [](std::uint64_t h) { return h == kScriptHash; }, no, yes);
+  QCHECK(g.size() == 1 && g[0].reason == "script_shadowed" && g[0].scripts.size() == 1 && g[0].scripts[0] == kScriptHash);
+  nc::Manifest other = m;
+  other.entries[0].platform = nc::kWindowsX64.name;                          // another platform's record is not this plan's
+  QCHECK(nc::GateScripts(other, nc::kAndroidArm64, absent, no, no).empty());
+}
+
+// The registrar seam (PLAN-v5 5.3, wired by R10b): it runs before the gate, what it holds counts as delivered, and a refusal turns its
+// whole label off, naming the content pack when that is the reason (5.2 cases 5 and 7, driven here with a fake registrar).
+void TheRegistrarSeamRunsBeforeTheGateAndItsRefusalsTurnTheLabelOff() {
+  const World w = CombatWorld();
+  const std::shared_ptr<cdn_test::Fs> fs = StoredBeforeTheGate(w);
+
+  nc::RunConfig held = GatedConfig(w);
+  held.registrar = [](const nc::Manifest&, const nc::Platform&) {
+    nc::ScriptRegistration r;
+    r.held.push_back(std::make_pair(std::string(kCombat), kScriptHash));
+    return r;
+  };
+  FakeEnv heldEnv(fs);
+  Captured heldCap;
+  QCHECK(nc::MountFromCache(heldEnv, held, heldCap.Sink()) && heldCap.sets.size() == 1 && heldEnv.EventsNamed("cdn_mount").empty());
+
+  fs->files[kScriptFile] = "a file the registrar refused to shadow";  // present, yet the refusal still turns the label off
+  nc::RunConfig refused = GatedConfig(w);
+  refused.registrar = [](const nc::Manifest&, const nc::Platform&) {
+    nc::ScriptRegistration r;
+    r.refused.push_back(nc::ScriptRefusal{kCombat, kScriptHash, "stock_hash", ""});
+    return r;
+  };
+  FakeEnv refusedEnv(fs);
+  Captured refusedCap;
+  QCHECK(!nc::MountFromCache(refusedEnv, refused, refusedCap.Sink()) && refusedCap.sets.empty());
+  auto lines = refusedEnv.EventsNamed("cdn_mount");
+  QCHECK(lines.size() == 1 && FakeEnv::Value(lines[0], "reason") == "stock_hash" && FakeEnv::Value(lines[0], "pack") == "<absent>");
+
+  nc::RunConfig pack = GatedConfig(w);
+  pack.registrar = [](const nc::Manifest&, const nc::Platform&) {
+    nc::ScriptRegistration r;
+    r.refused.push_back(nc::ScriptRefusal{kCombat, kScriptHash, "pack_hash", "cat-pack"});
+    return r;
+  };
+  FakeEnv packEnv(fs);
+  Captured packCap;
+  QCHECK(!nc::MountFromCache(packEnv, pack, packCap.Sink()) && packCap.sets.empty());
+  lines = packEnv.EventsNamed("cdn_mount");
+  QCHECK(lines.size() == 1 && FakeEnv::Value(lines[0], "reason") == "pack_hash" && FakeEnv::Value(lines[0], "pack") == "cat-pack" &&
+         lines[0].find("content pack") != std::string::npos);
+}
+
+// A registrar refusal turns its label off by itself, even when no record of the label is of the script type (PLAN-v5 5.3 item 2): the
+// refusal withdrew the label's other copies, which its other records may use.
+void ARegistrarRefusalTurnsOffALabelWithNoScriptRecord() {
+  const World w;  // label "game", four ordinary objects, no record of the script type
+  FakeEnv first;
+  w.Serve(first);
+  Captured stored;
+  nc::FetchAndMount(first, w.config, stored.Sink(), kGo);
+  QCHECK(stored.sets.size() == 1);
+  nc::RunConfig c = GatedConfig(w);
+  c.registrar = [](const nc::Manifest&, const nc::Platform&) {
+    nc::ScriptRegistration r;
+    r.refused.push_back(nc::ScriptRefusal{"game", kScriptHash, "duplicate", ""});
+    return r;
+  };
+  FakeEnv env(first.fs_);
+  Captured cap;
+  QCHECK(!nc::MountFromCache(env, c, cap.Sink()) && cap.sets.empty());
+  const auto lines = env.EventsNamed("cdn_mount");
+  QCHECK(lines.size() == 1 && FakeEnv::Value(lines[0], "label") == "game" && FakeEnv::Value(lines[0], "reason") == "duplicate" &&
+         FakeEnv::Value(lines[0], "scripts") == kScriptHash16Text);
+}
+}  // namespace
+
 int main() {
   AManifestIsReadByItsBytesNotByItsName();
   APlainManifestOverTheTextLimitEndsAtTheLimitAsItArrives();
@@ -886,6 +1161,15 @@ int main() {
   TheProgressCallbackCountsEveryObjectAndEndsAtTheTotal();
   AShutdownBetweenObjectsEndsTheRunAndKeepsWhatWasStored();
   AKillAfterAnyStepLeavesAnHonestStoreAndTheNextLaunchFinishes();
+  ABootRefusesALabelWhoseFourByteScriptRecordNamesNoFileOnDisk();
+  TheGateTurnsOffOneLabelAndMountsItsNeighbour();
+  AFetchRefusesTheSameLabelWithEveryBlobAlreadyStored();
+  AScriptOnDiskUnderANameOutsideTheLabelsListMountsTheLabel();
+  AScriptRecordOfZeroBytesIsRefusedLikeAnEntry();
+  NoScriptDirLeavesTheGateOffAndSaysSo();
+  AFileOnDiskUnderAListedNameIsShadowingAndRefusesTheLabel();
+  TheRegistrarSeamRunsBeforeTheGateAndItsRefusalsTurnTheLabelOff();
+  ARegistrarRefusalTurnsOffALabelWithNoScriptRecord();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "cdn_run_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
