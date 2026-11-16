@@ -228,13 +228,25 @@ func TestTheProductionStepsAreTheEchoCombatOnesInOrder(t *testing.T) {
 		"damageable health of actor 10e40287a9bf5a13 9999 to 70",
 		"equipment lists offer magnum, smg, chain, rifle, loc, dot and drone",
 	}
-	if len(steps) != len(want) {
-		t.Fatalf("steps has %d entries, want %d: each EchoCombat step lands in its own slice with its own tests", len(steps), len(want))
+	// Steps of the other data pieces (steps_<feature>.go, each registered from its own init) may sit between these and
+	// are checked by their own tests; these must keep their relative order and each must be present once.
+	seen := map[string]int{}
+	for _, st := range steps {
+		seen[st.Name]++
 	}
-	for i, w := range want {
-		if steps[i].Name != w {
-			t.Errorf("step %d is %q, want %q", i, steps[i].Name, w)
+	for _, w := range want {
+		if seen[w] != 1 {
+			t.Errorf("step %q is registered %d times, want once", w, seen[w])
 		}
+	}
+	at := 0
+	for _, st := range steps {
+		if at < len(want) && st.Name == want[at] {
+			at++
+		}
+	}
+	if at != len(want) {
+		t.Fatalf("the production steps do not hold %q in order from step %d of %d", want[at], at, len(want))
 	}
 }
 

@@ -40,11 +40,13 @@ var gunPatchTables = map[uint64]map[uint64]string{
 	},
 }
 
-// The resources the registered steps change, counted from the step list: the forEachLevel steps each change one table
-// per drone level (steps_drone.go: bullets, particle effects, scripts; steps_drone_health.go: the damageable table),
-// and steps_equipment.go changes the one mp_equipment resource. 4 x 5 + 1 = 21.
+// The resources the registered steps change, counted from the step list: the per-level steps each change one table
+// per drone level (steps_drone.go: bullets, particle effects, scripts; steps_drone_health.go: the damageable table;
+// steps_dot_stick.go: the magazine table), and steps_equipment.go changes the one mp_equipment resource. 5 x 5 + 1 = 26.
+// The count covers every step, so a step that changes a resource it does not name fails here; what each data step
+// writes into its own tables is checked by that step's own test, and the gun patch's files by gunPatchTables above.
 const (
-	levelTableSteps    = 4
+	levelTableSteps    = 5
 	equipmentResources = 1
 )
 
