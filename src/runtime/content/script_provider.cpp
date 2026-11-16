@@ -13,6 +13,7 @@
 #include "core/log_text.h"
 #include "core/logging.h"
 #include "core/map_script_check.h"
+#include "core/resource_set_registry.h"
 #include "cdn/env_windows.h"
 #include "core/script_image_rules.h"
 #include "quest/data/sha256.h"
@@ -41,6 +42,8 @@ struct Entry {
 struct State {
   bool configured = false;
   Inputs inputs;
+  bool policy_set = false;                            // ApplyPolicy has configured this process (Forget clears it)
+  PolicyCaller policy_caller = PolicyCaller::kMaps;   // the first caller
   std::set<std::string> revoked;
   std::set<std::string> withdrawn;  // owners Withdraw dropped: their scripts are not taken again in this process
   std::map<std::uint64_t, Entry> held;
@@ -170,6 +173,58 @@ void Configure(const Inputs& inputs) {
   std::lock_guard<std::mutex> lock(g_mutex);
   g_state.inputs = inputs;
   g_state.configured = true;
+}
+
+const char* PolicyCallerName(PolicyCaller caller) {
+  switch (caller) {
+    case PolicyCaller::kMaps:
+      return "maps";
+    case PolicyCaller::kCargo:
+      return "cargo";
+  }
+  return "unknown";
+}
+
+PolicyOutcome ApplyPolicy(PolicyCaller caller, const Inputs& inputs) {
+  PolicyOutcome outcome = PolicyOutcome::kSet;
+  Inputs kept;
+  PolicyCaller first = caller;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_state.policy_set) {
+      kept = g_state.inputs;
+      first = g_state.policy_caller;
+      outcome = kept.signed_only == inputs.signed_only ? PolicyOutcome::kKept : PolicyOutcome::kRefused;
+    } else {
+      g_state.inputs = inputs;
+      g_state.configured = true;
+      g_state.policy_set = true;
+      g_state.policy_caller = caller;
+    }
+  }
+  // The waiver and the log are outside the lock: the waiver's setter takes no provider lock, and Log is not called holding it.
+  const std::string dir = nevr_content::Narrow(inputs.exe_dir);
+  if (outcome == PolicyOutcome::kSet) {
+    nevr_resource_sets::SetScriptWaiver(&Holds);
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.MAPS] map script policy caller=%s exe_dir=\"%s\" signed_only=%d byte_limit=%llu (scripts the maps channel or the "
+        "CDN registers are served under these facts for the rest of the run)",
+        PolicyCallerName(caller), Printable(dir).c_str(), inputs.signed_only ? 1 : 0,
+        static_cast<unsigned long long>(inputs.byte_limit));
+  } else if (outcome == PolicyOutcome::kKept) {
+    Log(EchoVR::LogLevel::Debug,
+        "[NEVR.MAPS] map script policy kept caller=%s first=%s signed_only=%d byte_limit=%llu kept_byte_limit=%llu (the first "
+        "caller's facts stay in force; the run has one script policy)",
+        PolicyCallerName(caller), PolicyCallerName(first), inputs.signed_only ? 1 : 0,
+        static_cast<unsigned long long>(inputs.byte_limit), static_cast<unsigned long long>(kept.byte_limit));
+  } else {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MAPS] map script policy refused caller=%s first=%s signed_only=%d kept_signed_only=%d (the run reads its "
+        "signed-only mode once, so this caller disagrees with it; the first caller's facts stay in force and this caller's "
+        "scripts are checked under them)",
+        PolicyCallerName(caller), PolicyCallerName(first), inputs.signed_only ? 1 : 0, kept.signed_only ? 1 : 0);
+  }
+  return outcome;
 }
 
 void SetRevoked(const std::vector<std::string>& revoked_sha256) {

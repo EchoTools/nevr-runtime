@@ -9,7 +9,6 @@
 
 #include "core/log_text.h"
 #include "core/logging.h"
-#include "core/resource_set_registry.h"
 #include "runtime/content/content_pack.h"
 #include "runtime/content/script_provider.h"
 #include "runtime/hook/dll_load_hook.h"
@@ -46,7 +45,7 @@ bool RewriteMapScript(const wchar_t* lower_path, std::wstring* load_path) {
 
 }  // namespace
 
-void SetPolicy(bool signed_only, std::uint64_t byte_limit) {
+PolicyOutcome SetPolicy(PolicyCaller caller, bool signed_only, std::uint64_t byte_limit) {
   Inputs in;
   wchar_t exe[kExePathChars];
   const DWORD n = GetModuleFileNameW(nullptr, exe, kExePathChars);
@@ -55,14 +54,7 @@ void SetPolicy(bool signed_only, std::uint64_t byte_limit) {
   in.signed_only = signed_only;
   in.byte_limit = byte_limit;
   in.pack_carries = &nevr_content::CarriesScript;
-  Configure(in);
-  nevr_resource_sets::SetScriptWaiver(&Holds);
-  const std::string dir = nevr_content::Narrow(in.exe_dir);
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.MAPS] map script policy exe_dir=\"%s\" signed_only=%d byte_limit=%llu (a map's script is served once the maps "
-      "channel registers it)",
-      nevr_log_text::Printable(dir.c_str(), kServeLogTextBytes).c_str(), in.signed_only ? 1 : 0,
-      static_cast<unsigned long long>(in.byte_limit));
+  return ApplyPolicy(caller, in);
 }
 
 bool InstallMapScriptsRewriter() {

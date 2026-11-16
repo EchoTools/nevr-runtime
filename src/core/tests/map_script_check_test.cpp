@@ -42,6 +42,24 @@ TEST(MapScriptCheck, AnOwnerIsAtMostTheRegistrysOwnerBound) {
   EXPECT_STREQ(check::ArgumentRefusal(longest + "a", 1, kDigest), "bad_owner");
 }
 
+TEST(MapScriptCheck, ACargoOwnerIsTheCargoPrefixAndALabelName) {
+  EXPECT_EQ(check::ArgumentRefusal("cargo:combat_content", 1, kDigest), nullptr);
+  EXPECT_EQ(check::ArgumentRefusal("cargo:0_lobby", 1, kDigest), nullptr);          // a label may start with a digit
+  EXPECT_STREQ(check::ArgumentRefusal("cargo:Bad", 1, kDigest), "bad_owner");       // upper case
+  EXPECT_STREQ(check::ArgumentRefusal("cargo:combat-content", 1, kDigest), "bad_owner");  // a hyphen
+  EXPECT_STREQ(check::ArgumentRefusal("cargo:", 1, kDigest), "bad_owner");          // no label
+  EXPECT_STREQ(check::ArgumentRefusal("x:y", 1, kDigest), "bad_owner");
+  EXPECT_STREQ(check::ArgumentRefusal("cargx:combat_content", 1, kDigest), "bad_owner");
+  EXPECT_STREQ(check::ArgumentRefusal("Cargo:combat_content", 1, kDigest), "bad_owner");
+}
+
+TEST(MapScriptCheck, ACargoOwnerIsAtMostTheRegistrysOwnerBound) {
+  const std::string prefix = check::kCargoOwnerPrefix;
+  const std::string longest = prefix + std::string(nevr_resource_sets::kMaxMapOwnerBytes - prefix.size(), 'a');
+  EXPECT_EQ(check::ArgumentRefusal(longest, 1, kDigest), nullptr);
+  EXPECT_STREQ(check::ArgumentRefusal(longest + "a", 1, kDigest), "bad_owner");
+}
+
 TEST(MapScriptCheck, AHashOfZeroNamesNoScript) {
   EXPECT_STREQ(check::ArgumentRefusal("map:arena1", 0, kDigest), "bad_hash");
 }

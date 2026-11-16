@@ -48,6 +48,19 @@ inline constexpr const char* kSchema = "nevr-cargo-manifest";
 inline constexpr int kSchemaVersion = 1;
 inline constexpr const char* kFormatZstdFrame = "zstd-frame";
 
+// A label is lowercase letters, digits and underscores, at least one: the name is logged, so its characters are checked before it is
+// used. No length is fixed by the format (the game names a resource by a 64-bit symbol, a label is ours); the manifest text limit,
+// which comes from the device (cdn_limits.h), bounds it in a manifest, and a script owner's bound (core/map_script_check.h) bounds it
+// there. Inline, so the pure owner rule (core/map_script_check.h) needs no cdn_manifest.cpp.
+inline bool IsLabelName(std::string_view s) noexcept {
+  if (s.empty()) return false;
+  for (const char c : s) {
+    const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+    if (!ok) return false;
+  }
+  return true;
+}
+
 // Two on-disk types that belong together under one name: a descriptor and the payload it describes (a texture's two buffers). The
 // per-binary table of them is Platform::pairs. A payload whose bytes differ from the stock buffer's needs its descriptor.
 struct PairRule {

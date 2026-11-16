@@ -18,18 +18,6 @@ namespace {
 
 using json = nlohmann::ordered_json;  // document order matters: refusals are listed in it
 
-// A label is lowercase letters, digits and underscores, at least one: the name is logged, so its characters are checked before it is
-// used. No length is fixed by the format (the game names a resource by a 64-bit symbol, a label is ours); the length is bounded by the
-// manifest text limit, which comes from the device (cdn_limits.h).
-bool IsLabelName(const std::string& s) noexcept {
-  if (s.empty()) return false;
-  for (const char c : s) {
-    const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
-    if (!ok) return false;
-  }
-  return true;
-}
-
 // A platform name is lowercase letters, digits, '-' and '_', at least one; bounded by the manifest text limit like a label.
 bool IsPlatformName(const std::string& s) noexcept {
   if (s.empty()) return false;

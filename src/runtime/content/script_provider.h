@@ -101,17 +101,32 @@ std::size_t Withdraw(const std::string& owner);
 // How many scripts are held.
 std::size_t HeldCount();
 
-// Drops every held script and closes its handle, and the run's facts and revocations (the tests).
+// Drops every held script and closes its handle, and the run's facts, revocations and policy latch (the tests).
 void Forget();
 
-// Production (map_scripts_install.cpp). SetPolicy: Configure from this process (the exe folder, the content pack's script
-// set) with the run's signed-only mode and the device's byte limit, and hand Holds to the resource-set script waiver. Called
-// once by the maps channel before any Register; a later call replaces the facts.
-void SetPolicy(bool signed_only, std::uint64_t byte_limit);
+// Who set the run's script policy: the maps channel (map_channel.cpp) or the CDN's script registrar.
+enum class PolicyCaller { kMaps, kCargo };
+// "maps" or "cargo": the caller's word in the log.
+const char* PolicyCallerName(PolicyCaller caller);
 
-// Registers the "map-scripts" load rewriter, once; true when it is registered. The maps channel calls it after the
-// first Register that is ok, never at static init or from boot, so a run with no map script adds no rewriter. It comes
-// after nevr_content::Install's, so the content pack's rewriter stays first and keeps every load of its own scripts.
+// What a policy call did: kSet, the first call of the process (or the first after Forget) configured the provider; kKept, a later
+// call with the same signed_only left the first facts in force; kRefused, a later call with another signed_only left the first
+// facts in force and logged a Warning.
+enum class PolicyOutcome { kSet, kKept, kRefused };
+
+// The run's one script policy, from `inputs`. The first call (of the process, or after Forget) configures the provider
+// (Configure(inputs)), hands Holds to the resource-set script waiver (nevr_resource_sets::SetScriptWaiver) and logs the
+// policy at Info. A later call changes nothing: the same signed_only is kKept (Debug), another is kRefused (Warning). Forget
+// clears the latch.
+PolicyOutcome ApplyPolicy(PolicyCaller caller, const Inputs& inputs);
+
+// Production (map_scripts_install.cpp): ApplyPolicy with this process's facts (the exe folder, the content pack's script
+// set), the run's signed-only mode and the device's byte limit. Each caller calls it once, before its first claim.
+PolicyOutcome SetPolicy(PolicyCaller caller, bool signed_only, std::uint64_t byte_limit);
+
+// Registers the "map-scripts" load rewriter, once; true when it is registered. A caller of any owner calls it after its
+// first claim that is ok, never at static init or from boot, so a run with no map script adds no rewriter. It comes after
+// nevr_content::Install's, so the content pack's rewriter stays first and keeps every load of its own scripts.
 bool InstallMapScriptsRewriter();
 
 }  // namespace nevr_map_scripts

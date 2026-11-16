@@ -142,14 +142,17 @@ class MapScripts : public ::testing::Test {
     RemoveTree(base_);
   }
 
-  void Configure(bool signed_only = false) {
+  // The facts a run gives the provider, without applying them.
+  maps::Inputs In(bool signed_only = false, std::uint64_t byte_limit = TestByteLimit()) const {
     maps::Inputs in;
     in.exe_dir = exe_dir_;
     in.signed_only = signed_only;
-    in.byte_limit = TestByteLimit();
+    in.byte_limit = byte_limit;
     in.pack_carries = &FakePackCarries;
-    maps::Configure(in);
+    return in;
   }
+
+  void Configure(bool signed_only = false) { maps::Configure(In(signed_only)); }
 
   // A cache file holding `bytes`, opened as the maps channel holds it: read access, read sharing only.
   std::int64_t Held(const std::wstring& name, const std::vector<std::uint8_t>& bytes) {
@@ -481,6 +484,22 @@ TEST_F(MapScripts, TheWaiverAnswersOnlyForTheOwnerTheScriptIsHeldFor) {
   EXPECT_FALSE(maps::Holds("map:arena1", kHash));
 }
 
+// A cargo owner's rekey is held with no maps channel: the CDN's registrar sets the policy first, and a cargo label that
+// cannot be made to match a label or a map is refused bad_owner.
+TEST_F(MapScripts, ACargoOwnersRekeyIsHeldWithNoMapsChannel) {
+  maps::Forget();  // no maps channel: nothing configured the provider
+  const std::vector<std::uint8_t> stock = BuildDll();
+  WriteBytes(GamePath(kStockHash), stock);
+  EXPECT_EQ(maps::RegisterRekey("cargo:combat_content", kHash, kStockHash, Sha(stock), false, CopyDir()).reason,
+            "not_configured");
+  ASSERT_EQ(maps::ApplyPolicy(maps::PolicyCaller::kCargo, In()), maps::PolicyOutcome::kSet);
+  ASSERT_TRUE(maps::RegisterRekey("cargo:combat_content", kHash, kStockHash, Sha(stock), false, CopyDir()).ok());
+  EXPECT_TRUE(maps::Holds("cargo:combat_content", kHash));
+  EXPECT_FALSE(maps::Holds("map:combat_content", kHash));
+  EXPECT_EQ(maps::RegisterRekey("cargo:Bad", kOtherHash, kStockHash, Sha(stock), false, CopyDir()).reason, "bad_owner");
+  EXPECT_EQ(maps::RegisterRekey("x:y", kOtherHash, kStockHash, Sha(stock), false, CopyDir()).reason, "bad_owner");
+}
+
 // Withdraw is the mount's all or nothing (docs/adr/0048 decision 6): a map whose set is refused keeps no script live.
 TEST_F(MapScripts, WithdrawDropsEveryScriptAndRekeyOfTheOwnerAndKeepsAnotherOwners) {
   constexpr std::uint64_t kThirdHash = 0x5555aaaa5555aaaaULL;
@@ -646,13 +665,31 @@ void MakePack(const std::wstring& base, std::uint64_t pack_script, const std::ve
 }
 
 // Runs before the lazy-install test, so a SetPolicy that added the rewriter itself fails that test's first check.
-TEST_F(MapScripts, SetPolicyHandsHoldsToTheWaiverAndAppliesTheChannelsFacts) {
+TEST_F(MapScripts, SetPolicyHandsHoldsToTheWaiverOnceAndKeepsTheFirstCallersFacts) {
   g_waiver = nullptr;
-  maps::SetPolicy(/*signed_only=*/false, TestByteLimit());
+  EXPECT_EQ(maps::SetPolicy(maps::PolicyCaller::kMaps, /*signed_only=*/false, TestByteLimit()), maps::PolicyOutcome::kSet);
   EXPECT_EQ(g_waiver, &maps::Holds);
   EXPECT_TRUE(RegisterImage(BuildDll(), kHash, "map:arena1").ok());
-  maps::SetPolicy(/*signed_only=*/true, TestByteLimit());
-  EXPECT_EQ(RegisterImage(BuildDll(), kOtherHash, "map:arena1").reason, "signed_only");
+  g_waiver = nullptr;
+  EXPECT_EQ(maps::SetPolicy(maps::PolicyCaller::kCargo, /*signed_only=*/true, TestByteLimit()), maps::PolicyOutcome::kRefused);
+  EXPECT_EQ(g_waiver, nullptr) << "only the first call hands the waiver over";
+  EXPECT_TRUE(RegisterImage(BuildDll(), kOtherHash, "map:arena1", /*official=*/false).ok())
+      << "the first caller's signed_only=false stays in force";
+}
+
+// A second call with the same signed_only is kKept and changes no fact: the first byte limit stays.
+TEST_F(MapScripts, ASecondPolicyCallWithTheSameModeIsKeptAndChangesNoFact) {
+  EXPECT_EQ(maps::ApplyPolicy(maps::PolicyCaller::kCargo, In()), maps::PolicyOutcome::kSet);
+  EXPECT_EQ(maps::ApplyPolicy(maps::PolicyCaller::kMaps, In(/*signed_only=*/false, /*byte_limit=*/1)), maps::PolicyOutcome::kKept);
+  EXPECT_TRUE(RegisterImage(BuildDll()).ok()) << "a kept call does not replace the first byte limit";
+}
+
+// Forget clears the policy latch, so the next call configures the provider again.
+TEST_F(MapScripts, ForgetClearsThePolicyLatch) {
+  EXPECT_EQ(maps::ApplyPolicy(maps::PolicyCaller::kCargo, In(/*signed_only=*/true)), maps::PolicyOutcome::kSet);
+  maps::Forget();
+  EXPECT_EQ(maps::ApplyPolicy(maps::PolicyCaller::kMaps, In(/*signed_only=*/false)), maps::PolicyOutcome::kSet);
+  EXPECT_TRUE(RegisterImage(BuildDll(), kHash, "map:arena1", /*official=*/false).ok());
 }
 
 // The rewriters are process-wide and never removed, so this one test owns the whole order: the content pack's first, as
@@ -689,6 +726,19 @@ TEST_F(MapScripts, TheMapRewriterIsAddedLazilyAfterThePacksAndThePackKeepsItsOwn
   EXPECT_TRUE(SameFile(pack_load, base_ + L"\\root\\content\\testpack\\scripts\\" + Hash16W(kOtherHash) + L".dll"))
       << Narrow(pack_load);
   nevr_content::Forget();
+}
+
+// A cargo owner's copy is served by the same map rewriter, with no install of its own: the rewriter serves any held hash.
+// Runs after the lazy-install test, which needs the rewriter absent until InstallMapScriptsRewriter.
+TEST_F(MapScripts, ACargoOwnersCopyIsServedThroughTheMapRewriter) {
+  ASSERT_EQ(maps::ApplyPolicy(maps::PolicyCaller::kCargo, In()), maps::PolicyOutcome::kSet);
+  const std::vector<std::uint8_t> stock = BuildDll();
+  WriteBytes(GamePath(kStockHash), stock);
+  ASSERT_TRUE(maps::RegisterRekey("cargo:combat_content", kHash, kStockHash, Sha(stock), false, CopyDir()).ok());
+  ASSERT_TRUE(maps::InstallMapScriptsRewriter());
+  std::wstring load;
+  ASSERT_TRUE(nevr_dll_load_hook::RewriteLoad(Lower(GamePath(kHash)).c_str(), &load));
+  EXPECT_TRUE(SameFile(load, CopyPath(kHash))) << Narrow(load);
 }
 
 // The owner is the registry's map owner with a valid id (core/map_script_check.h): a script is never held for an owner the
@@ -755,6 +805,30 @@ TEST_F(MapScripts, AServedScriptIsInfoOnceThenDebug) {
   EXPECT_EQ(g_served[0].first, EchoVR::LogLevel::Info);
   EXPECT_EQ(g_served[1].first, EchoVR::LogLevel::Debug);
   EXPECT_NE(g_served[0].second.find("file_len="), std::string::npos) << g_served[0].second;
+}
+
+std::vector<std::pair<EchoVR::LogLevel, std::string>> g_policy;
+void CapturePolicy(EchoVR::LogLevel level, const CHAR* message) {
+  if (std::string(message).find("map script policy") != std::string::npos) g_policy.emplace_back(level, message);
+}
+
+// Each policy call logs once: Info for the first caller, Debug for a kept call, Warning for a refused one, each naming the callers.
+TEST_F(MapScripts, ThePolicyLinesNameTheCallerAndTheFirstCaller) {
+  g_policy.clear();
+  SetBootLogSink(&CapturePolicy);
+  maps::ApplyPolicy(maps::PolicyCaller::kCargo, In());
+  maps::ApplyPolicy(maps::PolicyCaller::kMaps, In());
+  maps::ApplyPolicy(maps::PolicyCaller::kMaps, In(/*signed_only=*/true));
+  SetBootLogSink(nullptr);
+  ASSERT_EQ(g_policy.size(), 3u);
+  EXPECT_EQ(g_policy[0].first, EchoVR::LogLevel::Info);
+  EXPECT_NE(g_policy[0].second.find("map script policy caller=cargo "), std::string::npos) << g_policy[0].second;
+  EXPECT_EQ(g_policy[1].first, EchoVR::LogLevel::Debug);
+  EXPECT_NE(g_policy[1].second.find("map script policy kept caller=maps first=cargo "), std::string::npos) << g_policy[1].second;
+  EXPECT_EQ(g_policy[2].first, EchoVR::LogLevel::Warning);
+  EXPECT_NE(g_policy[2].second.find("map script policy refused caller=maps first=cargo signed_only=1 kept_signed_only=0"),
+            std::string::npos)
+      << g_policy[2].second;
 }
 
 // A set that failed before any of its scripts was held keeps its later scripts out too (all or nothing).

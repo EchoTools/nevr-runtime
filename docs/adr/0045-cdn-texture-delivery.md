@@ -54,7 +54,7 @@ process.
    bytes are the buffer.
    The runtime never decompresses a blob; the SHA-256 of the stored frame proves it is the published one. The manifest is unsigned in
    this decision (see Not claimed).
-   A label may list `scripts`: entries `{name, platform, stock_source, stock_sha256}`, each a script served from a copy of the player's own stock file made on the device under the new name. A `scripts` entry that carries `edits` (`rekey_edits`), a frame's fields (`image_entry`), its own stock source as its name (`stock_hash`), anything but the four fields in their forms (`bad_script`), or a platform and name another entry of the label has (`duplicate`) refuses its label whole (`ParseManifest`, `cdn_refused`).
+   A label may list `scripts`: entries `{name, platform, stock_source, stock_sha256}`, each a script served from a copy of the player's own stock file made on the device under the new name. No script byte travels. A `scripts` entry that carries `edits` (`rekey_edits`), a frame's fields (`image_entry`), its own stock source as its name (`stock_hash`), anything but the four fields in their forms (`bad_script`), or a platform and name another entry of the label has (`duplicate`) refuses its label whole (`ParseManifest`, `cdn_refused`).
    A label whose CScriptResource records, entries or records of 0 bytes, name a script that is neither on the device nor held from its own
    `scripts` list is not mounted (`script_undelivered`), at the boot mount and at a fetch alike, because the game has no existence check
    before a script load (`src/cdn/cdn_script_gate.h`).

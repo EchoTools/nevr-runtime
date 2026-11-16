@@ -359,7 +359,7 @@ void BootUnguarded(std::uintptr_t game_base, bool is_server) {
   if (st->channel->start() == Start::kRun) {
     nevr_cdn::DeviceFacts facts;
     st->env->QueryDevice(config.dir, &facts);
-    nevr_map_scripts::SetPolicy(config.signed_only, nevr_maps::MapDocumentBytes(facts));
+    nevr_map_scripts::SetPolicy(nevr_map_scripts::PolicyCaller::kMaps, config.signed_only, nevr_maps::MapDocumentBytes(facts));
   }
 
   st->mounter = std::make_unique<PcMounter>();

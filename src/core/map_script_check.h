@@ -3,6 +3,8 @@
 // script_redirect.h) read their file and keep their table, and ask this for every decision. The image rules stay in
 // core/script_image_rules.h (one rule set per format); its exported token list names every refusal.
 //
+// A CDN label's copies (docs/adr/0045 decision 4) are owned by `cargo:<label>`.
+//
 // Pure: no Win32, no POSIX, no Log(). A token is a string literal, so a caller that keeps a `const char*` needs no storage.
 #pragma once
 
@@ -12,6 +14,7 @@
 #include <string_view>
 
 #include "cdn/cdn_format.h"
+#include "cdn/cdn_manifest.h"
 #include "core/map_manifest.h"
 #include "core/resource_set_registry.h"
 #include "core/script_image_rules.h"
@@ -27,10 +30,23 @@ inline bool IsSha256Digest(const std::string& text) {
   return true;
 }
 
+// The owner of a CDN label's scripts: "cargo:" and the label (nevr_cdn::IsLabelName, the manifest's own rule). Its length is the
+// one bound every script owner has, nevr_resource_sets::kMaxMapOwnerBytes: the owner text is shared with the Quest table, which
+// stores it in kOwnerCapacity bytes (quest/plugin/script_redirect.h), so no owner may be longer than a map owner. The label format
+// fixes no length, so a longer label's scripts are refused bad_owner and its label is not held.
+inline constexpr char kCargoOwnerPrefix[] = "cargo:";
+inline bool IsCargoScriptOwner(std::string_view owner) {
+  constexpr std::size_t kPrefixLength = sizeof(kCargoOwnerPrefix) - 1;
+  if (owner.size() <= kPrefixLength || owner.size() > nevr_resource_sets::kMaxMapOwnerBytes) return false;
+  if (owner.substr(0, kPrefixLength) != std::string_view(kCargoOwnerPrefix, kPrefixLength)) return false;
+  return nevr_cdn::IsLabelName(owner.substr(kPrefixLength));
+}
+
 // The owner of a map's scripts: the registry's map owner (its prefix, at most kMaxMapOwnerBytes bytes) and a valid map id
 // after the prefix (nevr_maps::IsValidMapId). The registry checks the prefix and the length of a set's owner; the id rule is
-// checked here, so a script is never held for an owner the channel would refuse.
+// checked here, so a script is never held for an owner the channel would refuse. Or a CDN label's owner (IsCargoScriptOwner).
 inline bool IsMapScriptOwner(const std::string& owner) {
+  if (IsCargoScriptOwner(owner)) return true;
   if (!nevr_resource_sets::IsMapOwner(owner) || owner.size() > nevr_resource_sets::kMaxMapOwnerBytes) return false;
   const std::string_view id = std::string_view(owner).substr(sizeof(nevr_resource_sets::kMapOwnerPrefix) - 1);
   return nevr_maps::IsValidMapId(id);
