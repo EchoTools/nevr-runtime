@@ -12,6 +12,8 @@ clone_combat.py         Combat arena level builder (used by setuparchive)
 rad_archive_tool.py     Archive extract/repack tool (used by setuparchive)
 hash_lookup.json        Resource name/hash lookup table
 radhash.py              Hash utility
+plugins_override_generator.py  Makes the PLUGINS-card override set from your own install (see below)
+plugins_override_patches.json  Its edit list: hashes and our own bytes, no game data
 echomod/                Resource parsing library
 ```
 
@@ -66,6 +68,22 @@ Copy `TurboAHHHH.dll` to the `bin\win10\plugins\` folder.
 - **Network replication** - Sends combat mode events to other players in the session
 
 All hooks activate only when needed. On non-combat levels the DLL stays dormant.
+
+## The PLUGINS-card override set (#1857)
+
+The main-menu PLUGINS card is 13 resource override files for `mnu_master`, each a stock resource with the edits that add
+the card. The repository holds no game bytes: `plugins_override_patches.json` records, per file, the SHA-256 of the stock
+resource it is built from and the edits (copy a range of the stock resource, or put bytes of our own). Make the set from
+your own install, into an empty folder that you then copy to `_overrides` next to `echovr.exe`:
+
+```
+python plugins_override_generator.py generate --data-dir "<install>\_data\5932408047" --out <empty folder>
+```
+
+`--data-dir` can also be the environment variable `NEVR_GAME_DATA_DIR`; there is no default. The install is only read, and
+an `--out` inside it is refused. A resource that is not the one the edit list was made from (another game version) stops
+the run with a `StockMismatch` line naming the type and both hashes, and nothing is written.
+`python plugins_override_generator.py derive` rebuilds the edit list from a finished set when the card's design changes.
 
 ## Troubleshooting
 
