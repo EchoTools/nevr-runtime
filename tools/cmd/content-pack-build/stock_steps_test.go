@@ -40,6 +40,14 @@ var gunPatchTables = map[uint64]map[uint64]string{
 	},
 }
 
+// The resources the registered steps change, counted from the step list: the forEachLevel steps each change one table
+// per drone level (steps_drone.go: bullets, particle effects, scripts; steps_drone_health.go: the damageable table),
+// and steps_equipment.go changes the one mp_equipment resource. 4 x 5 + 1 = 21.
+const (
+	levelTableSteps    = 4
+	equipmentResources = 1
+)
+
 func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testing.T) {
 	data := os.Getenv("NEVR_STOCK_DATA")
 	if data == "" {
@@ -69,8 +77,9 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 			}
 		}
 	}
-	if n := len(p.changes[Sets[0]]); n != 16 {
-		t.Errorf("%d resources changed, want 16 (3 tables x 5 levels, and mp_equipment)", n)
+	if n, want := len(p.changes[Sets[0]]), levelTableSteps*len(droneLevels)+equipmentResources; n != want {
+		t.Errorf("%d resources changed, want %d (%d level tables x %d levels, and mp_equipment)", n, want,
+			levelTableSteps, len(droneLevels))
 	}
 	t.Log(fmt.Sprintf("%d resources match the gun patch's", len(p.changes[Sets[0]])))
 }

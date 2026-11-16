@@ -225,6 +225,7 @@ func TestTheProductionStepsAreTheEchoCombatOnesInOrder(t *testing.T) {
 		"drone bullet takes the assault bullet's effects",
 		"drone bullet gets the assault bullet's particle rows",
 		"drone actor runs script 190ed14fe6c74dd3",
+		"damageable health of actor 10e40287a9bf5a13 9999 to 70",
 		"equipment lists offer magnum, smg, chain, rifle, loc, dot and drone",
 	}
 	if len(steps) != len(want) {
