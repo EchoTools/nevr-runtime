@@ -20,6 +20,8 @@
 {"file":"tools/cmd/content-pack-build/steps_dot_preset_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_dot_stick.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_dot_stick_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
+{"file":"tools/cmd/content-pack-build/steps_dott.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
+{"file":"tools/cmd/content-pack-build/steps_dott_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_drone.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_drone_health.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_drone_health_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
