@@ -24,8 +24,8 @@ how an agent triangulates a correct log line.
 
 ### This IS
 
-- A binding ruleset for every `Log()` call in `src/`, `sdk/`,
-  `modules/`, and any future component that links `libcommon.a`.
+- A binding ruleset for every `Log()` call in `src/` and `sdk/`, and in
+  any future component that links `libnevr_core.a`.
 - A review gate: the "Hard Stops" table at the end of this document is
   enforced. A log line that fails any check is rejected in review.
 - A definition of what constitutes noise and what a log line

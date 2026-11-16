@@ -92,9 +92,8 @@ An edge implements the port for one platform and holds only what truly differs.
 - CMake picks the edge per target, by listing the file in the target that needs it, not by `#ifdef` in shared code.
   Examples: `src/quest/sentinel/CMakeLists.txt` lists `../../cdn/env_posix.cpp` (line 120); `src/runtime/CMakeLists.txt`
   lists `${CMAKE_SOURCE_DIR}/src/cdn/env_windows.cpp` (line 230) and `lifecycle/update_fs_win32.cpp` (line 62).
-- "Do NOT write new platform abstraction layers. Use existing `common/` patterns. If none exist yet, surface it - don't
-  write ad-hoc `#ifdef` blocks" (`AGENTS.md`, C++ Mingw Addendum, "What Not to Do"). The `common/` directory no longer
-  exists; the patterns are the port (step 1) and the edges above.
+- "Do NOT write new platform abstraction layers", "don't write ad-hoc `#ifdef` blocks" (`AGENTS.md`, C++ Mingw Addendum,
+  "What Not to Do", which points here). The patterns are the port (step 1) and the edges above.
 - An edge holds an OS call, a conversion for it (`update_fs_win32.h`: UTF-8 to UTF-16) or a library binding. A rule or a
   decision in an edge is a defect: move it to the core.
 

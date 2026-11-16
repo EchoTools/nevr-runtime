@@ -223,7 +223,7 @@ The message of the commit that lands carries the items below; it is the evidence
 
   "Nothing found" counts only with the pattern and the scope it ran over.
 - **Siblings, for a fix.** The search statement looks for copies of what you add; this looks for other instances of
-  what you fix. A PR commit that fixes a defect names the shape it fixed, gives the `git grep` that finds every instance of
+  what you fix. A commit that fixes a defect names the shape it fixed, gives the `git grep` that finds every instance of
   that shape (the pattern and the scope it ran over), and says for each hit: fixed in this commit, filed (`#N`), or not
   the same shape (the reason). A fix that lands for one instance and leaves its siblings is half a fix:
 
@@ -243,7 +243,7 @@ The message of the commit that lands carries the items below; it is the evidence
   Read, not edited: host_registry.cpp call sites of WaitIdle and ReaderGate::Scope.
   ```
 - **A mutant for every changed line of behaviour** (the procedure and its check: the skill `mutant-proof`). This is stricter than "A test must fail without the change" under
-  "Review, verification and landing", which every PR meets; a contributor's PR commit meets; a contributor's commit meets this as well. For every line
+  "Review, verification and landing", which every commit meets; a contributor's commit meets this as well. For every line
   of code, script or check you add or change, delete or alter that line alone, run the tests, and show that one of
   them fails. A changed line that no test notices is untested. Paste each mutant with its failing output, then the
   restored tree passing. A line with no behaviour (prose, a comment) has no mutant; say which lines those are.
@@ -714,7 +714,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 
 ## Conventions
 
-- **Logging**: Always use `Log(EchoVR::LogLevel::Info, "format %d", val)` from `common/logging.h`. Fatal errors via `FatalError(msg, title)`. A plugin uses `plugin_logger.h`, which routes to the host's `Log()` (N135).
+- **Logging**: Always use `Log(EchoVR::LogLevel::Info, "format %d", val)` from `src/core/logging.h`. Fatal errors via `FatalError(msg, title)`. A plugin uses `plugin_logger.h`, which routes to the host's `Log()` (N135).
 - **Hooking**: MinHook-based (`NEVR_USE_MINHOOK` compile flag). Functions use `__fastcall` convention. Use `ListenForBroadcasterMessage()` for game event callbacks.
 - **Protocol messages**: Symbol IDs in `src/runtime/server/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
 - **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
@@ -833,7 +833,7 @@ your seat name, for example `claude-main` or `codex`.
 - **Wait for a free slot.** Before starting a build, if `pgrep -x ninja | wc -l` is 2 or more, wait.
   Never interrupt another agent's build.
 - **At most three heavy builds at once per seat,** so the usage window and memory both hold.
-- **Cached builds come from one fixed, clean checkout.** The build checkout is checkout:** `<work root>/build-checkout/nevr-runtime`
+- **Cached builds come from one fixed, clean checkout.** The build checkout is `<work root>/build-checkout/nevr-runtime`
   (`$NEVR_BUILD_CHECKOUT`), moved to the commit with `just build-checkout <rev>`, and a build there refuses unless
   `git status --porcelain` is empty (`tools/build_checkout.py guard`). The path never changes. The Quest build uses the
   launcher here as in every other checkout (see "Builds"). Nobody edits
@@ -1309,8 +1309,8 @@ how an agent triangulates the correct path.
   `GetProcAddress`.
 - Use raw `printf` for debug output. Use the project's structured logger.
 - Suppress compiler warnings. Treat warnings as errors (`-Werror`).
-- Write ad-hoc platform abstraction layers. Use existing patterns from
-  the project's `common/` module.
+- Write ad-hoc platform abstraction layers. Follow the skill
+  `design-multiplatform-feature`.
 - Leave a TODO, FIXME, or `// NOLINT` without an inline justification.
 - Work around broken tooling. Fix the tool or stop.
 - Use C-style casts anywhere. Use `static_cast`, `reinterpret_cast`,
@@ -1485,9 +1485,8 @@ typedef struct _Result Result;
 - Do NOT mix MSVC and mingw object files. Pick one toolchain per build.
 - Do NOT use vcpkg ports that haven't been validated with
   `x64-mingw-static`. Test before adding.
-- Do NOT write new platform abstraction layers. Use existing `common/`
-  patterns. If none exist yet, surface it — don't write ad-hoc `#ifdef`
-  blocks.
+- Do NOT write new platform abstraction layers. Follow the skill
+  `design-multiplatform-feature`; don't write ad-hoc `#ifdef` blocks.
 - Do NOT suppress warnings and move on. Treat warnings as errors.
   `-Werror` is mandatory.
 - Do NOT commit commented-out code. Delete it. Git has history.
