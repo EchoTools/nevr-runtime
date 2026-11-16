@@ -7,6 +7,8 @@
 {"file":"tools/cmd/content-pack-build/steps_attach_order.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_attach_order_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_buff.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
+{"file":"tools/cmd/content-pack-build/steps_buff_attach.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
+{"file":"tools/cmd/content-pack-build/steps_buff_attach_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_buff_fx_arrow.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_buff_fx_arrow_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_buff_sparks.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
