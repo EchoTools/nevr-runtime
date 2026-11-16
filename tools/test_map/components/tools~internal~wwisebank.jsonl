@@ -1,5 +1,7 @@
 {"component":"tools/internal/wwisebank","dir":"tools/internal/wwisebank"}
 {"file":"tools/internal/wwisebank/bank.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
 {"file":"tools/internal/wwisebank/bank_test.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
+{"file":"tools/internal/wwisebank/children.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
+{"file":"tools/internal/wwisebank/children_test.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
 {"file":"tools/internal/wwisebank/encode.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
 {"file":"tools/internal/wwisebank/encode_test.go","tests":["go:internal/questwiring","go:internal/wwisebank"]}
