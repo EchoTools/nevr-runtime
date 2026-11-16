@@ -11,6 +11,12 @@
  *       "empty": [{"platform": "windows-x86_64", "type": "0x...", "name": "0x...", "align": <alignment>}, ...]}},
  *    "empty": []}
  *
+ * A label may also list `scripts`: [{"name": "0x..", "platform": "..", "stock_source": "0x..", "stock_sha256": "<64 hex>"}, ...], each a
+ * script the game loads as <scripts>\<name>.dll, served from a copy of the player's own stock script `stock_source` made on the
+ * device. No script byte travels. A `scripts` entry that breaks a rule (cdn_validate.h: rekey_edits, image_entry, stock_hash,
+ * bad_script, duplicate) refuses its label whole: the label, its entries and its records of 0 bytes are left out and the refusal is
+ * listed in Manifest::refused. A manifest without `scripts` parses as before.
+ *
  * `type` is the on-disk type, `name` the resource's symbol, both as "0x" hex strings (a JSON number cannot hold 64 bits). `size` is the
  * stored zstd frame, `bytes` what the engine decompresses it to, `align` the record's alignment. The runtime never decompresses: the
  * SHA-256 proves the frame is the published one and the engine decompresses it. `empty` lists the records of 0 bytes, which have no
@@ -81,7 +87,18 @@ struct EmptyRecord {
   std::uint32_t align = 0;
 };
 
-// An entry the validator left out.
+// One entry of a label's `scripts` list, as accepted: the copy `name` of the player's stock script `stock_source` (whose SHA-256 is
+// `stock_sha256`), for `platform`.
+struct ScriptEntry {
+  std::string label;
+  std::string platform;
+  std::uint64_t name = 0;
+  std::uint64_t stock_source = 0;
+  std::string stock_sha256;  // 64 lowercase hex characters
+};
+
+// An entry the validator left out. A refusal of a `scripts` rule (IsScriptRule) names the offending script entry (type 0, name 0
+// when the entry did not give one) and means the whole label is left out.
 struct Refusal {
   std::string label;
   std::size_t index = 0;  // the entry's index in its label (an empty record: in the `empty` list)
@@ -94,6 +111,7 @@ struct Manifest {
   std::vector<std::string> labels;  // in document order
   std::vector<Entry> entries;       // in document order, every platform, validator-accepted
   std::vector<EmptyRecord> empties;
+  std::vector<ScriptEntry> scripts;  // in document order, of the labels that were not refused
   std::vector<Refusal> refused;
   std::uint32_t unknown_fields = 0;  // keys the parser ignored (never named: remote text)
 };

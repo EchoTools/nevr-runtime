@@ -156,9 +156,9 @@ void AKeySharedByTwoLabelsIsADuplicateToo() {
 
 void TheEmptyListIsReadAndItsRecordsAreChecked() {
   json empty = json::array();
-  empty.push_back(json{{"type", kArchiveType}, {"name", "0x10"}, {"align", 4}});
+  empty.push_back(json{{"type", kArchiveType}, {"name", "0x10"}, {"align", kEmptyAlign}});
   empty.push_back(json{{"type", kArchiveType}, {"name", "0x11"}, {"align", 3}});    // alignment
-  empty.push_back(json{{"type", kArchiveType}, {"name", "0x1"}, {"align", 4}});     // the key of an entry
+  empty.push_back(json{{"type", kArchiveType}, {"name", "0x1"}, {"align", kEmptyAlign}});     // the key of an entry
   nc::Manifest m;
   QCHECK(Parse(Doc(json::array({Entry(kArchiveType, "0x1", 'a')}), empty), &m).status == nc::ParseStatus::kOk);
   QCHECK(m.empties.size() == 1 && m.empties[0].name == 0x10 && m.empties[0].align == 4 && m.empties[0].type == 0x2a41cf1c1d9e5d32ULL);
@@ -502,6 +502,121 @@ void AnotherPlatformsEntriesAreNotPlanned() {
   QCHECK(plan.platform_entries == 0 && plan.labels[0].skipped == nc::SkipReason::kNoEntries);
 }
 
+// The `scripts` list of a label (docs/adr/0045 decision 4): parsed, and each rule refuses its label whole.
+constexpr const char* kScriptName = "0x94ba7ca39fc97e1a";
+constexpr const char* kOtherScriptName = "0x4b65d1b0088d2682";
+constexpr const char* kStockScript = "0xb87ba2039b049d5e";
+constexpr const char* kWindows = "windows-x86_64";
+constexpr int kNotAString = 7;  // a JSON number where a string belongs
+
+json Script(const char* name = kScriptName, const char* source = kStockScript, char sha = 'd', const char* platform = kWindows) {
+  return json{{"name", name}, {"platform", platform}, {"stock_source", source}, {"stock_sha256", Sha(sha)}};
+}
+
+// A document whose one label `combat` holds one entry (so refusing the label drops something), one record of 0 bytes and `scripts`.
+std::string ScriptDoc(const json& scripts) {
+  json body = json{{"entries", json::array({Entry(kArchiveType, "0x1", 'a')})},
+                   {"empty", json::array({json{{"platform", "android-arm64"}, {"type", kArchiveType}, {"name", "0x10"}, {"align", kEmptyAlign}}})},
+                   {"scripts", scripts}};
+  json labels = json::object();
+  labels["combat"] = body;
+  labels["other"] = json{{"entries", json::array({Entry(kArchiveType, "0x2", 'b')})}};
+  return json{{"schema", "nevr-cargo-manifest"}, {"schema_version", 1}, {"labels", labels}}.dump();
+}
+
+void ARefusedScriptLabel(const json& scripts, nc::Rule rule, std::size_t index, std::uint64_t name) {
+  nc::Manifest m;
+  QCHECK(Parse(ScriptDoc(scripts), &m).status == nc::ParseStatus::kOk);
+  QCHECK(m.refused.size() == 1);
+  if (m.refused.size() == 1) {
+    QCHECK(m.refused[0].rule == rule && m.refused[0].label == "combat" && m.refused[0].index == index && m.refused[0].name == name &&
+           m.refused[0].type == 0);
+  }
+  // The label is left out whole: its entry, its record of 0 bytes and its scripts; the other label is untouched.
+  QCHECK(m.scripts.empty() && m.empties.empty());
+  QCHECK(m.labels.size() == 1 && m.labels[0] == "other");
+  QCHECK(m.entries.size() == 1 && m.entries[0].label == "other");
+}
+
+void AScriptsListIsParsed() {
+  nc::Manifest m;
+  const json list = json::array({Script(), Script(kOtherScriptName, kStockScript, 'e', "android-arm64")});
+  QCHECK(Parse(ScriptDoc(list), &m).status == nc::ParseStatus::kOk);
+  QCHECK(m.refused.empty() && m.unknown_fields == 0);
+  QCHECK(m.scripts.size() == 2);
+  if (m.scripts.size() == 2) {
+    QCHECK(m.scripts[0].label == "combat" && m.scripts[0].platform == kWindows && m.scripts[0].name == 0x94ba7ca39fc97e1aULL);
+    QCHECK(m.scripts[0].stock_source == 0xb87ba2039b049d5eULL && m.scripts[0].stock_sha256 == Sha('d'));
+    QCHECK(m.scripts[1].name == 0x4b65d1b0088d2682ULL && m.scripts[1].platform == "android-arm64");
+  }
+  QCHECK(m.labels.size() == 2 && m.entries.size() == 2 && m.empties.size() == 1);
+  // The same name on two platforms is two scripts, not a duplicate.
+  QCHECK(Parse(ScriptDoc(json::array({Script(), Script(kScriptName, kStockScript, 'd', "android-arm64")})), &m).status == nc::ParseStatus::kOk);
+  QCHECK(m.refused.empty() && m.scripts.size() == 2);
+  // A manifest with no `scripts` (every v1 manifest) has none, and the key is not an unknown field.
+  QCHECK(Parse(Doc(json::array({Entry(kArchiveType, "0x1", 'a')})), &m).status == nc::ParseStatus::kOk);
+  QCHECK(m.scripts.empty() && m.unknown_fields == 0);
+  QCHECK(Parse(ScriptDoc(json::array()), &m).status == nc::ParseStatus::kOk && m.scripts.empty() && m.refused.empty() && m.labels.size() == 2);
+}
+
+void AScriptWithEditsRefusesItsLabelAsRekeyEdits() {
+  json s = Script();
+  s["edits"] = json::array();
+  ARefusedScriptLabel(json::array({s}), nc::Rule::kRekeyEdits, 0, 0);
+  QCHECK(std::string(nc::RuleName(nc::Rule::kRekeyEdits)) == "rekey_edits");
+}
+
+void AScriptThatCarriesAFrameRefusesItsLabelAsImageEntry() {
+  for (const char* key : {"type", "format", "sha256", "size", "bytes", "align"}) {
+    json s = Script();
+    s[key] = std::string(key) == "size" || std::string(key) == "bytes" || std::string(key) == "align" ? json(kEmptyAlign) : json("x");
+    ARefusedScriptLabel(json::array({Script(kOtherScriptName), s}), nc::Rule::kImageEntry, 1, 0);
+  }
+  QCHECK(std::string(nc::RuleName(nc::Rule::kImageEntry)) == "image_entry");
+}
+
+void AScriptNamedAsItsOwnStockSourceRefusesItsLabelAsStockHash() {
+  ARefusedScriptLabel(json::array({Script(kStockScript, kStockScript)}), nc::Rule::kStockHash, 0, 0xb87ba2039b049d5eULL);
+  QCHECK(std::string(nc::RuleName(nc::Rule::kStockHash)) == "stock_hash");
+}
+
+void AScriptThatIsNotTheFourFieldsRefusesItsLabelAsBadScript() {
+  QCHECK(std::string(nc::RuleName(nc::Rule::kBadScript)) == "bad_script");
+  ARefusedScriptLabel(json::array({"not an object"}), nc::Rule::kBadScript, 0, 0);
+  for (const char* key : {"name", "platform", "stock_source", "stock_sha256"}) {
+    json s = Script();
+    s.erase(key);
+    ARefusedScriptLabel(json::array({s}), nc::Rule::kBadScript, 0, std::string(key) == "name" ? 0 : 0x94ba7ca39fc97e1aULL);
+    s = Script();
+    s[key] = kNotAString;  // the wrong JSON type
+    ARefusedScriptLabel(json::array({s}), nc::Rule::kBadScript, 0, std::string(key) == "name" ? 0 : 0x94ba7ca39fc97e1aULL);
+  }
+  json s = Script();
+  s["name"] = "94ba7ca39fc97e1a";  // no "0x"
+  ARefusedScriptLabel(json::array({s}), nc::Rule::kBadScript, 0, 0);
+  s = Script();
+  s["stock_sha256"] = std::string(64, 'D');  // not lowercase
+  ARefusedScriptLabel(json::array({s}), nc::Rule::kBadScript, 0, 0x94ba7ca39fc97e1aULL);
+  s = Script();
+  s["platform"] = "Windows X";
+  ARefusedScriptLabel(json::array({s}), nc::Rule::kBadScript, 0, 0x94ba7ca39fc97e1aULL);
+}
+
+void TwoScriptsOfOnePlatformAndNameRefuseTheirLabelAsDuplicate() {
+  ARefusedScriptLabel(json::array({Script(), Script(kScriptName, kStockScript, 'e')}), nc::Rule::kScriptDuplicate, 1, 0x94ba7ca39fc97e1aULL);
+  QCHECK(std::string(nc::RuleName(nc::Rule::kScriptDuplicate)) == "duplicate");
+}
+
+void EveryBadScriptIsListedAndTheListMustBeAnArray() {
+  nc::Manifest m;
+  json bad = Script();
+  bad.erase("name");
+  QCHECK(Parse(ScriptDoc(json::array({bad, Script(kStockScript, kStockScript)})), &m).status == nc::ParseStatus::kOk);
+  QCHECK(m.refused.size() == 2 && m.refused[0].rule == nc::Rule::kBadScript && m.refused[1].rule == nc::Rule::kStockHash);
+  QCHECK(nc::IsScriptRule(nc::Rule::kScriptDuplicate) && !nc::IsScriptRule(nc::Rule::kDuplicateKey));
+  QCHECK(Parse(ScriptDoc(json::object()), &m).status == nc::ParseStatus::kBadField);
+}
+
 }  // namespace
 
 int main() {
@@ -537,6 +652,13 @@ int main() {
   RequiredLabelsComeFirstAndRequiredOnlyDropsTheRest();
   AnotherPlatformsEntriesAreNotPlanned();
   ThePlanCountsEachLabelsEmptyRecordsForItsPlatform();
+  AScriptsListIsParsed();
+  AScriptWithEditsRefusesItsLabelAsRekeyEdits();
+  AScriptThatCarriesAFrameRefusesItsLabelAsImageEntry();
+  AScriptNamedAsItsOwnStockSourceRefusesItsLabelAsStockHash();
+  AScriptThatIsNotTheFourFieldsRefusesItsLabelAsBadScript();
+  TwoScriptsOfOnePlatformAndNameRefuseTheirLabelAsDuplicate();
+  EveryBadScriptIsListedAndTheListMustBeAnArray();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "cdn_manifest_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

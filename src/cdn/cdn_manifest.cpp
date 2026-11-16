@@ -1,5 +1,6 @@
 #include "cdn/cdn_manifest.h"
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <tuple>
@@ -51,9 +52,12 @@ bool IsKnown(const std::string& key, const char* const* known, std::size_t count
 }
 
 constexpr const char* kTopKeys[] = {"schema", "schema_version", "labels", "empty"};
-constexpr const char* kLabelKeys[] = {"entries", "empty"};
+constexpr const char* kLabelKeys[] = {"entries", "empty", "scripts"};
 constexpr const char* kEntryKeys[] = {"platform", "type", "name", "format", "sha256", "size", "bytes", "align", "stock_size"};
 constexpr const char* kEmptyKeys[] = {"type", "name", "align"};
+constexpr const char* kScriptKeys[] = {"name", "platform", "stock_source", "stock_sha256"};
+// The fields of a frame: a `scripts` entry that carries one is shipping a script image (Rule::kImageEntry).
+constexpr const char* kImageKeys[] = {"type", "format", "sha256", "size", "bytes", "align"};
 constexpr const char* kLabelEmptyKeys[] = {"platform", "type", "name", "align"};
 // Two holders of one (type, name) on one platform are a duplicate: a key held twice is held by neither.
 constexpr std::size_t kDuplicateHolders = 2;
@@ -151,6 +155,37 @@ ParseStatus ReadEmpty(const json& v, bool inLabel, EmptyRecord* e, std::uint64_t
   return ParseStatus::kOk;
 }
 
+// One entry of a label's `scripts` list. kNone with *script filled, or the rule it breaks (cdn_validate.h): the first of rekey_edits,
+// image_entry, bad_script, stock_hash, in that order. s->name is set as soon as it parses, so a refusal can name it.
+Rule ReadScript(const json& v, ScriptEntry* s, std::uint32_t* unknown) {
+  if (!v.is_object()) return Rule::kBadScript;
+  if (v.find("edits") != v.end()) return Rule::kRekeyEdits;
+  for (const char* key : kImageKeys) {
+    if (v.find(key) != v.end()) return Rule::kImageEntry;
+  }
+  for (auto it = v.begin(); it != v.end(); ++it) {
+    if (!IsKnown(it.key(), kScriptKeys, sizeof(kScriptKeys) / sizeof(kScriptKeys[0]))) ++*unknown;
+  }
+  const auto name = v.find("name");
+  const auto platform = v.find("platform");
+  const auto source = v.find("stock_source");
+  const auto sha = v.find("stock_sha256");
+  if (name != v.end() && StringOf(*name) != nullptr) ParseHex64(*StringOf(*name), &s->name);  // so a refusal can name it
+  if (name == v.end() || platform == v.end() || source == v.end() || sha == v.end()) return Rule::kBadScript;
+  const std::string* nameText = StringOf(*name);
+  const std::string* platformText = StringOf(*platform);
+  const std::string* sourceText = StringOf(*source);
+  const std::string* shaText = StringOf(*sha);
+  if (nameText == nullptr || platformText == nullptr || sourceText == nullptr || shaText == nullptr) return Rule::kBadScript;
+  std::uint64_t parsedName = 0;
+  if (!ParseHex64(*nameText, &parsedName)) return Rule::kBadScript;
+  if (!IsPlatformName(*platformText) || !ParseHex64(*sourceText, &s->stock_source) || !IsSha256Hex(*shaText)) return Rule::kBadScript;
+  if (s->name == s->stock_source) return Rule::kStockHash;
+  s->platform = *platformText;
+  s->stock_sha256 = *shaText;
+  return Rule::kNone;
+}
+
 // The rule a record of 0 bytes breaks by what it states: only its alignment (it has no frame and no stored size).
 Rule CheckEmpty(std::uint64_t align, const Limits& limits) {
   RecordFields fields;
@@ -221,6 +256,7 @@ ParseResult ParseManifest(std::string_view text, const Limits& limits, Manifest*
   };
   std::vector<Candidate> candidates;
   std::vector<EmptyCandidate> empties;
+  std::set<std::string> refusedLabels;  // a label whose `scripts` list broke a rule: left out whole
   std::uint64_t seen_total = 0;
   for (auto lit = labels->begin(); lit != labels->end(); ++lit) {
     const std::string& label = lit.key();
@@ -254,6 +290,32 @@ ParseResult ParseManifest(std::string_view text, const Limits& limits, Manifest*
         candidates.push_back({std::move(raw.entry), label, index});
       }
       ++index;
+    }
+    // The label's `scripts` list: a rule broken by any entry refuses the label whole, and every entry is still judged and listed.
+    const auto scriptList = body.find("scripts");
+    if (scriptList != body.end()) {
+      if (!scriptList->is_array()) return Fail(ParseStatus::kBadField, label);
+      std::vector<ScriptEntry> labelScripts;
+      std::set<std::pair<std::string, std::uint64_t>> seenScripts;
+      std::size_t scriptIndex = 0;
+      for (const json& item : *scriptList) {
+        if (seen_total >= limits.max_entries) return Fail(ParseStatus::kTooMany, label, scriptIndex);
+        ++seen_total;
+        ScriptEntry script;
+        script.label = label;
+        Rule rule = ReadScript(item, &script, &m.unknown_fields);
+        if (rule == Rule::kNone && !seenScripts.insert(std::make_pair(script.platform, script.name)).second) rule = Rule::kScriptDuplicate;
+        if (rule != Rule::kNone) {
+          m.refused.push_back({label, scriptIndex, 0, script.name, rule});
+          refusedLabels.insert(label);
+        } else {
+          labelScripts.push_back(std::move(script));
+        }
+        ++scriptIndex;
+      }
+      if (refusedLabels.count(label) == 0) {
+        for (ScriptEntry& script : labelScripts) m.scripts.push_back(std::move(script));
+      }
     }
     // The label's own list of records of 0 bytes: each names its platform, and belongs to this label.
     const auto labelEmpty = body.find("empty");
@@ -304,6 +366,16 @@ ParseResult ParseManifest(std::string_view text, const Limits& limits, Manifest*
       }
       ++index;
     }
+  }
+
+  // A refused label is left out whole: its entries and records of 0 bytes are neither judged for duplicates nor listed again.
+  if (!refusedLabels.empty()) {
+    const auto refused = [&refusedLabels](const std::string& label) { return refusedLabels.count(label) != 0; };
+    candidates.erase(std::remove_if(candidates.begin(), candidates.end(), [&refused](const Candidate& c) { return refused(c.entry.label); }),
+                     candidates.end());
+    empties.erase(std::remove_if(empties.begin(), empties.end(), [&refused](const EmptyCandidate& e) { return refused(e.record.label); }),
+                  empties.end());
+    m.labels.erase(std::remove_if(m.labels.begin(), m.labels.end(), refused), m.labels.end());
   }
 
   // Pass 2: a key held twice is held by neither. A holder is an entry or a record of 0 bytes, under its (type, name). Two holders of

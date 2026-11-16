@@ -43,8 +43,18 @@ const char* RuleName(Rule rule) noexcept {
     case Rule::kSizeRange: return "size_range";
     case Rule::kObjectTooLarge: return "object_too_large";
     case Rule::kUnscopedEmpty: return "unscoped_empty";
+    case Rule::kRekeyEdits: return "rekey_edits";
+    case Rule::kImageEntry: return "image_entry";
+    case Rule::kStockHash: return "stock_hash";
+    case Rule::kBadScript: return "bad_script";
+    case Rule::kScriptDuplicate: return "duplicate";
   }
   return "unknown";
+}
+
+bool IsScriptRule(Rule rule) noexcept {
+  return rule == Rule::kRekeyEdits || rule == Rule::kImageEntry || rule == Rule::kStockHash || rule == Rule::kBadScript ||
+         rule == Rule::kScriptDuplicate;
 }
 
 std::size_t FrameHeaderBytes(const unsigned char* bytes, std::size_t length) noexcept {

@@ -127,7 +127,9 @@ void ReportRefusals(Env& env, const Manifest& manifest, const char* source) {
     ++said;
     env.Event(EventLevel::kWarn, "cdn_refused",
               {{"source", source}, {"label", r.label}, {"index", r.index}, {"type", FormatHex64(r.type)}, {"name", FormatHex64(r.name)},
-               {"rule", RuleName(r.rule)}, {"consequence", "this record is neither fetched nor served"}});
+               {"rule", RuleName(r.rule)},
+               {"consequence", IsScriptRule(r.rule) ? "this label is not mounted; its levels run on the game's own data"
+                                                    : "this record is neither fetched nor served"}});
   }
   if (manifest.refused.size() > kSingleLines) {
     for (const auto& kv : counts) {

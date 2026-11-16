@@ -15,6 +15,17 @@
  *   object_too_large        more decompressed bytes than this device can give one object (Limits::max_object_bytes).
  *   unscoped_empty          a top-level `empty` record of a manifest that does not have exactly one label: a record of 0 bytes must name
  *                           the label it belongs to, which a label's own `empty` list does.
+ *
+ * The rules of a label's `scripts` list (cdn_manifest.h). Each refuses the label whole, not the one entry: a label whose script
+ * names cannot all be trusted is not mounted, because a mounted label's records name scripts the game loads without an existence check.
+ *   rekey_edits             a script entry carries `edits`: byte edits to the copy of the stock script. Not served from a label.
+ *   image_entry             a script entry carries a frame's fields (type, format, sha256, size, bytes, align): a script image
+ *                           shipped in the manifest. No script byte travels; the copy is made on the device from its own stock file.
+ *   stock_hash              a script entry names itself as its stock source: the copy would take the hash of the file the game
+ *                           already has.
+ *   bad_script              a script entry that is not the four fields {name, platform, stock_source, stock_sha256} in the forms
+ *                           the manifest uses ("0x" hex names, a platform name, 64 lowercase hex characters).
+ *   duplicate               two script entries of one label share (platform, name).
  */
 #pragma once
 
@@ -40,9 +51,17 @@ enum class Rule : std::uint8_t {
   kSizeRange,
   kObjectTooLarge,
   kUnscopedEmpty,
+  kRekeyEdits,
+  kImageEntry,
+  kStockHash,
+  kBadScript,
+  kScriptDuplicate,
 };
 
 const char* RuleName(Rule rule) noexcept;
+
+// True for a rule of a label's `scripts` list: it refuses the label whole.
+bool IsScriptRule(Rule rule) noexcept;
 
 // The longest zstd frame header (RFC 8878 3.1.1.1): magic 4, descriptor 1, window 1, dictionary id 4, content size 8.
 inline constexpr std::size_t kMaxFrameHeaderBytes = kZstdMaxFrameHeaderBytes;
