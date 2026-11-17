@@ -109,6 +109,7 @@ PROGRAMS = {
         "weapon_arm_test",
     ),
     "data": (
+        "cdn_boot_fetch_test",
         "cdn_limits_test",
         "cdn_manifest_test",
         "cdn_prefetch_test",
