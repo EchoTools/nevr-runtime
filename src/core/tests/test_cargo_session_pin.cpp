@@ -429,3 +429,38 @@ TEST(CargoSessionPin, EveryNoticeLineFitsTheGameBlock) {
     EXPECT_LE(d.line.size(), kLineMax) << d.line;
   }
 }
+
+// R11 (PLAN-v7 5.5 "The decision", "One leave owner"): OutcomeOf is the decision as the session pin's tick reads it: the leave, the
+// row's reason and notice, the title and label, and the inputs the decision named (B, and M when this run parsed one).
+TEST(CargoSessionPin, OutcomeOfCarriesTheLeaveTheNoticeAndTheInputs) {
+  constexpr std::uint64_t kLocal = 0x1111111111111111ULL;
+  constexpr std::uint64_t kManifest = 0x2222222222222222ULL;
+  constexpr std::uint64_t kOther = 0x3333333333333333ULL;
+  ncp::CargoView view;
+  view.local = kLocal;
+  view.status.state = ncp::CargoBoot::kWhole;
+  view.manifest_known = true;
+  view.manifest = kManifest;
+
+  const nevr_map_session_pin::CargoOutcome stay = ncp::OutcomeOf(view, EchoVR::CSymbol64Hash("mpl_arena_a"), kManifest);
+  EXPECT_FALSE(stay.leave);
+  EXPECT_EQ(stay.reason, "not_combat");
+  EXPECT_TRUE(stay.line.empty());
+
+  // Row 13: the manifest is known, the server runs another set.
+  const nevr_map_session_pin::CargoOutcome leave = ncp::OutcomeOf(view, ncp::kCombatPebblesLevel, kOther);
+  EXPECT_TRUE(leave.leave);
+  EXPECT_EQ(leave.reason, "server_behind");
+  EXPECT_EQ(leave.line, "This server's EchoCombat is out of date: join another match");
+  EXPECT_EQ(leave.id, "combat_content");
+  EXPECT_EQ(leave.title, ncp::kCargoNoticeTitle);
+  EXPECT_EQ(leave.local, kLocal);
+  EXPECT_TRUE(leave.manifest_known);
+  EXPECT_EQ(leave.manifest, kManifest);
+
+  // The same set: a stay with no reason.
+  const nevr_map_session_pin::CargoOutcome same = ncp::OutcomeOf(view, ncp::kCombatPebblesLevel, kLocal);
+  EXPECT_FALSE(same.leave);
+  EXPECT_TRUE(same.reason.empty());
+}
+

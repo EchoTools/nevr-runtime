@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <mutex>
+#include <optional>
 
 #include "core/map_format.h"
 #include "nevr/symbol_hash.h"
@@ -37,11 +38,21 @@ std::vector<MapPin>& g_mounted() {
 }
 FetchRequestFn g_fetch = nullptr;
 
+// The cargo inputs (SetCargoServerPin, SetCargoDecide): written under g_mutex(), copied under it by TickWith.
+struct CargoInputs {
+  std::optional<std::uint64_t> server_pin;
+  std::shared_ptr<const CargoDecideFn> decide;
+};
+CargoInputs& g_cargo() {
+  static CargoInputs instance;  // function-local: no load-time initializer in the sentinel (tools/check_quest_static_init.sh)
+  return instance;
+}
+
 // The tick's state: game thread only (TickWith), and ResetForTest.
 struct TickState {
   std::uint64_t server_set = 0;  // the pin this server wrote into the lobby's owner JSON; the only value it clears
   bool have_key = false;
-  std::uint64_t key_lobby = 0, key_level = 0, key_pin = 0;
+  std::uint64_t key_lobby = 0, key_level = 0, key_pin = 0, key_cargo = 0;
   bool local_warned = false;
   bool leave_pending = false;
   std::uint64_t leave_deadline = 0;
@@ -143,11 +154,8 @@ void TryLeave(GameAccess& game, std::uint64_t now) {
   }
 }
 
-void ServerTick(GameAccess& game, std::uint64_t lobby) {
-  if (lobby == 0) {
-    g_tick().server_set = 0;
-    return;
-  }
+// The map pin's server write: nevr_map_pin is set on change and cleared only when this server set it.
+void ServerMapTick(GameAccess& game, std::uint64_t lobby) {
   const std::uint64_t level = SessionLevelWith(game);
   const std::uint64_t desired = ServerPinFor(level);
   const std::uint64_t current = game.OwnerSymbol(lobby, kOwnerPinKey);
@@ -168,7 +176,78 @@ void ServerTick(GameAccess& game, std::uint64_t lobby) {
   }
 }
 
-void ClientTick(GameAccess& game, std::uint64_t lobby, std::uint64_t now) {
+// The cargo pin's server write (PLAN-v7 5.5 "Server"): B on change, whatever the map pin does, so a server with no map still states its set.
+void ServerCargoTick(GameAccess& game, std::uint64_t lobby, std::uint64_t pin) {
+  if (game.OwnerSymbol(lobby, kOwnerCargoPinKey) == pin) return;
+  game.SetOwnerSymbol(lobby, kOwnerCargoPinKey, pin);
+  PinEvent event;
+  event.kind = PinEventKind::kCargoServerSet;
+  event.pin = pin;
+  game.Event(event);
+}
+
+void ServerTick(GameAccess& game, std::uint64_t lobby, const std::optional<std::uint64_t>& cargo_pin) {
+  if (lobby == 0) {
+    g_tick().server_set = 0;
+    return;
+  }
+  ServerMapTick(game, lobby);
+  if (cargo_pin) ServerCargoTick(game, lobby, *cargo_pin);
+}
+
+// Writes the notice and the leave once for both inputs: the map's notice when the map leaves, else the cargo's (PLAN-v7 5.5).
+void ClientLeaveOnce(GameAccess& game, std::uint64_t now, std::uint64_t level, std::uint64_t pin, std::uint64_t cargo_pin,
+                     const ClientDecision& decision, const CargoOutcome& cargo, bool map_leaves) {
+  std::string title;
+  std::string line;
+  if (map_leaves) {
+    PinEvent event;
+    event.kind = PinEventKind::kSkew;
+    event.level = level;
+    event.pin = pin;
+    event.id = decision.id;
+    event.reason = decision.reason;
+    event.notice = decision.notice_line;
+    event.fetch = decision.request_fetch;
+    game.Event(event);
+    title = kNoticeTitle;
+    line = decision.notice_line;
+  } else {
+    PinEvent event;
+    event.kind = PinEventKind::kCargoSkew;
+    event.level = level;
+    event.pin = cargo_pin;
+    event.id = cargo.id;
+    event.reason = cargo.reason;
+    event.notice = cargo.line;
+    event.local = cargo.local;
+    event.manifest_known = cargo.manifest_known;
+    event.manifest = cargo.manifest;
+    game.Event(event);
+    title = cargo.title;
+    line = cargo.line;
+  }
+  if (!game.WriteNotice(title.c_str(), line.c_str())) {
+    PinEvent refused;
+    refused.kind = PinEventKind::kNoticeNotWritten;
+    refused.id = map_leaves ? decision.id : cargo.id;
+    game.Event(refused);
+  }
+  if (map_leaves && decision.request_fetch) {
+    FetchRequestFn fetch = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(g_mutex());
+      fetch = g_fetch;
+    }
+    if (fetch != nullptr) fetch(decision.id);
+  }
+  // A leave already retrying stands, whatever the level does meanwhile.
+  if (g_tick().leave_pending) return;
+  g_tick().leave_id = map_leaves ? decision.id : cargo.id;
+  TryLeave(game, now);
+}
+
+void ClientTick(GameAccess& game, std::uint64_t lobby, std::uint64_t now, const CargoDecideFn* cargo) {
   const std::int32_t state = game.NetState();
   // A client in a session: the decision is made again for each new session (a lobby, a level or a pin that changed).
   const bool inSession = state >= kFirstSessionState && state <= kLastSessionState;
@@ -181,13 +260,33 @@ void ClientTick(GameAccess& game, std::uint64_t lobby, std::uint64_t now) {
 
   const std::uint64_t level = SessionLevelWith(game);
   const std::uint64_t pin = game.OwnerSymbol(lobby, kOwnerPinKey);
-  if (g_tick().have_key && g_tick().key_lobby == lobby && g_tick().key_level == level && g_tick().key_pin == pin) return;
+  // The cargo pin is read each frame in a session only when a client decides it (F8): a change the server writes after the first
+  // read changes the key, so the decision is made again.
+  const std::uint64_t cargo_pin = cargo != nullptr ? game.OwnerSymbol(lobby, kOwnerCargoPinKey) : 0;
+  if (g_tick().have_key && g_tick().key_lobby == lobby && g_tick().key_level == level && g_tick().key_pin == pin &&
+      g_tick().key_cargo == cargo_pin)
+    return;
   g_tick().have_key = true;
   g_tick().key_lobby = lobby;
   g_tick().key_level = level;
   g_tick().key_pin = pin;
+  g_tick().key_cargo = cargo_pin;
 
   const ClientDecision decision = DecideClient(level, pin);
+  CargoOutcome outcome;
+  if (cargo != nullptr) outcome = (*cargo)(level, cargo_pin);
+  const bool map_leaves = decision.action == ClientAction::kLeave;
+  if (cargo != nullptr) {
+    PinEvent record;
+    record.kind = PinEventKind::kSessionDecision;
+    record.level = level;
+    record.pin = cargo_pin;
+    record.reason = decision.reason.empty() ? "none" : decision.reason;
+    record.cargo_reason = outcome.reason.empty() ? "none" : outcome.reason;
+    record.leave = map_leaves ? "map" : outcome.leave ? "cargo" : "none";
+    game.Event(record);
+  }
+
   PinEvent event;
   event.level = level;
   event.pin = pin;
@@ -195,44 +294,23 @@ void ClientTick(GameAccess& game, std::uint64_t lobby, std::uint64_t now) {
   event.reason = decision.reason;
   switch (decision.action) {
     case ClientAction::kNone:
-      return;
+      break;
     case ClientAction::kUnpinned:
       event.kind = PinEventKind::kUnpinned;
       game.Event(event);
-      return;
+      break;
     case ClientAction::kLocal:
-      if (g_tick().local_warned) return;
+      if (g_tick().local_warned) break;
       g_tick().local_warned = true;
       event.kind = PinEventKind::kLocalMap;
       event.local_path = decision.local_path;
       game.Event(event);
-      return;
+      break;
     case ClientAction::kLeave:
       break;
   }
-
-  event.kind = PinEventKind::kSkew;
-  event.notice = decision.notice_line;
-  event.fetch = decision.request_fetch;
-  game.Event(event);
-  if (!game.WriteNotice(kNoticeTitle, decision.notice_line.c_str())) {
-    PinEvent refused;
-    refused.kind = PinEventKind::kNoticeNotWritten;
-    refused.id = decision.id;
-    game.Event(refused);
-  }
-  if (decision.request_fetch) {
-    FetchRequestFn fetch = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(g_mutex());
-      fetch = g_fetch;
-    }
-    if (fetch != nullptr) fetch(decision.id);
-  }
-  // A leave already retrying stands, whatever the level does meanwhile.
-  if (g_tick().leave_pending) return;
-  g_tick().leave_id = decision.id;
-  TryLeave(game, now);
+  if (!map_leaves && !outcome.leave) return;
+  ClientLeaveOnce(game, now, level, pin, cargo_pin, decision, outcome, map_leaves);
 }
 
 }  // namespace
@@ -405,20 +483,37 @@ std::uint64_t SessionLevelWith(GameAccess& game) {
   return game.MainLevel();
 }
 
+void SetCargoServerPin(std::uint64_t pin) {
+  std::lock_guard<std::mutex> lock(g_mutex());
+  g_cargo().server_pin = pin;
+}
+
+void SetCargoDecide(CargoDecideFn decide) {
+  std::lock_guard<std::mutex> lock(g_mutex());
+  g_cargo().decide = decide ? std::make_shared<const CargoDecideFn>(std::move(decide)) : nullptr;
+}
+
 void TickWith(GameAccess& game) {
+  // The cargo inputs are copied under the mutex: the decision is a shared pointer, so a frame copies no function.
+  std::optional<std::uint64_t> cargo_pin;
+  std::shared_ptr<const CargoDecideFn> cargo;
   {
-    // Nothing listed, nothing mounted, nothing to clear and no leave pending: no decision and no write can follow, so the game is
-    // not called at all, not even to prove its own bytes (Callable reads them and logs a mismatch). The tick runs every frame once
-    // it is wired, so a run with no maps does nothing here.
+    // Nothing listed, nothing mounted, nothing to clear, no leave pending and no cargo input: no decision and no write can follow,
+    // so the game is not called at all, not even to prove its own bytes (Callable reads them and logs a mismatch). The tick runs
+    // every frame once it is wired, so a run with no maps and no cargo input does nothing here.
     std::lock_guard<std::mutex> lock(g_mutex());
-    if (g_view().listed.empty() && g_mounted().empty() && g_tick().server_set == 0 && !g_tick().leave_pending) return;
+    cargo_pin = g_cargo().server_pin;
+    cargo = g_cargo().decide;
+    if (g_view().listed.empty() && g_mounted().empty() && g_tick().server_set == 0 && !g_tick().leave_pending && !cargo_pin &&
+        !cargo)
+      return;
   }
   if (!game.Callable()) return;
   const std::uint64_t lobby = game.Lobby();
   if (game.IsServer())
-    ServerTick(game, lobby);
+    ServerTick(game, lobby, cargo_pin);
   else
-    ClientTick(game, lobby, game.NowMs());
+    ClientTick(game, lobby, game.NowMs(), cargo.get());
 }
 
 nlohmann::json LoginEntries() {
@@ -454,6 +549,7 @@ void ResetForTest() {
   g_view() = ChannelView();
   g_mounted().clear();
   g_fetch = nullptr;
+  g_cargo() = CargoInputs();
   g_tick() = TickState();
 }
 

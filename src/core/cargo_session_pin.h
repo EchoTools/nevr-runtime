@@ -17,6 +17,7 @@
 #include "cdn/cdn_plan.h"
 #include "cdn/cdn_script_gate.h"
 #include "cdn/cdn_store.h"
+#include "core/map_session_pin.h"
 
 namespace nevr_cargo_pin {
 
@@ -102,5 +103,10 @@ struct CargoDecision {
 // The decision (PLAN-v7 5.5 table, first match wins). `level` is the session's level; `server_pin` the server's pin from its owner JSON
 // (kCargoPinAbsent: the key is absent, an older server).
 CargoDecision DecideCargo(const CargoView& view, std::uint64_t level, std::uint64_t server_pin);
+
+// The decision as the session pin's tick acts on it (map_session_pin.h CargoOutcome, PLAN-v7 5.5 "One leave owner"): the leave, the
+// row's reason and notice, the title, the label, and the inputs the decision named (B, and M when known). The marker of row 14
+// (`CargoDecision::write_marker`) is not carried: the PC binding writes it, and it is wired with the feed (PLAN-v7 R6b-2).
+nevr_map_session_pin::CargoOutcome OutcomeOf(const CargoView& view, std::uint64_t level, std::uint64_t server_pin);
 
 }  // namespace nevr_cargo_pin

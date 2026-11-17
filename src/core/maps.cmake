@@ -157,8 +157,12 @@ if(BUILD_TESTING AND GTest_FOUND)
 
   # The session pin's pure part over a fake game (ADR 0048 decision 9): the level names and the pin value by their vectors, the
   # decision table, the notice fit, the view's replacement, the empty-state gate and the tick's events. No game, no Win32.
-  add_executable(test_map_session_pin_core "${CMAKE_CURRENT_LIST_DIR}/tests/map_session_pin_test.cpp")
-  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/tests/map_session_pin_test.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  # The cargo pin's decision (OutcomeOf, PLAN-v7 5.5 R11) reads the policy's StateOf, which the core does not link: cdn_plan.cpp is
+  # compiled into this test, as test_cargo_session_pin does.
+  add_executable(test_map_session_pin_core "${CMAKE_CURRENT_LIST_DIR}/tests/map_session_pin_test.cpp"
+    "${CMAKE_SOURCE_DIR}/src/cdn/cdn_plan.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/tests/map_session_pin_test.cpp" "${CMAKE_SOURCE_DIR}/src/cdn/cdn_plan.cpp"
+    PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
   target_include_directories(test_map_session_pin_core PRIVATE "${CMAKE_SOURCE_DIR}/src")
   target_link_libraries(test_map_session_pin_core PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk
     nlohmann_json::nlohmann_json)

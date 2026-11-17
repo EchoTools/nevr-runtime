@@ -14,6 +14,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/cargo_session_pin.h"
 #include "nevr/symbol_hash.h"
 
 namespace {
@@ -630,3 +631,187 @@ TEST(MapSessionPinRecord, TheLineQuotesTheConsequenceAndNothingElse) {
 }
 
 }  // namespace
+
+// R11 (PLAN-v7 5.5 "One leave owner", "Feed", tests 1-8): the cargo pin's two inputs on the session pin's one tick, with the real
+// decision (core/cargo_session_pin.h OutcomeOf) and a fake game. A platform that sets no input has the map pin's tick unchanged.
+namespace {
+
+namespace ncp = nevr_cargo_pin;
+
+constexpr std::uint64_t kCargoB = 0x1111111111111111ull;  // this client's or this server's set
+constexpr std::uint64_t kCargoX = 0x2222222222222222ull;  // another set
+
+// A client whose boot set is whole with pin `local` (the view a PC binding gives, PLAN-v7 5.5 "The decision").
+ncp::CargoView WholeSet(std::uint64_t local) {
+  ncp::CargoView view;
+  view.local = local;
+  view.status.state = ncp::CargoBoot::kWhole;
+  return view;
+}
+
+sp::CargoDecideFn Decide(const ncp::CargoView& view) {
+  return [view](std::uint64_t level, std::uint64_t server_pin) { return ncp::OutcomeOf(view, level, server_pin); };
+}
+
+}  // namespace
+
+// Test 1 (G2): a server with no map mounted writes its cargo pin on change, and the map pin's early return does not stop it.
+TEST_F(MapSessionPin, TheServerWritesItsCargoPinOnChangeEvenWithNoMapPin) {
+  FakeGame server;
+  server.server = true;
+  sp::SetCargoServerPin(kCargoB);
+  sp::TickWith(server);
+  sp::TickWith(server);
+  EXPECT_EQ(server.owner[sp::kOwnerCargoPinKey], kCargoB);
+  EXPECT_EQ(server.set_calls, 1);
+  EXPECT_EQ(server.Count(sp::PinEventKind::kCargoServerSet), 1u);
+}
+
+// Test 1b (F7, G2): a server with no whole set writes kCargoPinNone, not 0: "no set" is a fact a client acts on.
+TEST_F(MapSessionPin, AServerWithNoWholeSetWritesNoneNotAbsent) {
+  FakeGame server;
+  server.server = true;
+  sp::SetCargoServerPin(ncp::kCargoPinNone);
+  sp::TickWith(server);
+  EXPECT_EQ(server.owner[sp::kOwnerCargoPinKey], ncp::kCargoPinNone);
+  EXPECT_NE(server.owner[sp::kOwnerCargoPinKey], 0u);
+}
+
+// Test 1c: with no cargo input (the Quest, and the PC before its feed) the tick writes no cargo key and records no decision.
+TEST_F(MapSessionPin, WithNoCargoInputTheTickWritesNoCargoKeyAndDecidesNoCargo) {
+  ClientWithArena2();
+  FakeGame server;
+  server.server = true;
+  server.owner["level"] = Level("arena2");
+  sp::TickWith(server);
+  EXPECT_EQ(server.owner.count(sp::kOwnerCargoPinKey), 0u);
+  FakeGame client;
+  client.owner["level"] = Level("arena2");
+  client.owner["nevr_map_pin"] = kPinOfNothing;
+  sp::TickWith(client);
+  EXPECT_EQ(client.Count(sp::PinEventKind::kSessionDecision), 0u);
+  EXPECT_EQ(client.Count(sp::PinEventKind::kCargoSkew), 0u);
+  EXPECT_EQ(client.Count(sp::PinEventKind::kSkew), 1u);
+}
+
+// Test 2 (F8): the first read of the server's pin is absent (the stay), a later read is another set: the client leaves then. The
+// decision is made again when the pin changes, not once per session.
+TEST_F(MapSessionPin, AClientThatReadsAPinLaterLeavesOnIt) {
+  FakeGame client;
+  client.owner["level"] = kStockLevel;
+  sp::SetCargoDecide(Decide(WholeSet(kCargoB)));
+  sp::TickWith(client);
+  EXPECT_EQ(client.schedule_calls, 0);
+  ASSERT_EQ(client.Count(sp::PinEventKind::kSessionDecision), 1u);
+  EXPECT_EQ(client.First(sp::PinEventKind::kSessionDecision)->cargo_reason, "unpinned");
+  EXPECT_EQ(client.First(sp::PinEventKind::kSessionDecision)->leave, "none");
+  client.owner[sp::kOwnerCargoPinKey] = kCargoX;
+  sp::TickWith(client);
+  EXPECT_EQ(client.schedule_calls, 1);
+  EXPECT_EQ(client.Count(sp::PinEventKind::kCargoSkew), 1u);
+  ASSERT_EQ(client.notices.size(), 1u);
+  EXPECT_EQ(client.notices[0].first, ncp::kCargoNoticeTitle);
+  EXPECT_EQ(client.notices[0].second, "EchoCombat differs from this server: restart the game to update");
+  // The decision line of this key names the cargo as the input that left (PLAN-v7 5.5 "The decision": leave=cargo).
+  const sp::PinEvent* leaving = nullptr;
+  for (const sp::PinEvent& e : client.events)
+    if (e.kind == sp::PinEventKind::kSessionDecision) leaving = &e;
+  ASSERT_NE(leaving, nullptr);
+  EXPECT_EQ(leaving->leave, "cargo");
+  EXPECT_NE(leaving->cargo_reason, "none");
+  // The leave is taken: the same key again makes no decision and no second leave.
+  sp::TickWith(client);
+  EXPECT_EQ(client.schedule_calls, 1);
+}
+
+// Test 2b: the decision line is written once per key, not once per frame.
+TEST_F(MapSessionPin, TheDecisionLineIsWrittenOncePerKey) {
+  FakeGame client;
+  client.owner["level"] = kStockLevel;
+  client.owner[sp::kOwnerCargoPinKey] = kCargoB;
+  sp::SetCargoDecide(Decide(WholeSet(kCargoB)));
+  constexpr int kTicksOnOneKey = 5;  // frames in one session with no key change: one decision line for all of them
+  for (int i = 0; i < kTicksOnOneKey; ++i) sp::TickWith(client);
+  ASSERT_EQ(client.Count(sp::PinEventKind::kSessionDecision), 1u);
+  EXPECT_EQ(client.First(sp::PinEventKind::kSessionDecision)->cargo_reason, "none");
+}
+
+// Test 3 (X1): a client with no set in a pinned Arena session stays: Arena is not a combat level.
+TEST_F(MapSessionPin, AnArenaSessionWithNoSetStays) {
+  FakeGame client;
+  client.owner["level"] = Level("mpl_arena_a");
+  client.owner[sp::kOwnerCargoPinKey] = ncp::kCargoPinNone;
+  sp::SetCargoDecide(Decide(ncp::CargoView()));
+  sp::TickWith(client);
+  EXPECT_EQ(client.schedule_calls, 0);
+  EXPECT_EQ(client.Count(sp::PinEventKind::kCargoSkew), 0u);
+  EXPECT_TRUE(client.notices.empty());
+}
+
+// Test 4 (F6, row 11): a client with no set in a combat session whose server's pin is the manifest's, not downloaded: leaves with
+// row 11's line.
+TEST_F(MapSessionPin, ACombatSessionWithNoSetLeavesWithTheNotDownloadedLine) {
+  FakeGame client;
+  client.owner["level"] = kStockLevel;
+  client.owner[sp::kOwnerCargoPinKey] = kCargoX;
+  ncp::CargoView view;
+  view.manifest_known = true;
+  view.manifest = kCargoX;
+  sp::SetCargoDecide(Decide(view));
+  sp::TickWith(client);
+  EXPECT_EQ(client.schedule_calls, 1);
+  ASSERT_EQ(client.notices.size(), 1u);
+  EXPECT_EQ(client.notices[0].second, "EchoCombat not downloaded yet: restart to play this match");
+  ASSERT_EQ(client.Count(sp::PinEventKind::kCargoSkew), 1u);
+  EXPECT_EQ(client.First(sp::PinEventKind::kCargoSkew)->reason, "not_downloaded");
+}
+
+// Test 5 (F6): the two pebbles levels are compared as the four combat maps are.
+TEST_F(MapSessionPin, ThePebblesLevelsLeaveOnAnotherSet) {
+  for (const std::uint64_t level : {ncp::kCombatPebblesLevel, ncp::kCombatPebblesPayloadLevel}) {
+    FakeGame client;
+    client.owner["level"] = level;
+    client.owner[sp::kOwnerCargoPinKey] = kCargoX;
+    sp::SetCargoDecide(Decide(WholeSet(kCargoB)));
+    sp::TickWith(client);
+    EXPECT_EQ(client.schedule_calls, 1) << "level " << level;
+  }
+}
+
+// Test 6 (F6): the combat lobby is not in the scope: a session on mpl_lobby_b2 stays.
+TEST_F(MapSessionPin, TheLobbyStaysWhateverTheSets) {
+  FakeGame client;
+  client.owner["level"] = Level("mpl_lobby_b2");
+  client.owner[sp::kOwnerCargoPinKey] = kCargoX;
+  sp::SetCargoDecide(Decide(WholeSet(kCargoB)));
+  sp::TickWith(client);
+  EXPECT_EQ(client.schedule_calls, 0);
+  EXPECT_EQ(client.Count(sp::PinEventKind::kCargoSkew), 0u);
+}
+
+// Test 7: a map leave and a cargo leave together give one leave, the map's notice, and one decision line naming both inputs.
+TEST_F(MapSessionPin, AMapAndACargoLeaveGiveOneLeaveAndTheMapsNotice) {
+  sp::ChannelView view;
+  view.listed = {{kStockLevel, "mpl_combat_dyson"}};
+  sp::SetChannelView(view);
+  sp::SetMountedPins({Pin("mpl_combat_dyson", "1.0", kSourceA)});
+  sp::SetFetchRequest(&RecordFetch);
+  FakeGame client;
+  client.owner["level"] = kStockLevel;
+  client.owner["nevr_map_pin"] = kPinOfNothing;
+  client.owner[sp::kOwnerCargoPinKey] = kCargoX;
+  sp::SetCargoDecide(Decide(WholeSet(kCargoB)));
+  sp::TickWith(client);
+  EXPECT_EQ(client.schedule_calls, 1);
+  ASSERT_EQ(client.notices.size(), 1u);
+  EXPECT_EQ(client.notices[0].first, sp::kNoticeTitle);
+  EXPECT_EQ(client.Count(sp::PinEventKind::kCargoSkew), 0u);
+  EXPECT_EQ(client.Count(sp::PinEventKind::kSkew), 1u);
+  ASSERT_EQ(client.Count(sp::PinEventKind::kSessionDecision), 1u);
+  const sp::PinEvent* decision = client.First(sp::PinEventKind::kSessionDecision);
+  EXPECT_EQ(decision->reason, "version");
+  EXPECT_EQ(decision->cargo_reason, "unchecked");
+  EXPECT_EQ(decision->leave, "map");
+  EXPECT_EQ(g_fetches.size(), 1u);
+}
+

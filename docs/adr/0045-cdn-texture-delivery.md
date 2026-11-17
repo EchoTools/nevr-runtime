@@ -89,6 +89,16 @@ process.
 9. **Label states: defaults in code, config only changes them.** `lobby_posters` is on, `game` (the whole-game label) is required;
    any label not listed is off. A dedicated server reads its own defaults (`kServerLabelDefaults`, `src/cdn/cdn_plan.h`): `combat_content` and `game` are on, every other label is off; what it fetches of them is only what its session's map and mode need (decision 10). Config (`assets.labels.<label>: on|off|required`, `assets.required_only`) changes states; the
    manifest never does. `required` never blocks a level load or a match, and a server cannot require labels of a client.
+   The one requirement a server makes of a client is the cargo pin of its pin labels (`combat_content`), and only in a session on one of
+   six combat levels: the four combat maps of `src/core/combat_level_class.h` and the two pebbles levels (`src/core/cargo_session_pin.h`).
+   Those labels' records decide what a combat session simulates, and two sets split its players. A lobby is not compared: on PC the
+   combat lobby is a sub-level every player loads, Arena players too, so comparing there would split the lobby's Arena players. A client
+   on another set leaves that session, with a notice that names the cause and the action; every other session is never blocked.
+   `required` labels still never block a level load or a match. Not guarded: a lobby whose players hold different combat sets, and a
+   custom combat map (`docs/adr/0048-custom-maps-channel.md`), whose level is none of the six. Falsifier for the scope: a session on a
+   level outside the six that reads `combat_content` records, played by a client on another set.
+   Status on this tree: the session pin's inputs exist (`src/core/map_session_pin.cpp`), but no production code calls
+   `SetCargoServerPin` or `SetCargoDecide` yet, so no server writes the cargo pin and no client leaves on it until the PC binding lands.
 10. **Client textures; server game data on demand.** A dedicated server fetches no texture cargo. When it learns a session's game mode,
     and its map when the session names one, it takes the objects they need across every level the mode can load from the manifest, in
     every label its defaults turn on, `game` included, and resolves each in this order: the nEVR cache, then the game's installed files

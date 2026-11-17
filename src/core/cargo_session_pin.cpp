@@ -166,6 +166,20 @@ std::uint64_t CargoBootPin(const nevr_cdn::Manifest& boot, const nevr_cdn::Platf
   return CargoPinOf(boot, platform, policy, sha256_hex);
 }
 
+nevr_map_session_pin::CargoOutcome OutcomeOf(const CargoView& view, std::uint64_t level, std::uint64_t server_pin) {
+  const CargoDecision decision = DecideCargo(view, level, server_pin);
+  nevr_map_session_pin::CargoOutcome outcome;
+  outcome.leave = decision.leave;
+  outcome.id = kCargoPinLabels[0];
+  outcome.reason = decision.reason;
+  outcome.title = kCargoNoticeTitle;
+  outcome.line = decision.line;
+  outcome.local = view.local;
+  outcome.manifest_known = view.manifest_known;
+  outcome.manifest = view.manifest;
+  return outcome;
+}
+
 CargoDecision DecideCargo(const CargoView& view, std::uint64_t level, std::uint64_t server_pin) {
   if (!IsCargoPinLevel(level)) return Stay(kReasonNotCombat);
   if (server_pin == kCargoPinAbsent) return Stay(kReasonUnpinned);

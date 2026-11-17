@@ -5,6 +5,11 @@
 // session's level compares it with its own copy and leaves on a mismatch, with a notice saying why. The login carries the
 // staged and mounted maps as `nevr_maps`, and the registration carries the same entries.
 //
+// Owner (ADR 0039 decisions 1 and 4): this tick is the one owner of the session's leave, of its notice and of the two owner-JSON pin
+// keys, nevr_map_pin and nevr_cargo_pin. Its inputs are the view and the mounted maps (the map pin), and the cargo pin's two setters
+// (SetCargoServerPin for a server's set, SetCargoDecide for a client's decision, PLAN-v7 5.5); a platform that sets neither has the
+// map pin alone. The cargo decision (core/cargo_session_pin.h) is an input and never leaves on its own.
+//
 // This header and map_session_pin.cpp are the pure part, compiled on both platforms (src/core/maps.cmake): the pin value, the
 // view, the decision table, the notice line, the login and registration entries, both level names of a map, and the tick over
 // a GameAccess. Each platform keeps only its game half, which reads and writes the game through its own address table and
@@ -16,6 +21,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,6 +36,8 @@ namespace nevr_map_session_pin {
 
 // The owner-JSON names and the notice both platforms use.
 inline constexpr const char* kOwnerPinKey = "nevr_map_pin";
+// The cargo pin's owner-JSON name (PLAN-v7 5.5 "One leave owner"): a server writes the pin of its boot set here, a client reads it.
+inline constexpr const char* kOwnerCargoPinKey = "nevr_cargo_pin";
 inline constexpr const char* kOwnerLevelKey = "level";
 inline constexpr const char* kNoticeTitle = "Map version mismatch";
 inline constexpr std::size_t kNoticeLineMax = 63;  // the game's error block keeps 63 bytes of a line (WriteErrorBlock)
@@ -111,6 +121,22 @@ std::uint64_t ServerPinFor(std::uint64_t level);
 
 enum class ClientAction { kNone, kUnpinned, kLocal, kLeave };
 
+// The cargo side of a session decision (PLAN-v7 5.5 "The decision and the notice"). core/cargo_session_pin.h decides it, and
+// nevr_cargo_pin::OutcomeOf turns each decision into this: the tick needs no more than the leave, the notice and the inputs the
+// decision named. A stay row names its reason (or none); a leave names the row's reason and its notice.
+struct CargoOutcome {
+  bool leave = false;
+  std::string id;      // the label the decision concerns ("combat_content")
+  std::string reason;  // the row's reason; empty for a stay that names none
+  std::string title;   // the notice's title, when it leaves
+  std::string line;    // the notice line, when it leaves
+  std::uint64_t local = 0;   // B, the pin of the set this run mounted
+  bool manifest_known = false;
+  std::uint64_t manifest = 0;  // M, the pin of the newest manifest this run parsed (when manifest_known)
+};
+// A client's cargo decision for one session: the level and the server's pin (the owner JSON's nevr_cargo_pin, 0 when absent).
+using CargoDecideFn = std::function<CargoOutcome(std::uint64_t level, std::uint64_t server_pin)>;
+
 struct ClientDecision {
   ClientAction action = ClientAction::kNone;
   std::string id, reason, notice_line, local_path;
@@ -128,13 +154,28 @@ struct ClientDecision {
 ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin);
 
 // What the platform does with a decision and the tick (see GameAccess). Each is one record the platform writes.
-enum class PinEventKind { kServerSet, kServerCleared, kUnpinned, kLocalMap, kSkew, kLeaveScheduled, kLeaveFailed, kNoticeNotWritten };
+enum class PinEventKind {
+  kServerSet,
+  kServerCleared,
+  kUnpinned,
+  kLocalMap,
+  kSkew,
+  kLeaveScheduled,
+  kLeaveFailed,
+  kNoticeNotWritten,
+  kCargoServerSet,  // a server wrote its cargo pin (pin)
+  kSessionDecision,  // a session's decision with a cargo input: map and cargo reasons, which one leaves (reason, cargo_reason, leave)
+  kCargoSkew,        // a client leaves for the cargo pin (reason, level, pin = the server's, local, manifest_known, manifest, notice)
+};
 
 struct PinEvent {
   PinEventKind kind = PinEventKind::kSkew;
   std::uint64_t level = 0, pin = 0;
   std::string id, reason, notice, local_path;
   bool fetch = false;
+  std::string cargo_reason, leave;  // kSessionDecision: the cargo reason ("none" when it names none), and map, cargo or none
+  std::uint64_t local = 0, manifest = 0;  // kCargoSkew: B, and M when manifest_known
+  bool manifest_known = false;
 };
 
 // The game half behind an interface, so the tick runs in a test with no game. Each platform implements it once.
@@ -157,9 +198,15 @@ class GameAccess {
 // The level a session is at: the owner JSON's `level` when a lobby exists and it is non-zero, else the main level.
 std::uint64_t SessionLevelWith(GameAccess& game);
 
-// The tick, on the game thread: a server sets nevr_map_pin on change only; a client decides once per (lobby, level, pin) in a
-// session, and a leave writes the notice and is retried for kLeaveRetryMs. With no listed map and no mounted pin, it makes no
-// game call at all.
+// The cargo pin's two inputs (PLAN-v7 5.5 "One leave owner"), both unset by default: a server's B (written to nevr_cargo_pin on
+// change, apart from the map pin's early return), and a client's decision (the tick reads nevr_cargo_pin in each session and keys
+// its decision on it). A platform that sets neither has the map pin's tick and nothing else.
+void SetCargoServerPin(std::uint64_t pin);
+void SetCargoDecide(CargoDecideFn decide);
+
+// The tick, on the game thread: a server sets nevr_map_pin on change only; a client decides once per (lobby, level, map pin, cargo
+// pin) in a session, and the one leave takes the map's notice when both leave, else the cargo's. A leave is retried for
+// kLeaveRetryMs. With no listed map, no mounted pin and no cargo input, it makes no game call at all.
 void TickWith(GameAccess& game);
 
 // The login's nevr_maps: the mounted maps, then the staged maps not yet mounted (each with "mounted"). An empty array when none.
@@ -171,7 +218,7 @@ nlohmann::json LoginEntries();
 // BSR proto, then `just proto` (ADR 0048 decision 9).
 std::vector<std::string> RegistrationEntries();
 
-// Forgets the view, the mounted pins, the fetch request and the tick state. For tests.
+// Forgets the view, the mounted pins, the fetch request, the cargo inputs and the tick state. For tests.
 void ResetForTest();
 
 }  // namespace nevr_map_session_pin

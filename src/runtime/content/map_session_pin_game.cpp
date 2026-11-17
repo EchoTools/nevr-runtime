@@ -97,6 +97,21 @@ void WriteEvent(const PinEvent& e) {
     case PinEventKind::kNoticeNotWritten:
       Log(EchoVR::LogLevel::Warning, "[NEVR.MAPS] map_skew reason=notice_not_written id=%s", e.id.c_str());
       return;
+    case PinEventKind::kCargoServerSet:
+      Log(EchoVR::LogLevel::Info, "[NEVR.MAPS] cargo pin set pin=%s", pin.c_str());
+      return;
+    case PinEventKind::kSessionDecision:
+      Log(EchoVR::LogLevel::Info, "[NEVR.MAPS] session pin decision map=%s cargo=%s leave=%s level=%s", e.reason.c_str(),
+          e.cargo_reason.c_str(), e.leave.c_str(), level.c_str());
+      return;
+    case PinEventKind::kCargoSkew: {
+      // The manifest's pin is written once this run has parsed one; until then the line says so (PLAN-v7 5.5 "The decision").
+      const std::string manifest = e.manifest_known ? HexText(e.manifest) : std::string("unknown");
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.CDN] cargo_skew reason=%s level=%s pin=%s local=%s manifest=%s notice=\"%s\"", e.reason.c_str(), level.c_str(),
+          pin.c_str(), HexText(e.local).c_str(), manifest.c_str(), e.notice.c_str());
+      return;
+    }
   }
 }
 

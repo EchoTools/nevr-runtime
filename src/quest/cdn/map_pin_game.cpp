@@ -124,6 +124,31 @@ void WriteEvent(const core::PinEvent& e) {
       // The Quest is never a server: the core only writes the pin on a server, so this is not reached.
       sentinel::LogFields(sentinel::LogLevel::kWarn, "map_pin", {{"status", "unexpected"}, {"reason", "server_on_quest"}});
       return;
+    case core::PinEventKind::kCargoServerSet:
+      // The cargo pin's server record: the PC's "cargo pin set pin=<hex>" (docs/standards/logging.md [NEVR.MAPS]).
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "cargo_pin", {{"status", "set"}, {"pin", pin.c_str()}});
+      return;
+    case core::PinEventKind::kSessionDecision:
+      // One decision per key change: the map and cargo reasons and which input left (the PC's "session pin decision" line).
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "session_pin_decision",
+                          {{"map", e.reason.c_str()},
+                           {"cargo", e.cargo_reason.c_str()},
+                           {"leave", e.leave.c_str()},
+                           {"level", level.c_str()}});
+      return;
+    case core::PinEventKind::kCargoSkew: {
+      // The manifest's pin is "unknown" until this run has parsed one, as on the PC (PLAN-v7 5.5 "The decision").
+      const std::string manifest = e.manifest_known ? core::HexText(e.manifest) : std::string("unknown");
+      const std::string local = core::HexText(e.local);
+      sentinel::LogFields(sentinel::LogLevel::kWarn, "cargo_skew",
+                          {{"reason", e.reason.c_str()},
+                           {"level", level.c_str()},
+                           {"pin", pin.c_str()},
+                           {"local", local.c_str()},
+                           {"manifest", manifest.c_str()},
+                           {"notice", e.notice.c_str()}});
+      return;
+    }
   }
 }
 
