@@ -1422,6 +1422,14 @@ bool ParsePending(const json& doc, Pending* out) {
   return true;
 }
 
+bool LastUpdateTrial(std::optional<std::string_view> pending_text, std::string_view runtime_sha256) {
+  if (!pending_text.has_value()) return false;
+  nlohmann::json doc;
+  Pending pending;
+  if (!ParseJsonText(*pending_text, &doc) || !ParsePending(doc, &pending)) return true;
+  return pending.to_sha256 == runtime_sha256 && pending.boot_attempts >= kBootAttemptsToRollBack;
+}
+
 PendingFacts ReadPendingFacts(const UpdateFs& fs, const std::string& update_dir, std::string root_runtime_sha256,
                               bool finished_swap) {
   PendingFacts facts;

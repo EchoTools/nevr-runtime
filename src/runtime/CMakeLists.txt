@@ -61,6 +61,10 @@ set(PATCHES_SOURCES
     "../core/update/worker.cpp"
     # The core's C binding (installer/include/nevr_install.h), shared with the Quest runtime (src/quest/sentinel/CMakeLists.txt).
     "../core/update/core_ffi.cpp"
+    # The start's pure decisions, ParsePending and LastUpdateTrial (PLAN-v7 G9), are read by the PC client's boot edge (lifecycle/cdn_start.cpp),
+    # so the runtime compiles the engine's start unit and the names it reads (the host compiles both in NEVR_HOST_UNITS, its own copy).
+    "../core/update/names.cpp"
+    "../core/update/engine_start.cpp"
     "lifecycle/update_fs_win32.cpp"
     "lifecycle/update_run.cpp"
     "lifecycle/update_process.cpp"
@@ -2524,10 +2528,12 @@ if(BUILD_TESTING)
       ${CMAKE_SOURCE_DIR}/src/core/update/worker.cpp
       lifecycle/update_fs_win32.cpp
       lifecycle/update_run.cpp
-      ${CMAKE_SOURCE_DIR}/src/core/update/names.cpp)
+      ${CMAKE_SOURCE_DIR}/src/core/update/names.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/update/engine_start.cpp)
     set_source_files_properties(tests/test_update_worker.cpp ${CMAKE_SOURCE_DIR}/src/core/update/policy.cpp
       ${CMAKE_SOURCE_DIR}/src/core/update/engine_check.cpp ${CMAKE_SOURCE_DIR}/src/core/update/worker.cpp
       lifecycle/update_fs_win32.cpp lifecycle/update_run.cpp ${CMAKE_SOURCE_DIR}/src/core/update/names.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/update/engine_start.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_options(test_update_worker PRIVATE -Werror)
     target_include_directories(test_update_worker PRIVATE ${CMAKE_SOURCE_DIR}/src)

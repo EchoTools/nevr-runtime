@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -171,6 +172,12 @@ struct Pending {
 
 /// True when `doc` is a pending record this host writes; `out` is set only then.
 bool ParsePending(const nlohmann::json& doc, Pending* out);
+
+/// The self-update trial (PLAN-v7 G9; ADR 0024, section 6), pure. True when this start is the last try of a pending release that
+/// names the runtime running in this process: the record's `to.sha256` equals `runtime_sha256` and its boot_attempts is at least
+/// kBootAttemptsToRollBack. `pending_text` is update\pending.json's bytes; nothing (no file) gives false. A file that does not parse
+/// gives true, the safe side (no wait before boot); the edge answers true by itself for a file it cannot read.
+bool LastUpdateTrial(std::optional<std::string_view> pending_text, std::string_view runtime_sha256);
 
 /// The answer the edge gives to the in-use question: may the root's runtime be written (is no other process running it)?
 struct WriteAccess {

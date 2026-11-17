@@ -28,8 +28,10 @@ static_assert(EchoLevelBits(kInfo) == static_cast<int>(EchoVR::LogLevel::Info));
 static_assert(EchoLevelBits(kWarning) == static_cast<int>(EchoVR::LogLevel::Warning));
 static_assert(EchoLevelBits(kError) == static_cast<int>(EchoVR::LogLevel::Error));
 
-// The version and the sha256 of the file this process loaded: the runtime's own module file, read once on the worker's thread. The
-// version is the one in its NEVR-BUILD literal, the same source the host reads for `from` in its swap.
+}  // namespace
+
+// The version and the sha256 of the file this process loaded (update_worker.h): the runtime's own module file. The version is the one in
+// its NEVR-BUILD literal, the same source the host reads for `from` in its swap.
 bool ReadRunningRuntime(std::string* version, std::string* sha256, std::string* error) {
   HMODULE self = nullptr;
   if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -63,6 +65,8 @@ bool ReadRunningRuntime(std::string* version, std::string* sha256, std::string* 
   }
   return true;
 }
+
+namespace {
 
 // Authenticode on one staged file with the production policy, the denylist included (ADR 0024, section 3).
 VerifyOutcome VerifyStaged(const std::wstring& path) {

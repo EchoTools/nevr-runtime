@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -14,9 +15,14 @@
 #include "cdn/env_windows.h"
 #include "core/logging.h"
 #include "core/nevr_root.h"
+#include "core/update/engine_start.h"
+#include "core/update/fs.h"
+#include "core/update/names.h"
 #include "runtime/content/cdn_scripts_install.h"
 #include "runtime/ext/plugin_trust.h"
 #include "runtime/content/content_pack.h"
+#include "runtime/lifecycle/update_fs_win32.h"
+#include "runtime/lifecycle/update_worker.h"
 #include "runtime/patch/plugin_assets.h"
 #include "runtime/combat/announcer_callouts.h"
 
@@ -68,6 +74,40 @@ void PublishServerSet(std::unique_ptr<nevr_cdn::Mounted> set) {
   nevr::assets::PublishCdnShadow(kept->shadow.get());
 }
 
+// The self-update trial (PLAN-v7 5.4 "The self-update trial", G9): update\pending.json names a release, and this start is the last try of it.
+// The first try still fetches before boot; the last one never waits, so a player who closed the first start during its wait cannot lose
+// the release by closing the second. A pending file that exists and cannot be read or parsed is taken as the trial, with the reason
+// logged. The runtime is hashed only once the file parses. No lock: the only runtime writer of pending.json runs 10 s after the first frame.
+bool LastUpdateTrialThisStart(const std::string& root) {
+  const std::string path = nevr_root::Join(nevr_root::Join(root, nevr_update_names::kUpdateDir), nevr_update_names::kPendingJson);
+  std::string text;
+  const nevr_update::ReadResult read = nevr_update::Win32UpdateFs().ReadSmallFile(path, &text);
+  if (read == nevr_update::ReadResult::kAbsent) return nevr_update::LastUpdateTrial(std::nullopt, std::string_view());
+  const char* cause = nullptr;
+  nlohmann::json doc;
+  nevr_update::Pending pending;
+  std::string runtime_sha256;
+  if (read == nevr_update::ReadResult::kUnreadable) {
+    cause = "unreadable";
+  } else if (read == nevr_update::ReadResult::kTooBig) {
+    cause = "too_big";
+  } else if (!nevr_update::ParseJsonText(text, &doc) || !nevr_update::ParsePending(doc, &pending)) {
+    cause = "unparsed";
+  } else {
+    std::string version;
+    std::string error;
+    if (!nevr_update::ReadRunningRuntime(&version, &runtime_sha256, &error)) cause = "runtime_unhashed";
+  }
+  if (cause != nullptr) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.CDN] cdn_start role=client fetch=none reason=update_pending_unreadable cause=%s consequence=\"this start makes no boot fetch: "
+        "the pending self-update is taken as its trial\"",
+        cause);
+    return true;
+  }
+  return nevr_update::LastUpdateTrial(std::string_view(text), runtime_sha256);
+}
+
 }  // namespace
 
 bool Start() noexcept {
@@ -84,6 +124,10 @@ bool Start() noexcept {
   // (cdn_scripts_install.h, PLAN-v5 R10b). Both are set here: the boot mount and the fetch both run the gate.
   config.script_dir = GameScriptDir();
   config.registrar = nevr_cdn_scripts::PcRegistrar(dir, nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly);
+  // The boot-state writes (the refetch marker and the boot-fetch stamp, both beside the saved manifest, PLAN-v7 5.4) are the client's, and the
+  // self-update trial (PLAN-v7 G9) decides whether this start waits for the boot fetch. Both are set here, and only the client's start sets them.
+  config.boot_state = true;
+  config.last_update_trial = LastUpdateTrialThisStart(root);
   // The Env holds no state, so one object for the process lifetime (the fetch thread outlives every caller) is all it needs.
   static nevr_cdn::WindowsEnv env;
   // The boot mount publishes on this thread inside Start; the fetch thread it spawns is another thread.

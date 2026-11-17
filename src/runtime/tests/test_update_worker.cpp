@@ -45,6 +45,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/update/engine_check.h"
+#include "core/update/engine_start.h"
 #include "core/update/fs.h"
 #include "core/update/names.h"
 #include "core/update/policy.h"
@@ -659,6 +660,25 @@ TEST(UpdatePolicy, StateReadersAndConfirmState) {
   EXPECT_EQ(t.version, "5.99.0");
   EXPECT_EQ(t.sha256, kNewSha);
   EXPECT_FALSE(ParsePendingTarget("{}", &t));
+}
+
+// PLAN-v7 G9 (R6b-3): the self-update trial, decided over pending.json's text and the running runtime's sha256. The first try of a pending
+// release fetches before boot; its last try (boot_attempts at the roll-back threshold) never waits (cdn_start.cpp).
+TEST(UpdateStart, LastUpdateTrialIsTheLastTryOfThePendingReleaseThatNamesThisRuntime) {
+  constexpr std::uint64_t kFirstTry = 1;
+  constexpr std::uint64_t kLastTry = kBootAttemptsToRollBack;
+  constexpr std::uint64_t kPastLastTry = kLastTry + 1;
+  const auto pending = [](const char* sha, std::uint64_t attempts) {
+    return json{{"to", {{"version", "5.99.0"}, {"sha256", sha}}}, {"from", nullptr}, {"boot_attempts", attempts}, {"failed_reason", nullptr}}
+        .dump();
+  };
+  EXPECT_FALSE(LastUpdateTrial(std::nullopt, kNewSha)) << "no pending.json: not a trial";
+  EXPECT_FALSE(LastUpdateTrial(pending(kNewSha, kFirstTry), kNewSha)) << "the first try still fetches before boot";
+  EXPECT_TRUE(LastUpdateTrial(pending(kNewSha, kLastTry), kNewSha)) << "the last try never waits";
+  EXPECT_TRUE(LastUpdateTrial(pending(kNewSha, kPastLastTry), kNewSha)) << "a count past the last try is still the last try";
+  EXPECT_FALSE(LastUpdateTrial(pending(kOldSha, kLastTry), kNewSha)) << "another release's record is not this runtime's trial";
+  EXPECT_TRUE(LastUpdateTrial(std::string_view("{not json"), kNewSha)) << "a file that does not parse is the safe side";
+  EXPECT_TRUE(LastUpdateTrial(std::string_view(""), kNewSha)) << "an existing empty file does not parse: no wait";
 }
 
 // ---- the check ---------------------------------------------------------------------------------------------------------

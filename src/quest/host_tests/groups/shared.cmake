@@ -162,8 +162,8 @@ nevr_ht_test(fs_posix_test GROUP shared PTHREAD
 # cases as the PC build, against the POSIX fs (fs_posix.cpp) rooted in the system's temporary directory. gtest and nlohmann come from
 # the quest-host-deps manifest (HOST, GTEST).
 nevr_ht_test(test_update_worker GROUP shared HOST GTEST PTHREAD
-  SRC src/runtime/tests/test_update_worker.cpp src/core/update/engine_check.cpp src/core/update/policy.cpp
-      src/core/update/worker.cpp src/core/update/names.cpp src/core/update/fs_posix.cpp)
+  SRC src/runtime/tests/test_update_worker.cpp src/core/update/engine_check.cpp src/core/update/engine_start.cpp
+      src/core/update/policy.cpp src/core/update/worker.cpp src/core/update/names.cpp src/core/update/fs_posix.cpp)
 # The Quest runtime's start of the update worker (runtime/update_wiring.h): the worker's inputs, the start with a fake core, the frame
 # call that reaches the confirmation, and the read of the running runtime.
 nevr_ht_test(update_wiring_test GROUP shared HOST DL PTHREAD
