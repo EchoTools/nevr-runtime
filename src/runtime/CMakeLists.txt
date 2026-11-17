@@ -110,6 +110,8 @@ set(PATCHES_SOURCES
     "combat/dot_script.cpp"
     "combat/dot_trigger.cpp"
     "combat/drone_script.cpp"
+    # PLAN-v7 H-CTRL (#2242): the gear controller's chain decisions (pure; no site is patched yet, see its header).
+    "combat/gear_controller.cpp"
     "combat/loc_script.cpp"
     "combat/orb_pause.cpp"
     "combat/point_rate.cpp"
@@ -1374,6 +1376,13 @@ if(BUILD_TESTING)
     target_include_directories(test_dot_trigger PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_dot_trigger PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_dot_trigger DISCOVERY_MODE PRE_TEST)
+
+    # PLAN-v7 H-CTRL (#2242): the gear controller's chain decisions and the equip cell's chain words, on a fake cell (pure).
+    add_executable(test_gear_controller tests/test_gear_controller.cpp combat/gear_controller.cpp)
+    set_source_files_properties(tests/test_gear_controller.cpp combat/gear_controller.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_gear_controller PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_gear_controller PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk)
+    gtest_discover_tests(test_gear_controller DISCOVERY_MODE PRE_TEST)
 
     # #2242 (H-LOC): the translocator's effect (runtime/combat/loc_script.h): the token, the counter and the guard, on a fake
     # detonator image that holds the pinned bytes. Links the drone's guard and spawn (drone_script.cpp), which it calls.
