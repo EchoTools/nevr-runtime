@@ -10,7 +10,7 @@
 //  * MSVC's __try / __except (spelled EC_TRY / EC_EXCEPT in the ported files) become a frame on a thread-local stack and one vectored handler that jumps back to the
 //    innermost frame on a fault (setjmp / longjmp, as crash_recovery.cpp's game-loop recovery does). The filter
 //    expression is not evaluated: the handler takes the faults listed in cat_compat.cpp, whatever the filter said.
-//  * PowerBoost.ini / CombatBots.ini reads become config.yaml reads (`combat.settings.<section>.<key>`); no file beside
+//  * PowerBoost.ini reads become config.yaml reads (`combat.settings.<section>.<key>`); no file beside
 //    the DLL is read.
 //  * The plugin logger becomes Log() with the tag [NEVR.COMBAT] and `module=<file>`.
 //
