@@ -146,7 +146,7 @@ class SharedFile(unittest.TestCase):
                 {"id": "code-contributions", "ingame": "CODE CONTRIBUTIONS",
                  "names": ["babs", "brysonak", "chinmayee5599", "Coastermaster77", "DC Coffey", "Dualgame", "Ducky",
                            "EchoCombat", "kfc", "marshmallow-mia", "MyGuyChromium", "Xenomega"]},
-                {"id": "combat-assets", "ingame": "COMBAT GEAR ART AND SOUND CC BY 4.0", "names": ["he_is_the_cat"]},
+                {"id": "combat-assets", "ingame": "COMBAT GEAR ART AND SOUND CC BY-NC 4.0", "names": ["he_is_the_cat"]},
                 {"id": "thanks", "ingame": "THANKS", "names": THANKS},
                 {"id": "testers", "ingame": "TESTERS",
                  "names": ["arii", "berg", "Crafter", "CyanoTex", "DinkyBoi", "Grumpy", "he_is_the_cat",
@@ -551,7 +551,7 @@ class IngameText(unittest.TestCase):
             "DC Coffey   Dualgame   Ducky   EchoCombat\n"
             "kfc   marshmallow-mia   MyGuyChromium   Xenomega\n"
             "\n\n\n"
-            "COMBAT GEAR ART AND SOUND CC BY 4.0\n\n"
+            "COMBAT GEAR ART AND SOUND CC BY-NC 4.0\n\n"
             "he_is_the_cat\n"
             "\n\n\n"
             "THANKS\n\n"
