@@ -131,6 +131,8 @@ set(PATCHES_SOURCES
     "content/config_alias_hook.cpp"
     # ADR 0048 decision 9: the session map pin's PC half (the pure part is core/map_session_pin.cpp, in nevr_core).
     "content/map_session_pin_game.cpp"
+    # PLAN-v7 5.5 "Feed" (R11): the client's cargo feed (the PC edge of core/cargo_session_pin.h CargoFeed).
+    "content/cargo_pin.cpp"
     "content/map_channel.cpp"
     "combat/cat_compat.cpp"
     "combat/write_gate.cpp"
@@ -2459,6 +2461,26 @@ if(BUILD_TESTING)
         $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>)
     endif()
     gtest_discover_tests(test_map_scripts DISCOVERY_MODE PRE_TEST)
+
+    # PLAN-v7 5.5 R11: the PC edge of the cargo pin (content/cargo_pin.cpp) over the CDN core it drives (cdn_run.cpp and the objects it
+    # links, as the host data group does) and the shared fake Env (quest/tests/cdn_fake_env.h). No PC Env, no Win32, no hook.
+    set(_cargo_pin_edge_cdn
+      "${CMAKE_SOURCE_DIR}/src/cdn/cdn_limits.cpp" "${CMAKE_SOURCE_DIR}/src/cdn/cdn_validate.cpp"
+      "${CMAKE_SOURCE_DIR}/src/cdn/cdn_manifest.cpp" "${CMAKE_SOURCE_DIR}/src/cdn/cdn_plan.cpp"
+      "${CMAKE_SOURCE_DIR}/src/cdn/cdn_script_gate.cpp" "${CMAKE_SOURCE_DIR}/src/cdn/cdn_scripts.cpp"
+      "${CMAKE_SOURCE_DIR}/src/cdn/cdn_store.cpp" "${CMAKE_SOURCE_DIR}/src/cdn/cdn_run.cpp"
+      "${CMAKE_SOURCE_DIR}/src/cdn/cdn_prefetch.cpp" "${CMAKE_SOURCE_DIR}/src/cdn/cdn_boot_fetch.cpp"
+      "${CMAKE_SOURCE_DIR}/src/cdn/cdn_demand.cpp" "${CMAKE_SOURCE_DIR}/src/cdn/cdn_resolver.cpp"
+      "${CMAKE_SOURCE_DIR}/src/cdn/cdn_service.cpp"
+      "${CMAKE_SOURCE_DIR}/src/core/device_memory.cpp" "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
+      "${CMAKE_SOURCE_DIR}/src/quest/data/sha256.cpp")
+    set(_cargo_pin_edge_sources tests/test_cargo_pin_edge.cpp content/cargo_pin.cpp ${_cargo_pin_edge_cdn})
+    add_executable(test_cargo_pin_edge ${_cargo_pin_edge_sources})
+    set_source_files_properties(${_cargo_pin_edge_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_cargo_pin_edge PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_cargo_pin_edge PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk zstd::libzstd
+      nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_cargo_pin_edge DISCOVERY_MODE PRE_TEST)
 
     # #593: Log() routes by boot phase. Links the real Log() (nevr_core) and the real boot tee.
     add_executable(test_boot_log_routing tests/test_boot_log_routing.cpp log/boot_log_tee.cpp)

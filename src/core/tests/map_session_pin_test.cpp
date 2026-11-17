@@ -815,3 +815,27 @@ TEST_F(MapSessionPin, AMapAndACargoLeaveGiveOneLeaveAndTheMapsNotice) {
   EXPECT_EQ(g_fetches.size(), 1u);
 }
 
+
+// Test 9 (PLAN-v7 5.5 R11): row 14 asks for the refetch marker, and the tick decides once per key, so a session with an unknown manifest
+// asks for it once however many frames it lasts; a key change (here, a pin the server writes later, F8) asks again.
+TEST_F(MapSessionPin, RowFourteenAsksForTheMarkerOncePerKey) {
+  int asks = 0;
+  sp::SetCargoDecide([&asks](std::uint64_t level, std::uint64_t server_pin) {
+    ncp::CargoView view;
+    view.local = kCargoB;
+    view.status.state = ncp::CargoBoot::kWhole;
+    view.manifest_known = false;  // M unknown: row 14
+    const ncp::CargoDecision decision = ncp::DecideCargo(view, level, server_pin);
+    if (decision.write_marker) ++asks;
+    return ncp::OutcomeFrom(view, decision);
+  });
+  FakeGame client;
+  client.owner["level"] = kStockLevel;
+  client.owner[sp::kOwnerCargoPinKey] = kCargoX;
+  for (int i = 0; i < 4; ++i) sp::TickWith(client);
+  EXPECT_EQ(asks, 1);
+
+  client.owner[sp::kOwnerCargoPinKey] = kCargoX + 1;
+  sp::TickWith(client);
+  EXPECT_EQ(asks, 2);
+}

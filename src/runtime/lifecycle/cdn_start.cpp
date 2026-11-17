@@ -18,6 +18,7 @@
 #include "core/update/engine_start.h"
 #include "core/update/fs.h"
 #include "core/update/names.h"
+#include "runtime/content/cargo_pin.h"
 #include "runtime/content/cdn_scripts_install.h"
 #include "runtime/ext/plugin_trust.h"
 #include "runtime/content/content_pack.h"
@@ -130,6 +131,8 @@ bool Start() noexcept {
   config.last_update_trial = LastUpdateTrialThisStart(root);
   // The Env holds no state, so one object for the process lifetime (the fetch thread outlives every caller) is all it needs.
   static nevr_cdn::WindowsEnv env;
+  // The client's cargo feed (PLAN-v7 5.5 "Feed", R11), bound after config's boot_state is set; the server's half is not here.
+  nevr_cargo_pin::BindFeed(config, &env);
   // The boot mount publishes on this thread inside Start; the fetch thread it spawns is another thread.
   t_boot_mount = true;
   const bool started = nevr_cdn::Start(&env, config, &PublishSet);

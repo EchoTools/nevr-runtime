@@ -15,6 +15,7 @@
 
 #include "cdn/cdn_manifest.h"
 #include "cdn/cdn_plan.h"
+#include "cdn/cdn_run.h"
 #include "cdn/cdn_script_gate.h"
 #include "cdn/cdn_store.h"
 #include "core/map_session_pin.h"
@@ -106,7 +107,30 @@ CargoDecision DecideCargo(const CargoView& view, std::uint64_t level, std::uint6
 
 // The decision as the session pin's tick acts on it (map_session_pin.h CargoOutcome, PLAN-v7 5.5 "One leave owner"): the leave, the
 // row's reason and notice, the title, the label, and the inputs the decision named (B, and M when known). The marker of row 14
-// (`CargoDecision::write_marker`) is not carried: the PC binding writes it, and it is wired with the feed (PLAN-v7 R6b-2).
+// (`CargoDecision::write_marker`) is not carried here: the PC edge reads it from the decision it made (OutcomeFrom) and writes it.
 nevr_map_session_pin::CargoOutcome OutcomeOf(const CargoView& view, std::uint64_t level, std::uint64_t server_pin);
+// The same outcome for a decision already made from `view` (the PC edge makes it, so it can read write_marker first).
+nevr_map_session_pin::CargoOutcome OutcomeFrom(const CargoView& view, const CargoDecision& decision);
+
+// The fetch state a boot-state cause names (BootMount::boot_fetch, RunConfig::on_end): "undeliverable" and "no_space" are the two
+// causes the decision reads; "none" and "settled" (and anything else) read as kNone (PLAN-v7 5.5 G6).
+CargoFetch FetchOf(const std::string& cause);
+
+// The client's feed of one run (PLAN-v7 5.5 "Feed"): the boot mount sets B, the status and the fetch state; each fetch's parsed manifest
+// sets M; the fetch's end sets the fetch state. A fetch publish changes neither B nor the status. Pure and not synchronised: the PC edge
+// (runtime/content/cargo_pin.h) holds the lock that serialises the game thread, the boot thread and the fetch thread.
+class CargoFeed {
+ public:
+  CargoFeed(nevr_cdn::Platform platform, nevr_cdn::Policy policy);
+  void OnBoot(const nevr_cdn::BootMount& boot, const Sha256HexFn& sha256_hex);
+  void OnManifest(const nevr_cdn::Manifest& manifest, const Sha256HexFn& sha256_hex);
+  void OnEnd(const std::string& cause);
+  const CargoView& View() const { return view_; }
+
+ private:
+  nevr_cdn::Platform platform_;
+  nevr_cdn::Policy policy_;
+  CargoView view_;
+};
 
 }  // namespace nevr_cargo_pin

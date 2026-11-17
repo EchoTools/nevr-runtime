@@ -35,6 +35,9 @@ constexpr const char* kReasonServerBehind = "server_behind";
 constexpr const char* kReasonUnchecked = "unchecked";
 constexpr const char* kTokenSignedOnly = "signed_only";
 constexpr const char* kTokenPackHash = "pack_hash";
+// The fetch causes the boot state and the fetch end name (cdn_run.h BootMount::boot_fetch, RunConfig::on_end).
+constexpr const char* kCauseUndeliverable = "undeliverable";
+constexpr const char* kCauseNoSpace = "no_space";
 
 // The notice lines (PLAN-v7 5.5, rows 4-14). Each is at most nevr_map_session_pin::kNoticeLineMax bytes; the test pins the counts.
 constexpr const char* kLineLabelOff = "EchoCombat is off in config.yaml (assets.labels): turn it on";
@@ -167,7 +170,10 @@ std::uint64_t CargoBootPin(const nevr_cdn::Manifest& boot, const nevr_cdn::Platf
 }
 
 nevr_map_session_pin::CargoOutcome OutcomeOf(const CargoView& view, std::uint64_t level, std::uint64_t server_pin) {
-  const CargoDecision decision = DecideCargo(view, level, server_pin);
+  return OutcomeFrom(view, DecideCargo(view, level, server_pin));
+}
+
+nevr_map_session_pin::CargoOutcome OutcomeFrom(const CargoView& view, const CargoDecision& decision) {
   nevr_map_session_pin::CargoOutcome outcome;
   outcome.leave = decision.leave;
   outcome.id = kCargoPinLabels[0];
@@ -179,6 +185,27 @@ nevr_map_session_pin::CargoOutcome OutcomeOf(const CargoView& view, std::uint64_
   outcome.manifest = view.manifest;
   return outcome;
 }
+
+CargoFetch FetchOf(const std::string& cause) {
+  if (cause == kCauseUndeliverable) return CargoFetch::kUndeliverable;
+  if (cause == kCauseNoSpace) return CargoFetch::kNoSpace;
+  return CargoFetch::kNone;
+}
+
+CargoFeed::CargoFeed(nevr_cdn::Platform platform, nevr_cdn::Policy policy) : platform_(platform), policy_(std::move(policy)) {}
+
+void CargoFeed::OnBoot(const nevr_cdn::BootMount& boot, const Sha256HexFn& sha256_hex) {
+  view_.local = CargoBootPin(boot.boot, platform_, boot.mounted, boot.gated, policy_, sha256_hex);
+  view_.status = BootStatus(boot.mounted, boot.gated, policy_);
+  view_.fetch = FetchOf(boot.boot_fetch);
+}
+
+void CargoFeed::OnManifest(const nevr_cdn::Manifest& manifest, const Sha256HexFn& sha256_hex) {
+  view_.manifest_known = true;
+  view_.manifest = CargoPinOf(manifest, platform_, policy_, sha256_hex);
+}
+
+void CargoFeed::OnEnd(const std::string& cause) { view_.fetch = FetchOf(cause); }
 
 CargoDecision DecideCargo(const CargoView& view, std::uint64_t level, std::uint64_t server_pin) {
   if (!IsCargoPinLevel(level)) return Stay(kReasonNotCombat);

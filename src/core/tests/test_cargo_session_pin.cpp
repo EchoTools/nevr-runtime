@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -464,3 +465,96 @@ TEST(CargoSessionPin, OutcomeOfCarriesTheLeaveTheNoticeAndTheInputs) {
   EXPECT_TRUE(same.reason.empty());
 }
 
+
+// One of the four combat maps: a session at it is compared (IsCargoPinLevel).
+constexpr std::uint64_t kCombatLevel = nevr_combat_level::kCombatMaps[0];
+
+// The client's feed (PLAN-v7 5.5 "Feed", R11 tests 12 and 13): the boot mount sets B and the status, each manifest sets M, the fetch's
+// end sets the fetch state. Nothing a fetch publishes changes B or the status.
+
+namespace {
+
+// Mounted owns its shadow, so it moves in.
+nc::BootMount BootWith(const nc::Manifest& boot, nc::Mounted mounted, const char* fetch) {
+  nc::BootMount bm;
+  bm.boot = boot;
+  bm.mounted = std::move(mounted);
+  bm.boot_fetch = fetch;
+  return bm;
+}
+
+// A boot mount that mounted nothing: a cold client whose boot fetch stalled, or a server whose cache was empty.
+nc::BootMount Empty(const char* fetch) { return BootWith(nc::Manifest(), nc::Mounted(), fetch); }
+
+}  // namespace
+
+TEST(CargoFeed, FetchOfNamesOnlyTheTwoCausesTheDecisionReads) {
+  EXPECT_EQ(ncp::FetchOf("undeliverable"), ncp::CargoFetch::kUndeliverable);
+  EXPECT_EQ(ncp::FetchOf("no_space"), ncp::CargoFetch::kNoSpace);
+  EXPECT_EQ(ncp::FetchOf("settled"), ncp::CargoFetch::kNone);
+  EXPECT_EQ(ncp::FetchOf("none"), ncp::CargoFetch::kNone);
+  EXPECT_EQ(ncp::FetchOf(""), ncp::CargoFetch::kNone);
+}
+
+// Test 12 (G2): a cold client whose boot fetch stalled (nothing mounted, M known from the fetch's manifest) meets a combat session with
+// S == M and leaves with row 11; with fetch state undeliverable it leaves with row 11a.
+TEST(CargoFeed, AColdClientWhoseBootFetchStalledLeavesWithRowEleven) {
+  ncp::CargoFeed feed(Pc(), PolicyWith(nc::LabelState::kOn));
+  feed.OnBoot(Empty("none"), Sha);
+  EXPECT_EQ(feed.View().local, ncp::kCargoPinNone);
+  EXPECT_EQ(feed.View().status.state, ncp::CargoBoot::kNotWhole);
+  feed.OnManifest(Golden(), Sha);
+  ASSERT_TRUE(feed.View().manifest_known);
+  const std::uint64_t server = feed.View().manifest;
+  EXPECT_EQ(server, kGoldenPin);
+
+  const ncp::CargoDecision row11 = ncp::DecideCargo(feed.View(), kCombatLevel, server);
+  EXPECT_TRUE(row11.leave);
+  EXPECT_EQ(row11.reason, "not_downloaded");
+  EXPECT_FALSE(row11.write_marker);
+}
+
+TEST(CargoFeed, AColdClientWhoseFetchCannotDeliverLeavesWithRowElevenA) {
+  ncp::CargoFeed feed(Pc(), PolicyWith(nc::LabelState::kOn));
+  feed.OnBoot(Empty("undeliverable"), Sha);
+  feed.OnManifest(Golden(), Sha);
+  const ncp::CargoDecision row11a = ncp::DecideCargo(feed.View(), kCombatLevel, feed.View().manifest);
+  EXPECT_TRUE(row11a.leave);
+  EXPECT_EQ(row11a.reason, "undeliverable");
+}
+
+// Test 13 (G2): a fetch publish after the boot publish changes neither B nor the status; the fetch's manifest and end change only M and
+// the fetch state.
+TEST(CargoFeed, AFetchAfterTheBootSetChangesNeitherBNorTheStatus) {
+  ncp::CargoFeed feed(Pc(), PolicyWith(nc::LabelState::kOn));
+  feed.OnBoot(BootWith(Golden(), Whole(), "none"), Sha);
+  const std::uint64_t boot_pin = feed.View().local;
+  ASSERT_EQ(boot_pin, kGoldenPin);
+  ASSERT_EQ(feed.View().status.state, ncp::CargoBoot::kWhole);
+
+  nc::Manifest newer = Golden();
+  newer.entries.push_back(Ent(kType1, kName2, 'c'));
+  feed.OnManifest(newer, Sha);
+  feed.OnEnd("undeliverable");
+  EXPECT_EQ(feed.View().local, boot_pin);
+  EXPECT_EQ(feed.View().status.state, ncp::CargoBoot::kWhole);
+  EXPECT_NE(feed.View().manifest, boot_pin);
+  EXPECT_EQ(feed.View().fetch, ncp::CargoFetch::kUndeliverable);
+}
+
+// Row 14 is the only row whose decision asks for the marker, and OutcomeFrom carries the leave and notice of the decision it is given.
+TEST(CargoFeed, OnlyRowFourteenAsksForTheMarkerAndOutcomeFromKeepsTheLeave) {
+  ncp::CargoView unknown = View();
+  unknown.manifest_known = false;
+  const ncp::CargoDecision row14 = ncp::DecideCargo(unknown, kCombatLevel, kServer);
+  EXPECT_TRUE(row14.write_marker);
+  EXPECT_EQ(row14.reason, "unchecked");
+
+  const ncp::CargoDecision row13 = ncp::DecideCargo(View(), kCombatLevel, kServer);
+  EXPECT_FALSE(row13.write_marker);
+
+  const nevr_map_session_pin::CargoOutcome outcome = ncp::OutcomeFrom(unknown, row14);
+  EXPECT_TRUE(outcome.leave);
+  EXPECT_EQ(outcome.reason, "unchecked");
+  EXPECT_EQ(outcome.line, row14.line);
+}
