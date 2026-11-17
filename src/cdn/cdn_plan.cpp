@@ -162,6 +162,7 @@ Plan MakePlan(const Manifest& manifest, const Platform& platform, const Policy& 
         }
         if (used + freshBytes > limits.storage_budget) {
           pl.skipped = SkipReason::kOverStorage;
+          pl.needed_bytes = freshBytes;
         } else if (tooBigForAFile || nextFiles > limits.max_store_files) {
           pl.skipped = SkipReason::kOverFiles;
         } else {

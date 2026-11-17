@@ -191,7 +191,9 @@ target_link_libraries(nevr_quest_invite_join PUBLIC nevr_quest_got_hook nlohmann
 # (tests/quest TestExportAllowlist). In an archive, --exclude-libs (above) keeps it out of the export set, the same as
 # nevr_quest_data_wiring and nevr_quest_invite_join. The sources stay in the -fno-exceptions list above (a directory-scoped
 # source property, so it applies here), and the flags match their siblings.
-add_library(nevr_quest_cdn STATIC ../../cdn/cdn_run.cpp ../../cdn/cdn_prefetch.cpp ../../cdn/cdn_service.cpp ../cdn/cdn_worker.cpp ../cdn/cdn_start.cpp)
+# cdn_run.cpp calls CargoPinOf (core/cargo_session_pin.cpp, the same pure core nevr_core links on PC); that file reads MapSessionPin, which
+# nevr_quest_maps (src/quest/cdn/maps.cmake, linked after this library into ovrplatformloader) compiles.
+add_library(nevr_quest_cdn STATIC ../../cdn/cdn_run.cpp ../../cdn/cdn_prefetch.cpp ../../cdn/cdn_boot_fetch.cpp ../../core/cargo_session_pin.cpp ../../cdn/cdn_service.cpp ../cdn/cdn_worker.cpp ../cdn/cdn_start.cpp)
 target_include_directories(nevr_quest_cdn PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../..

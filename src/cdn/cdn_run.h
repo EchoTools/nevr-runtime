@@ -8,9 +8,11 @@
  */
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "cdn/cdn_env.h"
@@ -31,6 +33,24 @@ struct FetchProgress {
   std::size_t failed_blobs = 0;
 };
 using ProgressFn = std::function<void(const FetchProgress&)>;
+
+// What the boot mount built and what it was built from (PLAN-v7 5.4 item 4): the feed the PC's cargo pin reads (R11). `mounted` carries the
+// counts and per_label of the set the boot mount built, never its shadow, which went to the publisher; it is empty when nothing was built.
+struct BootMount {
+  Manifest boot;                    // the manifest the boot mount mounted from; empty when there is none or it was refused
+  Mounted mounted;                  // the counts and per_label of the set; no shadow
+  std::vector<GatedLabel> gated;    // the boot gate's refusals, each with the reason token of cdn_script_gate.h
+  bool published = false;           // a set reached the publisher
+  // The fetch state the pin decision reads (PLAN-v7 5.5 G6): "none", "undeliverable" or "no_space". `settled` reads as "none".
+  std::string boot_fetch = "none";
+  // The manifest path the boot fetch asked the CDN for (ResolveManifestPath); empty when no boot fetch ran. Start hands it to the fetch
+  // thread, so that thread asks again only when the boot half did not.
+  std::string resolved_manifest_path;
+};
+
+// The client's boot-only fetch (PLAN-v7 5.4 "Client start" item 2): a stall (no byte for this long) ends it, the wait's ceiling ends it.
+inline constexpr std::uint64_t kClientBootFetchStallMs = 15000;
+inline constexpr std::uint64_t kClientBootFetchCeilingMs = 120000;
 
 struct RunConfig {
   std::string dir;            // the store directory (absolute)
@@ -58,6 +78,21 @@ struct RunConfig {
   std::vector<std::string> boot_only;
   // The manifest of the set the boot mount published; empty when it published none (MountFromCache fills it).
   Manifest boot;
+  // The no-byte window of the first-run prefetch (PrefetchConfig::stall_ms); the default keeps the first-run hold's own window.
+  std::uint64_t stall_ms = kPrefetchStallMs;
+  // The boot fetch (ClientBoot): the run saves the manifest and stores its objects, and returns before Mount, so it publishes nothing.
+  bool store_only = false;
+  // This start is the last start of a self-update trial (PLAN-v7 G9): ClientBoot makes no boot fetch for it. The PC edge sets it (R6b-3).
+  bool last_update_trial = false;
+  // The boot-state writes (PLAN-v7 5.4 "The end of a fetch", 5.5 "The refetch marker"): the refetch marker and the boot-fetch stamp are
+  // written and removed only by a run that sets this. The PC edge sets it in R6b-3, so until then no run writes either file.
+  bool boot_state = false;
+  // Seams the PC binds (PLAN-v7 5.5 "Feed", R11). Unset: nothing is called. ClientBoot calls on_boot once, after the boot mount, whether or
+  // not a set was published. FetchAndMount calls on_manifest right after each manifest parse, and on_end at each end of a fetch that
+  // parsed one, with the cause the run's boot-state writes settled on: "none", "settled", "undeliverable" or "no_space".
+  std::function<void(const BootMount&)> on_boot;
+  std::function<void(const Manifest&)> on_manifest;
+  std::function<void(const char* cause)> on_end;
 };
 
 // The client's boot-only labels, the fixed part of RunConfig::boot_only: the EchoCombat data a combat session simulates. MakeRunConfig
@@ -81,11 +116,32 @@ struct RunResult {
   std::uint64_t bytes = 0;   // bytes stored this run
   bool manifest_loaded = false;
   bool published = false;    // a set was published by the fetch half
+  // The first-run prefetch, when it ran: its status, the HTTP status of a refused object (0 when none) and the labels the plan skipped,
+  // each with its reason, so the caller reads the cause without parsing events.
+  bool prefetched = false;
+  PrefetchStatus prefetch_status = PrefetchStatus::kComplete;
+  long prefetch_http_status = 0;
+  std::vector<std::pair<std::string, SkipReason>> skipped;
+  // The end cause the run's boot-state writes settled on, as RunConfig::on_end names it: "none", "settled", "undeliverable" or "no_space".
+  std::string end_cause = "none";
 };
 
-// Boot half: no network. Reads the index and mounts it. Event cdn_mounted source=boot when anything was mounted or refused. `boot`, when
-// not null, receives the manifest of the set it published, and is left empty on every return that publishes nothing.
-bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish, Manifest* boot = nullptr);
+// Boot half: no network. Reads the index and mounts it. Event cdn_mounted source=boot when anything was mounted or refused. `out`, when
+// not null, is filled with what the mount built (BootMount): its manifest, its counts and gate, and whether a set was published.
+bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish, BootMount* out = nullptr);
+
+// The client's boot half (PLAN-v7 5.4 "Client start" items 1-4), on the calling thread: decides whether the boot-only labels need a fetch
+// before the boot mount (NeedsBootFetch), makes it when they do (store only, under the ceiling and stall window), mounts once, and calls
+// RunConfig::on_boot once. Events: cdn_start role=client (fetch=boot_only, the result; fetch=none, the trial's reason).
+BootMount ClientBoot(Env& env, const RunConfig& config, const Publish& give);
+
+// The result text of the client's boot fetch from its run: "ok", "stalled", "ceiling", "undeliverable", "no_space" or "failed" (PLAN-v7
+// 5.4 item 2). Undeliverable and no_space also name a pin label the plan skipped for its files or its storage.
+std::string BootFetchResultOf(const RunResult& result);
+
+// The refetch marker and the boot-fetch stamp, beside the saved manifest (ManifestCopyPath).
+std::string BootRefetchPath(const std::string& dir);
+std::string BootFetchStampPath(const std::string& dir);
 
 // The manifest a fetch mounts for the boot-only labels: a copy of `fetched` in which every entry, record of 0 bytes, script and refusal
 // of a label in `boot_only` is replaced by the boot set's items of that label. A label of `boot_only` the boot set lacks keeps no record.
@@ -107,8 +163,11 @@ namespace detail {
 // implementation.
 
 // The policy a mount uses: the config's, with every label whose scripts are not delivered off (cdn_script_gate.h). `source` is "boot",
-// "fetch" or "demand".
-Policy GatedPolicy(Env& env, const RunConfig& config, const Manifest& manifest, const char* source);
+// "fetch" or "demand". `gated`, when not null, receives the gate's refusals.
+Policy GatedPolicy(Env& env, const RunConfig& config, const Manifest& manifest, const char* source, std::vector<GatedLabel>* gated = nullptr);
+
+// The gate's refusals for `manifest` under `config`, with no event: what GatedPolicy applies and reports.
+std::vector<GatedLabel> GatedLabelsOf(Env& env, const RunConfig& config, const Manifest& manifest);
 
 // The limits of this run, from the device: one line with every number, or the missing fact by name.
 Limits LoadLimits(Env& env, const std::string& dir);

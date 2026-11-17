@@ -72,6 +72,7 @@ class WindowsEnv : public Env {
   bool MakeDirs(const std::string& dir) override;
   bool WriteFileAtomically(const std::string& path, const std::string& data) override;
   std::unique_ptr<AppendFile> OpenAppend(const std::string& path) override;
+  bool RemoveFile(const std::string& path) override;
   bool QueryDevice(const std::string& dir, DeviceFacts* out) override;
   bool OpenBlob(const std::string& path, std::int64_t* handle, std::uint64_t* size) override;
   bool ReadBlob(std::int64_t handle, std::uint64_t offset, void* buffer, std::size_t length, std::size_t* got) override;

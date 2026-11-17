@@ -1,10 +1,16 @@
 #include "cdn/cdn_run.h"
 
+#include "cdn/cdn_boot_fetch.h"
+// ResolveManifestPath (the v2-or-v1 manifest choice) is the service's; the boot fetch asks it under its own ceiling (ClientBoot).
+#include "cdn/cdn_service.h"
+#include "core/cargo_session_pin.h"
+
 #include "cdn/cdn_prefetch.h"
 #include "cdn/cdn_scripts.h"
 
 #include <algorithm>
 #include <cstdio>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -113,15 +119,10 @@ void ReportRefusals(Env& env, const Manifest& manifest, const char* source) {
 
 namespace detail {
 
-// The policy a mount uses: the config's, with every label whose scripts are not delivered off (cdn_script_gate.h). The registrar runs
-// first, so the gate knows what it held. `source` is "boot" or "fetch".
-Policy GatedPolicy(Env& env, const RunConfig& config, const Manifest& manifest, const char* source) {
-  if (config.script_dir.empty()) {
-    env.Event(EventLevel::kInfo, "cdn_scripts_gate",
-              {{"result", "off"}, {"reason", "no_script_dir"}, {"source", source},
-               {"consequence", "no label is checked for the scripts it names before it is mounted"}});
-    return config.policy;
-  }
+// The gate's refusals for a manifest, with no event: what GatedPolicy applies and reports. The registrar runs first, so the gate knows
+// what it held.
+std::vector<GatedLabel> GatedLabelsOf(Env& env, const RunConfig& config, const Manifest& manifest) {
+  if (config.script_dir.empty()) return {};
   ScriptRegistration registration;
   if (config.registrar) registration = config.registrar(manifest, config.platform);
   const auto present = [&env, &config](std::uint64_t hash) {
@@ -143,8 +144,24 @@ Policy GatedPolicy(Env& env, const RunConfig& config, const Manifest& manifest, 
     const bool refusedAlready = std::any_of(gated.begin(), gated.end(), [&g](const GatedLabel& r) { return r.label == g.label; });
     if (!refusedAlready) gated.push_back(std::move(g));
   }
-  SayGated(env, gated, config.policy, config.script_dir, source);
-  return ApplyGate(gated, config.policy);
+  return gated;
+}
+
+// The policy a mount uses: the config's, with every label whose scripts are not delivered off (cdn_script_gate.h). `source` is "boot" or
+// "fetch"; `gated`, when not null, receives the refusals the gate made.
+Policy GatedPolicy(Env& env, const RunConfig& config, const Manifest& manifest, const char* source, std::vector<GatedLabel>* gated) {
+  if (config.script_dir.empty()) {
+    env.Event(EventLevel::kInfo, "cdn_scripts_gate",
+              {{"result", "off"}, {"reason", "no_script_dir"}, {"source", source},
+               {"consequence", "no label is checked for the scripts it names before it is mounted"}});
+    if (gated != nullptr) gated->clear();
+    return config.policy;
+  }
+  std::vector<GatedLabel> refusals = GatedLabelsOf(env, config, manifest);
+  SayGated(env, refusals, config.policy, config.script_dir, source);
+  Policy applied = ApplyGate(refusals, config.policy);
+  if (gated != nullptr) *gated = std::move(refusals);
+  return applied;
 }
 
 // The limits of this run, from the device: one line with every number, or the missing fact by name.
@@ -447,18 +464,43 @@ bool SameMountRecords(const Manifest& a, const Manifest& b, const Platform& plat
   return MountKeys(a, platform, all) == MountKeys(b, platform, all);
 }
 
-bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish, Manifest* boot) {
-  if (boot != nullptr) *boot = Manifest();
-  const Limits limits = detail::LoadLimits(env, config.dir);
-  if (!limits.ok) return false;
-  std::unique_ptr<Store> store = detail::OpenStoreLogged(env, config.dir, limits, "boot");
-  if (!store) return false;  // only when the limits are not ok, which detail::LoadLimits has said
+namespace {
+
+// What the boot mount built, without its shadow: the publisher owns the shadow, and BootMount keeps the counts and per_label.
+Mounted MetadataOf(const Mounted& m) {
+  Mounted out;
+  out.labels = m.labels;
+  out.names = m.names;
+  out.records = m.records;
+  out.empty_records = m.empty_records;
+  out.missing = m.missing;
+  out.refused = m.refused;
+  out.files = m.files;
+  out.per_label = m.per_label;
+  return out;
+}
+
+}  // namespace
+
+namespace {
+
+// The boot mount of a store the caller has open: MountFromCache opens it and logs the open, and the client's boot half (ClientBoot) mounts
+// through the store its decision read, so each boot half logs its limits and its store once. `store` null: nothing is mounted.
+bool MountStore(Env& env, const RunConfig& config, const Limits& limits, Store* store, const Publish& publish, BootMount* out) {
+  BootMount filled;
+  // Every return fills `out` with what this mount built, even when it built nothing (PLAN-v7 5.4 item 4).
+  const auto finish = [&filled, out](bool published) {
+    filled.published = published;
+    if (out != nullptr) *out = std::move(filled);
+    return published;
+  };
+  if (store == nullptr) return finish(false);  // the limits did not hold, which detail::LoadLimits has said
   if (store->blob_count() == 0) {
     // The normal first launch: nothing was ever fetched.
     env.Event(EventLevel::kInfo, "cdn_mounted",
               {{"source", "boot"}, {"result", "none"}, {"reason", "store_empty"},
                {"consequence", "the game's own data is read until a fetch stores objects"}});
-    return false;
+    return finish(false);
   }
   std::string frame;
   if (!ReadSavedManifest(env, config.dir, limits, &frame)) {
@@ -466,7 +508,7 @@ bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish, M
     env.Event(EventLevel::kWarn, "cdn_manifest",
               {{"source", "saved"}, {"result", "absent"}, {"reason", "no_saved_manifest"}, {"blobs", store->blob_count()},
                {"consequence", "no CDN asset is served until a fetch saves a manifest"}});
-    return false;
+    return finish(false);
   }
   Manifest manifest;
   const ParseResult parsed = ParseManifestBody(frame, limits, &manifest);
@@ -474,17 +516,30 @@ bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish, M
     env.Event(EventLevel::kWarn, "cdn_manifest",
               {{"source", "saved"}, {"result", "refused"}, {"reason", ParseStatusName(parsed.status)},
                {"consequence", "no CDN asset is served until a fetch saves a manifest again"}});
-    return false;
+    return finish(false);
   }
   ReportRefusals(env, manifest, "boot");
   const std::uint64_t mountStarted = env.NowMs();
-  std::unique_ptr<Mounted> mounted(new Mounted(Mount(env, *store, manifest, config.platform, detail::GatedPolicy(env, config, manifest, "boot"))));
+  std::vector<GatedLabel> gated;
+  const Policy policy = detail::GatedPolicy(env, config, manifest, "boot", &gated);
+  std::unique_ptr<Mounted> mounted(new Mounted(Mount(env, *store, manifest, config.platform, policy)));
   const std::uint64_t mountMs = env.NowMs() - mountStarted;
   SayMounted(env, "boot", *mounted, mountMs);
-  if (!mounted->shadow) return false;
-  if (boot != nullptr) *boot = std::move(manifest);  // the set published: the fetch's boot-only labels keep its records
+  filled.mounted = MetadataOf(*mounted);
+  filled.gated = std::move(gated);
+  if (!mounted->shadow) return finish(false);
+  // The manifest of the set published on this thread: the fetch's boot-only labels keep its records (F1, PLAN-v7 5.4 item 4).
+  filled.boot = std::move(manifest);
   publish(std::move(mounted));
-  return true;
+  return finish(true);
+}
+
+}  // namespace
+
+bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish, BootMount* out) {
+  const Limits limits = detail::LoadLimits(env, config.dir);
+  std::unique_ptr<Store> store = limits.ok ? detail::OpenStoreLogged(env, config.dir, limits, "boot") : nullptr;
+  return MountStore(env, config, limits, store.get(), publish, out);
 }
 
 namespace detail {
@@ -598,6 +653,170 @@ ManifestLoad FetchManifest(Env& env, const RunConfig& config, const Limits& limi
 
 }  // namespace detail
 
+// The refetch marker and the boot-fetch stamp, beside the saved manifest (PLAN-v7 5.4, 5.5).
+std::string BootRefetchPath(const std::string& dir) { return dir + "/boot_refetch"; }
+std::string BootFetchStampPath(const std::string& dir) { return dir + "/boot_fetch_stamp"; }
+
+namespace {
+
+// The HTTP statuses of a refusal a retry does not cure (PLAN-v7 5.4 item 2): a 4xx answer. Anything from 500 up is a retry.
+constexpr long kHttpClientErrorFirst = 400;
+constexpr long kHttpServerErrorFirst = 500;
+
+bool IsPinLabel(const std::string& label) {
+  for (std::size_t i = 0; i < nevr_cargo_pin::kCargoPinLabelCount; ++i) {
+    if (label == nevr_cargo_pin::kCargoPinLabels[i]) return true;
+  }
+  return false;
+}
+
+// Whether a pin label is served under `policy` (the same rule NeedsBootFetch applies).
+bool PinWanted(const Policy& policy) {
+  for (std::size_t i = 0; i < nevr_cargo_pin::kCargoPinLabelCount; ++i) {
+    const LabelState state = StateOf(nevr_cargo_pin::kCargoPinLabels[i], policy);
+    if (state == LabelState::kRequired || (state == LabelState::kOn && !policy.required_only)) return true;
+  }
+  return false;
+}
+
+std::string Sha256Of(Env& env, const std::string& bytes) {
+  std::string hex;
+  if (std::unique_ptr<Hasher> hasher = env.NewHasher()) {
+    hasher->Update(bytes.data(), bytes.size());
+    hex = hasher->Hex();
+  }
+  return hex;
+}
+
+// The read cap of the boot-fetch stamp: the longest stamp this build writes, measured from the format itself (AGENTS.md "Limit source":
+// computed at run time, since the stamp is our own format and the game fixes no value for it). Its manifest hash is as long as this
+// build's hasher writes one, its cause the longest, and both byte counts the largest a 64-bit count can print as.
+std::size_t BootFetchStampMaxBytes(Env& env) {
+  BootFetchStamp widest;
+  widest.manifest_sha256 = std::string(Sha256Of(env, std::string()).size(), 'f');
+  widest.cause = BootFetchCause::kNoSpace;
+  widest.free_bytes = std::numeric_limits<std::uint64_t>::max();
+  widest.need_bytes = std::numeric_limits<std::uint64_t>::max();
+  return FormatBootFetchStamp(widest).size();
+}
+
+// The cargo pin of a manifest's records for this platform, hashed through the Env (cargo_session_pin.h).
+std::uint64_t PinOf(Env& env, const RunConfig& config, const Manifest& manifest) {
+  return nevr_cargo_pin::CargoPinOf(manifest, config.platform, config.policy,
+                                    [&env](const std::string& bytes) { return Sha256Of(env, bytes); });
+}
+
+bool MarkerPresent(Env& env, const std::string& dir) {
+  std::int64_t handle = 0;
+  std::uint64_t size = 0;
+  if (!env.OpenBlob(BootRefetchPath(dir), &handle, &size)) return false;
+  env.CloseBlob(handle);
+  return true;
+}
+
+// A boot-state write that failed is a Warning: the next launch may fetch before boot once more (PLAN-v7 5.4 "The end of a fetch").
+void BootStateFailed(Env& env, const char* file) {
+  env.Event(EventLevel::kWarn, "cdn_boot_state",
+            {{"result", "write_failed"}, {"file", file}, {"consequence", "the next launch may fetch before boot once more"}});
+}
+
+// Writes the refetch marker (present) or removes it (absent).
+void SetMarker(Env& env, const std::string& dir, bool present) {
+  const bool ok = present ? env.WriteFileAtomically(BootRefetchPath(dir), std::string()) : env.RemoveFile(BootRefetchPath(dir));
+  if (!ok) BootStateFailed(env, "boot_refetch");
+}
+
+void WriteStamp(Env& env, const std::string& dir, const BootFetchStamp& stamp) {
+  if (!env.WriteFileAtomically(BootFetchStampPath(dir), FormatBootFetchStamp(stamp))) BootStateFailed(env, "boot_fetch_stamp");
+}
+
+// Every object the pin labels name for this platform is held (Store::HoldsSized, a lookup). A pin label the plan skipped for its files or
+// its storage is not held.
+bool PinObjectsHeld(const Plan& plan, Store& store) {
+  for (const PlanLabel& pl : plan.labels) {
+    if (!IsPinLabel(pl.label)) continue;
+    if (pl.skipped != SkipReason::kNone) {
+      if (pl.skipped == SkipReason::kOverStorage || pl.skipped == SkipReason::kOverFiles) return false;
+      continue;
+    }
+    for (const PlanItem& item : pl.items) {
+      if (!store.HoldsSized(item.entry.sha256, item.entry.size, item.entry.bytes)) return false;
+    }
+  }
+  return true;
+}
+
+// The outcome a prefetch's own status names (PLAN-v7 5.4 item 2): "ok", "stalled", "ceiling", "undeliverable", "no_space" or "failed".
+std::string ClassifyPrefetch(PrefetchStatus status, long httpStatus) {
+  switch (status) {
+    case PrefetchStatus::kComplete:
+      return "ok";
+    case PrefetchStatus::kStalled:
+      return "stalled";
+    case PrefetchStatus::kCancelled:
+      return "ceiling";
+    case PrefetchStatus::kHttpFailed:
+      return httpStatus >= kHttpClientErrorFirst && httpStatus < kHttpServerErrorFirst ? "undeliverable" : "failed";
+    case PrefetchStatus::kHashMismatch:
+    case PrefetchStatus::kSizeMismatch:
+    case PrefetchStatus::kHeldWrongSize:
+      return "undeliverable";
+    case PrefetchStatus::kNoSpace:
+      return "no_space";
+    case PrefetchStatus::kTransport:
+    case PrefetchStatus::kStoreFailed:
+      return "failed";
+  }
+  return "failed";
+}
+
+// The cause a pin label's skip names: over_storage is no_space, over_files is undeliverable, "" for none.
+std::string SkipCauseOf(const std::vector<std::pair<std::string, SkipReason>>& skipped) {
+  std::string cause;
+  for (const auto& s : skipped) {
+    if (!IsPinLabel(s.first)) continue;
+    if (s.second == SkipReason::kOverStorage) return "no_space";
+    if (s.second == SkipReason::kOverFiles) cause = "undeliverable";
+  }
+  return cause;
+}
+
+// What a fetch that parsed its manifest leaves behind (PLAN-v7 5.4 "The end of a fetch", 5.5): when `learned` names a cause a retry cannot
+// cure, the marker is removed and the stamp written with it; when the fetched body is the saved manifest and every pin object is held,
+// the stamp settles it. `body` is the fetched manifest's bytes; `saved_is_fetched` says the manifest on disk now is that body.
+struct FetchEnd {
+  const std::string* body = nullptr;
+  bool saved_is_fetched = false;
+  std::string learned;
+  const Plan* plan = nullptr;
+  Store* store = nullptr;
+};
+
+std::string EndOfFetch(Env& env, const RunConfig& config, const FetchEnd& end) {
+  std::string cause = "none";
+  if (!end.learned.empty()) {
+    cause = end.learned;
+  } else if (end.saved_is_fetched && PinObjectsHeld(*end.plan, *end.store)) {
+    cause = "settled";
+  }
+  if (!config.boot_state || cause == "none") return cause;
+  BootFetchStamp stamp;
+  stamp.manifest_sha256 = Sha256Of(env, *end.body);
+  ParseBootFetchCause(cause, &stamp.cause);
+  if (stamp.cause == BootFetchCause::kNoSpace) {
+    DeviceFacts facts;
+    if (env.QueryDevice(config.dir, &facts) && facts.have_free) stamp.free_bytes = facts.free_bytes;
+    for (const PlanLabel& pl : end.plan->labels) {
+      if (IsPinLabel(pl.label)) stamp.need_bytes += pl.skipped == SkipReason::kNone ? pl.fetch_bytes : pl.needed_bytes;
+    }
+  }
+  SetMarker(env, config.dir, false);
+  WriteStamp(env, config.dir, stamp);
+  return cause;
+}
+
+}  // namespace
+
 RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publish, const std::function<bool()>& keep_going) {
   RunResult result;
   const std::uint64_t started = env.NowMs();
@@ -650,6 +869,21 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
     manifestSha = hasher->Hex();
   }
 
+  // The refetch marker (PLAN-v7 5.5): written when this manifest's pin differs from the saved manifest's and is not kCargoPinNone. Only a
+  // run that sets boot_state writes it. on_manifest is the PC's feed (R11), called right after the parse.
+  if (config.boot_state) {
+    std::string savedFrame;
+    Manifest savedManifest;
+    std::uint64_t savedPin = nevr_cargo_pin::kCargoPinNone;
+    if (ReadSavedManifest(env, config.dir, limits, &savedFrame) &&
+        ParseManifestBody(savedFrame, limits, &savedManifest).status == ParseStatus::kOk) {
+      savedPin = PinOf(env, config, savedManifest);
+    }
+    const std::uint64_t fetchedPin = PinOf(env, config, manifest);
+    if (fetchedPin != nevr_cargo_pin::kCargoPinNone && fetchedPin != savedPin) SetMarker(env, config.dir, true);
+  }
+  if (config.on_manifest) config.on_manifest(manifest);
+
   // Step 2: the plan, before any request. What the store holds is a lookup in the index: nothing is read or hashed.
   Plan plan = MakePlan(manifest, config.platform, config.policy, limits, store->held_bytes(),
                        [&](const Entry& e) { return store->HoldsSized(e.sha256, e.size, e.bytes); });
@@ -667,6 +901,24 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
              {"refused", manifest.refused.size()},
              {"platform_entries", plan.platform_entries},
              {"unknown_fields", manifest.unknown_fields}});
+  // The end of this fetch (PLAN-v7 5.4 "The end of a fetch"): the boot-state writes, then on_end. `learned` is a cause this run met that a
+  // retry cannot cure; `savedIsFetched` is whether the manifest on disk is this fetch's body (step 4 sets it).
+  bool savedIsFetched = false;
+  std::string learned;
+  const auto finish = [&](const char* resultText) {
+    FetchEnd end;
+    end.body = &body;
+    end.saved_is_fetched = savedIsFetched;
+    end.learned = learned;
+    end.plan = &plan;
+    end.store = store.get();
+    result.end_cause = EndOfFetch(env, config, end);
+    if (config.on_end) config.on_end(result.end_cause.c_str());
+    done(resultText);
+  };
+  for (const PlanLabel& pl : plan.labels) {
+    if (pl.skipped != SkipReason::kNone) result.skipped.emplace_back(pl.label, pl.skipped);
+  }
   ReportRefusals(env, manifest, "fetch");
   for (const PlanLabel& pl : plan.labels) {
     std::vector<Field> fields = {{"label", pl.label},   {"state", LabelStateName(pl.state)}, {"entries", pl.entries},
@@ -706,6 +958,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
       if (pl.skipped != SkipReason::kNone) continue;
       for (const PlanItem& item : pl.items) prefetch.objects.push_back(item.entry);
     }
+    prefetch.stall_ms = config.stall_ms;
     prefetch.keep_going = keep_going;
     prefetch.progress = [&](std::uint64_t done, std::uint64_t) {
       progress.done_bytes = done;
@@ -716,14 +969,23 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
     result.fetched = fetched.fetched;
     result.cached = fetched.held;
     result.bytes = fetched.bytes_fetched;
+    result.prefetched = true;
+    result.prefetch_status = fetched.status;
+    result.prefetch_http_status = fetched.http_status;
     fetchedOutside = result.fetched;  // the labels are not told apart here: the publish rule below then publishes (the safe side)
     if (fetched.status != PrefetchStatus::kComplete) {
-      // What was stored stays and the next launch resumes from it; the manifest is not saved and nothing new is mounted.
+      // What was stored stays and the next launch resumes from it. The manifest is not saved and nothing new is mounted, except that a
+      // boot fetch saves it for a cause a retry cannot cure (undeliverable, no_space), so the next start's stamp settles it (PLAN-v7 5.4 item 2).
       result.failed = 1;
       result.stopped = fetched.status == PrefetchStatus::kCancelled ? "cancelled" : PrefetchStatusName(fetched.status);
-      done(result.stopped);
-      return result;
+      const std::string outcome = ClassifyPrefetch(fetched.status, fetched.http_status);
+      if (!config.store_only || (outcome != "undeliverable" && outcome != "no_space")) {
+        finish(result.stopped);
+        return result;
+      }
+      learned = outcome;
     }
+    if (config.store_only && learned.empty()) learned = SkipCauseOf(result.skipped);
   }
   std::size_t lastDecile = 0;
   std::set<std::string> fetchedShas, failedShas;
@@ -737,14 +999,14 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
       if (fetchedShas.count(e.sha256) != 0 || failedShas.count(e.sha256) != 0) continue;
       if (!keep_going()) {
         result.stopped = "cancelled";
-        done("cancelled");
+        finish("cancelled");
         return result;
       }
       const std::uint64_t blobStarted = env.NowMs();
       const detail::Downloaded d = detail::Download(env, config, *store, e, keep_going);
       if (d.cancelled) {
         result.stopped = "cancelled";
-        done("cancelled");
+        finish("cancelled");
         return result;
       }
       if (d.ok) {
@@ -759,6 +1021,12 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
                    {"sha256", e.sha256}, {"size", e.size}, {"ms", env.NowMs() - blobStarted}});
       } else {
         failedShas.insert(e.sha256);
+        // A pin object the CDN refuses for good (a 4xx, or a body that is not the manifest's) makes the set undeliverable (PLAN-v7 5.4).
+        const std::string reason = d.reason;
+        if (IsPinLabel(e.label) && ((d.status >= kHttpClientErrorFirst && d.status < kHttpServerErrorFirst) || reason == "sha256_mismatch" ||
+                                    reason == "size_mismatch" || reason == "held_size_mismatch")) {
+          learned = "undeliverable";
+        }
         ++result.failed;
         ++progress.failed_blobs;
         // The first few failures are said one by one at the label's severity; the rest are Debug, and cdn_done counts them.
@@ -797,7 +1065,7 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
   if (stoppedRun) {
     // The store failed (a full disk, a file that would not open): what was stored stays, the manifest is not saved and nothing new is
     // mounted, so the next launch plans again from the same store.
-    done(result.stopped);
+    finish(result.stopped);
     return result;
   }
 
@@ -805,9 +1073,19 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
   std::string previous;
   const bool hadSaved = ReadSavedManifest(env, config.dir, limits, &previous);
   const bool changed = !hadSaved || previous != body;
-  if (changed && !env.WriteFileAtomically(ManifestCopyPath(config.dir), body)) {
-    env.Event(EventLevel::kError, "cdn_manifest",
-              {{"result", "save_failed"}, {"consequence", "the next launch mounts the manifest saved before this one, or none"}});
+  bool wrote = false;
+  if (changed) {
+    wrote = env.WriteFileAtomically(ManifestCopyPath(config.dir), body);
+    if (!wrote) {
+      env.Event(EventLevel::kError, "cdn_manifest",
+                {{"result", "save_failed"}, {"consequence", "the next launch mounts the manifest saved before this one, or none"}});
+    }
+  }
+  savedIsFetched = !changed || wrote;
+  // The boot fetch stores and saves; it mounts nothing (RunConfig::store_only, PLAN-v7 5.4 item 2).
+  if (config.store_only) {
+    finish(*result.stopped != '\0' ? result.stopped : "ok");
+    return result;
   }
   // With boot-only labels the set mounted gives each of them the boot set's records (KeepBootOnly), so the set changes only for what is not
   // boot-only. It is published when it differs from the boot set, or when the fetch stored an object of another label: a new object of
@@ -842,8 +1120,135 @@ RunResult FetchAndMount(Env& env, const RunConfig& config, const Publish& publis
                {"boot_only_kept", *bootOnlyKept},
                {"consequence", "the labels fixed at boot keep the boot set's records this run; what arrived is mounted at the next start"}});
   }
-  done("ok");
+  finish("ok");
   return result;
+}
+
+namespace {
+
+// The policy of the boot fetch: every label of the client's table off, the boot-only labels served (PLAN-v7 5.4 item 2).
+Policy BootOnlyPolicy(const Policy& policy, const std::vector<std::string>& bootOnly) {
+  Policy out = policy;
+  out.required_only = false;
+  for (auto& entry : out.overrides) entry.second = LabelState::kOff;
+  for (const LabelDefault& d : kLabelDefaults) out.overrides[d.label] = LabelState::kOff;
+  for (const std::string& label : bootOnly) out.overrides[label] = LabelState::kRequired;
+  return out;
+}
+
+// The consequence a boot fetch's result names (PLAN-v7 5.4 item 2).
+std::string BootFetchConsequence(const std::string& outcome) {
+  if (outcome == "undeliverable") return "combat sessions are left until the CDN publishes another set; no launch fetches this set before boot again";
+  if (outcome == "no_space") return "combat sessions are left until there is room for this set; the next launch with that room fetches before boot";
+  return "combat sessions are left this run; the next launch fetches before boot again";
+}
+
+}  // namespace
+
+std::string BootFetchResultOf(const RunResult& result) {
+  if (!result.prefetched) return std::string(result.stopped) == "cancelled" ? "ceiling" : "failed";
+  const std::string outcome = ClassifyPrefetch(result.prefetch_status, result.prefetch_http_status);
+  if (outcome != "ok") return outcome;
+  std::vector<std::pair<std::string, SkipReason>> skipped = result.skipped;
+  const std::string skip = SkipCauseOf(skipped);
+  return skip.empty() ? "ok" : skip;
+}
+
+BootMount ClientBoot(Env& env, const RunConfig& config, const Publish& give) {
+  // One open of the store for the whole boot half: the limits and the store are logged once (cdn_limits, cdn_store source=boot), the
+  // decision reads through that open, and the mount below uses it again when no fetch ran. A fetch stores through its own open, so this
+  // one is closed before it runs (a PC append handle refuses a second open).
+  const Limits limits = detail::LoadLimits(env, config.dir);
+  std::unique_ptr<Store> store = limits.ok ? detail::OpenStoreLogged(env, config.dir, limits, "boot") : nullptr;
+  BootFetchDecision decision;
+  std::string savedFrame;
+  Manifest saved;
+  bool haveSaved = false;
+  std::string savedSha;
+  std::string stampText;
+  BootFetchStamp stamp;
+  bool haveStamp = false;
+  // The decision reads the saved manifest, the marker, the stamp and the store only when there are boot-only labels: a run with none (the
+  // Quest) makes no decision and reads nothing beyond its mount.
+  if (!config.boot_only.empty()) {
+    BootFetchInput input;
+    input.platform = config.platform;
+    input.policy = config.policy;
+    input.boot_only = config.boot_only;
+    input.last_update_trial = config.last_update_trial;
+    if (store && ReadSavedManifest(env, config.dir, limits, &savedFrame)) {
+      haveSaved = ParseManifestBody(savedFrame, limits, &saved).status == ParseStatus::kOk;
+    }
+    if (haveSaved) savedSha = Sha256Of(env, savedFrame);
+    input.saved = haveSaved ? &saved : nullptr;
+    input.saved_sha256 = savedSha;
+    input.marker = MarkerPresent(env, config.dir);
+    if (env.ReadSmallFile(BootFetchStampPath(config.dir), &stampText, BootFetchStampMaxBytes(env)) && ParseBootFetchStamp(stampText, &stamp)) {
+      haveStamp = true;
+      input.stamp = &stamp;
+    }
+    input.held = [&store](const Entry& e) { return store != nullptr && store->HoldsSized(e.sha256, e.size, e.bytes); };
+    input.free_space = [&env, &config](std::uint64_t* freeBytes) {
+      DeviceFacts facts;
+      if (!env.QueryDevice(config.dir, &facts) || !facts.have_free) return false;
+      *freeBytes = facts.free_bytes;
+      return true;
+    };
+    decision = NeedsBootFetch(input);
+  }
+
+  std::string bootFetch = "none";
+  std::string resolvedPath;  // the manifest path the boot fetch asked for; empty when no fetch ran
+  if (decision.fetch) {
+    env.Event(EventLevel::kInfo, "cdn_start",
+              {{"role", "client"}, {"fetch", "boot_only"}, {"result", "started"},
+               {"reason", BootFetchReasonName(decision.reason)}, {"label", decision.label}});
+    store.reset();
+    // The ceiling is the only bound on the wait besides the stall: keep_going is false once it has run that long (PLAN-v7 5.4 item 2). The
+    // manifest path is asked for under the same clock, and only here, because the fetch is what needs it (ResolveManifestPath).
+    const std::uint64_t waitStarted = env.NowMs();
+    const std::function<bool()> keepGoing = [&env, waitStarted]() { return env.NowMs() - waitStarted < kClientBootFetchCeilingMs; };
+    const RunConfig resolved = ResolveManifestPath(env, config, keepGoing);
+    resolvedPath = resolved.manifest_path;
+    RunConfig fetchConfig = resolved;
+    fetchConfig.policy = BootOnlyPolicy(config.policy, config.boot_only);
+    fetchConfig.first_run = true;
+    fetchConfig.store_only = true;
+    fetchConfig.stall_ms = kClientBootFetchStallMs;
+    const RunResult fetched = FetchAndMount(env, fetchConfig, [](std::unique_ptr<Mounted>) {}, keepGoing);
+    const std::string outcome = BootFetchResultOf(fetched);
+    const std::uint64_t fetchMs = env.NowMs() - waitStarted;
+    if (outcome == "ok") {
+      env.Event(EventLevel::kInfo, "cdn_start",
+                {{"role", "client"}, {"fetch", "boot_only"}, {"result", outcome}, {"fetch_ms", fetchMs}, {"bytes", fetched.bytes}});
+    } else {
+      env.Event(EventLevel::kWarn, "cdn_start",
+                {{"role", "client"}, {"fetch", "boot_only"}, {"result", outcome}, {"fetch_ms", fetchMs}, {"bytes", fetched.bytes},
+                 {"consequence", BootFetchConsequence(outcome)}});
+    }
+    bootFetch = fetched.end_cause == "settled" ? "none" : fetched.end_cause;
+  } else if (config.last_update_trial && !config.boot_only.empty() && PinWanted(config.policy)) {
+    env.Event(EventLevel::kInfo, "cdn_start",
+              {{"role", "client"}, {"fetch", "none"}, {"reason", "update_last_trial"},
+               {"consequence", "combat sessions are left this run if this client holds no current set; the next start fetches before boot"}});
+  }
+  // A stamp that settles the saved manifest is the boot fetch's state for this start, even when no fetch ran (PLAN-v7 5.4 item 4).
+  if (!decision.fetch && haveStamp && haveSaved && stamp.manifest_sha256 == savedSha) {
+    bootFetch = stamp.cause == BootFetchCause::kSettled ? "none" : BootFetchCauseName(stamp.cause);
+  }
+
+  // One mount with the client's full policy (item 3). After a fetch the store is opened again, quietly: the open above was logged, and the
+  // fetch stored objects the mount must see. MountStore overwrites `bm`, so the boot fetch's state is set after it.
+  if (decision.fetch && limits.ok) {
+    StoreOpenInfo reopened;
+    store = Store::Open(env, config.dir, limits, &reopened);
+  }
+  BootMount bm;
+  MountStore(env, config, limits, store.get(), give, &bm);
+  bm.boot_fetch = bootFetch;
+  bm.resolved_manifest_path = resolvedPath;
+  if (config.on_boot) config.on_boot(bm);
+  return bm;
 }
 
 }  // namespace nevr_cdn

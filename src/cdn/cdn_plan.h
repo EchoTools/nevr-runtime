@@ -91,6 +91,9 @@ struct PlanLabel {
   std::size_t cached = 0;    // unique blobs already held
   std::size_t to_fetch = 0;  // unique blobs to request
   std::uint64_t fetch_bytes = 0;
+  // The bytes a label skipped over_storage would have added: what a later launch must have free to serve it (the boot-fetch stamp's
+  // need_bytes, PLAN-v7 5.4). 0 for every other label, over_files included: free space does not cure a file count (PLAN-v7 G6).
+  std::uint64_t needed_bytes = 0;
   std::vector<PlanItem> items;         // empty when skipped
   std::vector<PairRefusal> refused;    // resource names dropped whole
 };

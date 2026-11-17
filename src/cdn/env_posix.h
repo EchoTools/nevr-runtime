@@ -22,6 +22,7 @@ class PosixEnv : public nevr_cdn::Env {
   bool ReadSmallFile(const std::string& path, std::string* out, std::size_t max_bytes) override;
   bool MakeDirs(const std::string& dir) override;
   bool WriteFileAtomically(const std::string& path, const std::string& data) override;
+  bool RemoveFile(const std::string& path) override;
   std::unique_ptr<nevr_cdn::AppendFile> OpenAppend(const std::string& path) override;
   bool QueryDevice(const std::string& dir, nevr_cdn::DeviceFacts* out) override;
   bool OpenBlob(const std::string& path, std::int64_t* handle, std::uint64_t* size) override;

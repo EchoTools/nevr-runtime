@@ -95,6 +95,10 @@ class FakeEnv : public nevr_cdn::Env {
   std::function<bool()> allow_get;                   // when set and false, a GET is cancelled before it starts (a shutdown)
   std::vector<Record> records;                       // every event, with its fields
   std::map<std::string, int> corrupt_times;          // by URL: the next N responses flip the body's first byte
+  // The clock moves while a transfer runs, by URL (a test drives the stall and the ceiling of the boot fetch with it): `silent_ms` once,
+  // before the first byte of the transfer, and `chunk_ms` after each byte chunk that is delivered.
+  std::map<std::string, std::uint64_t> silent_ms;
+  std::map<std::string, std::uint64_t> chunk_ms;
   // The PC's share modes (src/cdn/env_windows.cpp): an append handle shares only reading, a blob handle shares only reading, so a
   // blob cannot be opened while an append handle is live on its file, and an appender cannot open a file a blob handle holds.
   bool windows_sharing = false;
@@ -186,6 +190,12 @@ class FakeEnv : public nevr_cdn::Env {
     return true;
   }
 
+  bool RemoveFile(const std::string& path) override {
+    if (!Tick()) return false;
+    fs_->files.erase(path);
+    return true;
+  }
+
   bool OpenBlob(const std::string& path, std::int64_t* handle, std::uint64_t* size) override {
     const auto it = fs_->files.find(path);
     if (it == fs_->files.end()) return false;
@@ -242,6 +252,10 @@ class FakeEnv : public nevr_cdn::Env {
     }
     const std::size_t limit = resp.drop_after != std::string::npos ? std::min(resp.drop_after, body.size()) : body.size();
     r.status = resp.status;
+    const auto silent = silent_ms.find(url);
+    if (silent != silent_ms.end()) clock += silent->second;
+    const auto perChunk = chunk_ms.find(url);
+    const std::uint64_t chunkMs = perChunk != chunk_ms.end() ? perChunk->second : 0;
     std::size_t at = 0;
     while (at < limit) {
       if (!keep_going()) {
@@ -251,6 +265,7 @@ class FakeEnv : public nevr_cdn::Env {
       const std::size_t n = std::min<std::size_t>(97, limit - at);
       body_bytes_delivered.back() += n;
       if (!on_body(resp.status, body.data() + at, n)) return r;  // the caller ended the transfer
+      clock += chunkMs;
       at += n;
     }
     if (resp.drop_after != std::string::npos && resp.drop_after < body.size()) {

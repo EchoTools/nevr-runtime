@@ -56,10 +56,10 @@ RunResult RunOnce(Env& env, const RunConfig& config, PublishFn publish, const st
   // The publisher keeps the set for the life of the process: the engine may be filling a request from its shadow.
   const Publish give = [publish](std::unique_ptr<Mounted> set) { publish(set.release()); };
   env.MakeDirs(config.dir);  // as Start does: the device's free space is asked of a directory that exists
-  Manifest boot;
-  MountFromCache(env, config, give, &boot);
+  BootMount mounted;
+  MountFromCache(env, config, give, &mounted);
   RunConfig fetch = ResolveManifestPath(env, config, keep_going);
-  fetch.boot = std::move(boot);  // the set the boot mount published: the fetch keeps its boot-only labels
+  fetch.boot = std::move(mounted.boot);  // the set the boot mount published: the fetch keeps its boot-only labels
   return FetchAndMount(env, fetch, give, keep_going);
 }
 
@@ -120,14 +120,18 @@ bool Start(Env* env, const RunConfig& config, PublishFn publish) noexcept {
     return true;
   }
   const Publish give = [publish](std::unique_ptr<Mounted> set) { publish(set.release()); };
-  Manifest boot;
-  MountFromCache(*env, config, give, &boot);
+  // The client's boot half runs on this thread (PLAN-v7 5.4 "Client start"). It asks the CDN which manifest to fetch only when its boot
+  // fetch will run, under that fetch's own ceiling (ClientBoot), so a launch whose cache holds the boot-only labels makes no request here.
   // Never freed: the detached thread reads it for the life of the process.
   RunConfig* const held = new RunConfig(config);
-  held->boot = std::move(boot);
-  std::thread([env, held, give]() {
+  BootMount boot = ClientBoot(*env, *held, give);
+  held->boot = std::move(boot.boot);  // the set the boot mount published: the fetch keeps its boot-only labels
+  const bool resolvedAtBoot = !boot.resolved_manifest_path.empty();
+  if (resolvedAtBoot) held->manifest_path = boot.resolved_manifest_path;
+  // A boot half that asked the CDN does not ask again; a launch with no boot fetch asks here, as the fetch always did.
+  std::thread([env, held, give, resolvedAtBoot]() {
     const auto keepGoing = [] { return true; };
-    FetchAndMount(*env, ResolveManifestPath(*env, *held, keepGoing), give, keepGoing);
+    FetchAndMount(*env, resolvedAtBoot ? *held : ResolveManifestPath(*env, *held, keepGoing), give, keepGoing);
   }).detach();
   return true;
 }

@@ -6,6 +6,7 @@
 // Built and run by `just test-quest-data`.
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -17,6 +18,7 @@
 #include "cdn/cdn_run.h"
 #include "cdn/cdn_script_gate.h"
 #include "cdn/cdn_scripts.h"
+#include "cdn/cdn_service.h"
 #include "quest/tests/cdn_fake_env.h"
 #include "quest/tests/cdn_zstd_support.h"
 #include "quest/tests/test_check.h"
@@ -1520,8 +1522,9 @@ void ABootOnlyLabelKeepsTheBootSetWhenTheFetchBringsANewOne() {
   nc::RunConfig c = b.config;
   c.boot_only = {"combat_content"};
   Captured cap;
-  nc::Manifest boot;
-  QCHECK(nc::MountFromCache(env, c, cap.Sink(), &boot));
+  nc::BootMount bootMount;
+  QCHECK(nc::MountFromCache(env, c, cap.Sink(), &bootMount));
+  const nc::Manifest& boot = bootMount.boot;
   QCHECK(cap.sets.size() == 1);
   const std::size_t getsBefore = GetsOfBlobs(env);
   c.boot = boot;
@@ -1570,8 +1573,9 @@ void ANonBootOnlyLabelStillPublishesBesideAKeptOne() {
   nc::RunConfig c = a.config;
   c.boot_only = {"combat_content"};
   Captured cap;
-  nc::Manifest boot;
-  QCHECK(nc::MountFromCache(env, c, cap.Sink(), &boot));
+  nc::BootMount bootMount;
+  QCHECK(nc::MountFromCache(env, c, cap.Sink(), &bootMount));
+  const nc::Manifest& boot = bootMount.boot;
   World b = WithObjects(4, 500, 130, 'p', 200);
   b.label = "combat_content";
   b.other_label = "lobby_posters";
@@ -1602,8 +1606,9 @@ void AnUnchangedBootOnlyLabelWithNewObjectsOfAnotherLabelPublishes() {
   nc::FetchAndMount(env, a.config, cap.Sink(), kGo);
   nc::RunConfig c = a.config;
   c.boot_only = {"combat_content"};
-  nc::Manifest boot;
-  QCHECK(nc::MountFromCache(env, c, cap.Sink(), &boot));
+  nc::BootMount bootMount;
+  QCHECK(nc::MountFromCache(env, c, cap.Sink(), &bootMount));
+  const nc::Manifest& boot = bootMount.boot;
   QCHECK(cap.sets.size() == 2);
   a.Serve(env);  // the object is served now
   c.boot = boot;
@@ -1641,8 +1646,9 @@ void MountFromCacheHandsBackTheManifestItPublished() {
   Captured run1;
   nc::FetchAndMount(env, a.config, run1.Sink(), kGo);
   Captured cap;
-  nc::Manifest boot;
-  QCHECK(nc::MountFromCache(env, a.config, cap.Sink(), &boot));
+  nc::BootMount bootMount;
+  QCHECK(nc::MountFromCache(env, a.config, cap.Sink(), &bootMount));
+  const nc::Manifest& boot = bootMount.boot;
   QCHECK(boot.labels == std::vector<std::string>{"combat_content"} && boot.entries.size() == 4);
   nc::Manifest parsed;
   QCHECK(nc::ParseManifestBody(cdn_test::ZstdFrameOf(a.ManifestText()), LimitsOf(env), &parsed).status == nc::ParseStatus::kOk);
@@ -1667,20 +1673,428 @@ void MountFromCacheHandsBackTheManifestItPublished() {
   first.fs_->files[nc::ManifestCopyPath(kDir)] = cdn_test::ZstdFrameOf(other.ManifestText());
   FakeEnv second(first.fs_);
   Captured cap2;
-  nc::Manifest none;
-  none.labels.push_back("junk");
+  nc::BootMount none;
+  none.boot.labels.push_back("junk");
   QCHECK(!nc::MountFromCache(second, w.config, cap2.Sink(), &none) && cap2.sets.empty());
-  QCHECK(none.labels.empty() && none.entries.empty());
+  QCHECK(none.boot.labels.empty() && none.boot.entries.empty());
 
   // An empty store: nothing to hand back either.
   FakeEnv empty;
   Captured cap3;
-  nc::Manifest nothing;
-  nothing.labels.push_back("junk");
-  QCHECK(!nc::MountFromCache(empty, w.config, cap3.Sink(), &nothing) && nothing.labels.empty());
+  nc::BootMount nothing;
+  nothing.boot.labels.push_back("junk");
+  QCHECK(!nc::MountFromCache(empty, w.config, cap3.Sink(), &nothing) && nothing.boot.labels.empty());
+}
+
+// ── the client's boot fetch (R6b-2; PLAN-v7 5.4 "Client start", "The end of a fetch", 5.5 "The refetch marker") ───────────────────────
+constexpr const char* kMarkerPath = "/cache/boot_refetch";
+constexpr const char* kStampPath = "/cache/boot_fetch_stamp";
+constexpr const char* kSavedPath = "/cache/manifest.json.zst";
+
+// A client: the boot-only label is combat_content, and the boot-state writes are on (the PC edge's setting, PLAN-v7 5.4).
+nc::RunConfig ClientConfig(const World& w) {
+  nc::RunConfig c = w.config;
+  c.boot_only = {kCombat};
+  c.boot_state = true;
+  return c;
+}
+
+bool Exists(const FakeEnv& env, const std::string& path) { return env.fs_->files.count(path) != 0; }
+
+std::string FileText(const FakeEnv& env, const std::string& path) {
+  const auto it = env.fs_->files.find(path);
+  return it == env.fs_->files.end() ? std::string() : it->second;
+}
+
+std::size_t RequestsOf(const FakeEnv& env, const std::string& url) {
+  std::size_t n = 0;
+  for (const std::string& r : env.requests) {
+    if (r == url) ++n;
+  }
+  return n;
+}
+
+// The first cdn_start record of a boot fetch with `result` ("started" for the start), or null.
+const cdn_test::Record* BootFetchRecord(const FakeEnv& env, const std::string& result) {
+  for (const cdn_test::Record& r : env.records) {
+    if (r.name == "cdn_start" && r.Get("fetch") == "boot_only" && r.Get("result") == result) return &r;
+  }
+  return nullptr;
+}
+
+// The index of the first record named `name` whose `key` is `value`, or npos.
+std::size_t IndexOfRecord(const FakeEnv& env, const std::string& name, const std::string& key, const std::string& value) {
+  for (std::size_t i = 0; i < env.records.size(); ++i) {
+    if (env.records[i].name == name && env.records[i].Get(key) == value) return i;
+  }
+  return std::string::npos;
+}
+
+std::string ManifestUrl() { return std::string(kBase) + kManifestPath; }
+std::string BlobUrl(const Obj& o) { return std::string(kBase) + "blobs/sha256/" + o.sha; }
+
+// RunConfig::store_only (PLAN-v7 5.4 item 2): the fetch stores and saves the manifest, then returns before Mount. Without boot-only labels the
+// mount would publish what the fetch stored, so this is where the seam shows.
+void AStoreOnlyFetchSavesAndPublishesNothing() {
+  FakeEnv env;
+  World b(4);
+  b.label = kCombat;
+  b.Serve(env);
+  nc::RunConfig c = b.config;
+  c.first_run = true;
+  c.store_only = true;
+  Captured cap;
+  const nc::RunResult r = nc::FetchAndMount(env, c, cap.Sink(), kGo);
+  QCHECK(r.fetched == 4 && cap.sets.empty() && !r.published);
+  QCHECK(Exists(env, kSavedPath) && GetsOfBlobs(env) == 4);
+  QCHECK(IndexOfRecord(env, "cdn_mounted", "source", "fetch") == std::string::npos);
+}
+
+// R6b test 1 (F2-free): a cold client, the CDN serves B: one fetch before the boot publish, exactly one publish on the boot thread, and it
+// carries combat_content B.
+void AColdClientFetchesItsBootLabelBeforeThePublish() {
+  FakeEnv env;
+  World b(4);
+  b.label = kCombat;
+  b.Serve(env);
+  nc::RunConfig c = ClientConfig(b);
+  int boots = 0;  // the feed (PLAN-v7 5.4 item 4): on_boot is called exactly once, after the boot mount
+  c.on_boot = [&boots](const nc::BootMount&) { ++boots; };
+  Captured cap;
+  const nc::BootMount bm = nc::ClientBoot(env, c, cap.Sink());
+  QCHECK(boots == 1);
+  const std::size_t fetched = IndexOfRecord(env, "cdn_start", "result", "ok");
+  const std::size_t published = IndexOfRecord(env, "cdn_mounted", "source", "boot");
+  QCHECK(fetched != std::string::npos && published != std::string::npos && fetched < published);
+  // The boot fetch stores and saves; it mounts nothing of its own (store_only): the only mount is the boot one.
+  QCHECK(IndexOfRecord(env, "cdn_mounted", "source", "fetch") == std::string::npos);
+  QCHECK(bm.published && cap.sets.size() == 1);
+  QCHECK(GetsOfBlobs(env) == 4);
+  QCHECK(cap.sets.size() == 1 && cap.sets[0]->records == 4 && cap.sets[0]->labels.size() == 1 && cap.sets[0]->labels[0] == kCombat);
+  QCHECK(bm.boot_fetch == "none" && !bm.boot.entries.empty());
+}
+
+// R6b test 2: a client whose saved manifest and store hold B whole makes no request before the boot publish.
+void AClientWhoseSavedManifestAndStoreHoldBWholeMakesNoRequest() {
+  FakeEnv env;
+  World b(4);
+  b.label = kCombat;
+  b.Serve(env);
+  Captured earlier;
+  nc::FetchAndMount(env, b.config, earlier.Sink(), kGo);  // a previous run: every object stored, the manifest saved
+  const std::size_t before = env.requests.size();
+  Captured cap;
+  const nc::BootMount bm = nc::ClientBoot(env, ClientConfig(b), cap.Sink());
+  QCHECK(env.requests.size() == before);
+  QCHECK(bm.published && cap.sets.size() == 1 && bm.boot_fetch == "none");
+  QCHECK(BootFetchRecord(env, "started") == nullptr);
+}
+
+// R6b test 3 (F1): a cold client's boot fetch of B, then the background fetch of B with a new object of another label: every set the
+// background fetch publishes still carries combat_content B (mutant: an empty manifest handed to the fetch drops it).
+void TheBackgroundSetAfterABootFetchKeepsCombatContent() {
+  FakeEnv env;
+  World b(4);
+  b.label = kCombat;
+  b.other_label = "game";
+  b.other_objs = WithObjects(1, 800, 150, 'q', 400).objs;
+  b.Serve(env);
+  nc::RunConfig c = ClientConfig(b);
+  Captured boot;
+  const nc::BootMount bm = nc::ClientBoot(env, c, boot.Sink());
+  QCHECK(boot.sets.size() == 1 && boot.sets[0]->records == 4);
+  c.boot = bm.boot;  // what Start hands the fetch thread
+  Captured run;
+  nc::FetchAndMount(env, c, run.Sink(), kGo);
+  QCHECK(run.sets.size() == 1);
+  for (const nc::Mounted* set : run.sets) {
+    QCHECK(set->records == 5);
+    QCHECK(std::find(set->labels.begin(), set->labels.end(), std::string(kCombat)) != set->labels.end());
+  }
+}
+
+// R6b test 4 (F2, G7): the CDN answers the manifest and then sends no byte of an object for 20 s: the prefetch's stall rule ends the wait
+// (`stalled`), nothing is published, no stamp is written, and the next start has nothing saved and fetches before boot again.
+void AStalledBootFetchEndsAtTheStallAndSavesNothing() {
+  FakeEnv env;
+  World b(4);
+  b.label = kCombat;
+  b.Serve(env);
+  for (const Obj& o : b.objs) env.silent_ms[BlobUrl(o)] = 20000;
+  const nc::RunConfig c = ClientConfig(b);
+  Captured cap;
+  nc::ClientBoot(env, c, cap.Sink());
+  const cdn_test::Record* stalled = BootFetchRecord(env, "stalled");
+  QCHECK(stalled != nullptr && stalled->level == nc::EventLevel::kWarn);
+  QCHECK(cap.sets.empty() && !Exists(env, kStampPath) && !Exists(env, kSavedPath));
+  env.silent_ms.clear();
+  Captured again;
+  nc::ClientBoot(env, c, again.Sink());
+  const cdn_test::Record* started = BootFetchRecord(env, "started");
+  QCHECK(started != nullptr && started->Get("reason") == "no_saved_manifest");
+}
+
+// R6b test 5: a transfer that keeps sending past the ceiling (120 s of the fake clock): `ceiling`, the same outcome as test 4.
+void ATransferThatKeepsSendingPastTheCeilingEndsAtTheCeiling() {
+  FakeEnv env;
+  World b(4);
+  b.label = kCombat;
+  b.objs.clear();
+  b.Add(300, 4000, 'a', kArchive, "0x100");  // ~42 chunks of 97 bytes: at 5 s each, well past the ceiling, and under the stall window
+  b.Serve(env);
+  env.chunk_ms[BlobUrl(b.objs[0])] = 5000;
+  Captured cap;
+  nc::ClientBoot(env, ClientConfig(b), cap.Sink());
+  const cdn_test::Record* ceiling = BootFetchRecord(env, "ceiling");
+  QCHECK(ceiling != nullptr && ceiling->level == nc::EventLevel::kWarn);
+  QCHECK(cap.sets.empty() && !Exists(env, kStampPath));
+}
+
+// R6b test 9 (second half): a label the gate refused at the last mount (script_undelivered: its script is not on disk) with its objects
+// held: no request before boot.
+void ALabelRefusedAtTheLastMountWithItsObjectsHeldMakesNoRequest() {
+  const World w = CombatWorld();
+  const std::shared_ptr<cdn_test::Fs> fs = StoredBeforeTheGate(w);
+  FakeEnv env(fs);
+  nc::RunConfig c = ClientConfig(w);
+  c.script_dir = kScriptDir;
+  Captured cap;
+  const nc::BootMount bm = nc::ClientBoot(env, c, cap.Sink());
+  QCHECK(env.requests.empty() && BootFetchRecord(env, "started") == nullptr);
+  QCHECK(!bm.gated.empty() && bm.gated[0].label == kCombat);
+}
+
+// R6b test 12 (G1): a saved manifest with no record of combat_content, every object held, the CDN serving that same manifest: the first
+// start makes one boot fetch (label_absent) and writes the stamp settled; the second start makes no request before boot.
+void ASavedManifestWithoutTheBootLabelFetchesOnceThenSettles() {
+  FakeEnv env;
+  World g(4);
+  g.label = "game";
+  g.Serve(env);
+  Captured earlier;
+  nc::FetchAndMount(env, g.config, earlier.Sink(), kGo);  // every object held, the manifest saved; combat_content absent
+  const nc::RunConfig c = ClientConfig(g);
+  Captured first;
+  nc::ClientBoot(env, c, first.Sink());
+  const cdn_test::Record* started = BootFetchRecord(env, "started");
+  QCHECK(started != nullptr && started->Get("reason") == "label_absent");
+  QCHECK(RequestsOf(env, ManifestUrl()) == 1 + 1 && Exists(env, kStampPath));
+  QCHECK(FileText(env, kStampPath).find("\"settled\"") != std::string::npos);
+  const std::size_t after = env.requests.size();
+  Captured second;
+  nc::ClientBoot(env, c, second.Sink());
+  QCHECK(env.requests.size() == after);
+}
+
+// R6b test 13 (G5): a refused label over a whole cache, the CDN serving the saved set: no marker is written (M equals the saved pin). A CDN
+// serving a newer set writes the marker once, and the background fetch that stores it whole and saves it removes the marker again.
+void ARefusedLabelWritesNoMarkerWhileTheCdnServesTheSavedSet() {
+  const World w = CombatWorld();
+  const std::shared_ptr<cdn_test::Fs> fs = StoredBeforeTheGate(w);
+  FakeEnv env(fs);
+  w.Serve(env);
+  nc::RunConfig c = GatedConfig(w);
+  c.boot_state = true;
+  bool markerAtParse = true;
+  c.on_manifest = [&env, &markerAtParse](const nc::Manifest&) { markerAtParse = Exists(env, kMarkerPath); };
+  Captured same;
+  nc::FetchAndMount(env, c, same.Sink(), kGo);
+  QCHECK(!markerAtParse && !Exists(env, kMarkerPath));
+
+  World newer;
+  newer.label = kCombat;
+  newer.Add(300, 120, 'n', kArchive, "0x300");
+  newer.Serve(env);
+  markerAtParse = false;
+  Captured later;
+  nc::FetchAndMount(env, c, later.Sink(), kGo);
+  QCHECK(markerAtParse);
+  QCHECK(!Exists(env, kMarkerPath));
+}
+
+// R6b test 14 (G6): an object that answers 404, two starts with no background fetch between: one boot fetch over the two starts, the
+// result `undeliverable` on the first, the manifest saved, the stamp `undeliverable`, and no request before boot on the second. The same
+// with a 503 is `failed`: nothing saved, no stamp, and the second start fetches again.
+void AnUndeliverableObjectSettlesAcrossTwoStarts() {
+  FakeEnv env;
+  World b(4);
+  b.label = kCombat;
+  b.Serve(env);
+  env.server[BlobUrl(b.objs[0])] = Response{404, std::string(), std::string::npos, std::string()};
+  const nc::RunConfig c = ClientConfig(b);
+  Captured first;
+  nc::ClientBoot(env, c, first.Sink());
+  QCHECK(BootFetchRecord(env, "undeliverable") != nullptr);
+  QCHECK(Exists(env, kSavedPath) && Exists(env, kStampPath));
+  QCHECK(FileText(env, kStampPath).find("\"undeliverable\"") != std::string::npos);
+  const std::size_t after = env.requests.size();
+  Captured second;
+  nc::ClientBoot(env, c, second.Sink());
+  QCHECK(env.requests.size() == after);
+
+  FakeEnv refused;
+  b.Serve(refused);
+  refused.server[BlobUrl(b.objs[0])] = Response{503, std::string(), std::string::npos, std::string()};
+  Captured r1;
+  nc::ClientBoot(refused, c, r1.Sink());
+  QCHECK(BootFetchRecord(refused, "failed") != nullptr && !Exists(refused, kStampPath) && !Exists(refused, kSavedPath));
+  const std::size_t n = refused.requests.size();
+  Captured r2;
+  nc::ClientBoot(refused, c, r2.Sink());
+  QCHECK(refused.requests.size() > n);
+}
+
+std::size_t CountRecords(const FakeEnv& env, const std::string& name, const std::string& key, const std::string& value) {
+  std::size_t n = 0;
+  for (const cdn_test::Record& r : env.records) {
+    if (r.name == name && (key.empty() || r.Get(key) == value)) ++n;
+  }
+  return n;
+}
+
+// Start (cdn/cdn_service.h) keeps one start per process, so this is the only Start of this binary, and main runs it first. The publish is
+// the boot half's; the detached thread Start leaves running is cancelled before its first request (allow_get), so the request count taken
+// inside the publish is the count of the boot half alone.
+FakeEnv* g_startEnv = nullptr;
+std::atomic<int> g_startPublishes{0};
+std::size_t g_requestsAtBootPublish = 0;
+
+void StartPublish(const nc::Mounted*) {
+  if (g_startPublishes.fetch_add(1) == 0) g_requestsAtBootPublish = g_startEnv->requests.size();
+}
+
+// PLAN-v7 5.4 "Client start" item 1: a launch whose cache holds the boot-only labels asks the CDN for nothing before the boot publish. The
+// manifest path is the default one, so a start that resolves it on the boot thread makes a request here and fails.
+void AStartWithAWholeCacheMakesNoRequestBeforeTheBootPublish() {
+  World b(4);
+  b.label = kCombat;
+  g_startEnv = new FakeEnv();  // leaked on purpose: Start keeps its env for the life of the process, and its thread reads it
+  b.Serve(*g_startEnv);
+  Captured earlier;
+  nc::FetchAndMount(*g_startEnv, b.config, earlier.Sink(), kGo);  // a previous run: every object stored, the manifest saved
+  const std::size_t before = g_startEnv->requests.size();
+  g_startEnv->allow_get = [] { return false; };
+  nc::RunConfig c = ClientConfig(b);
+  c.manifest_path = nc::kDefaultManifestPath;
+  QCHECK(nc::Start(g_startEnv, c, &StartPublish));
+  QCHECK(g_startPublishes.load() == 1);
+  QCHECK(g_requestsAtBootPublish == before);
+}
+
+// The boot half logs its limits and its store once per boot half (PLAN-v7 5.4 item 4; logging.md Category J): a whole cache with no fetch
+// (one cdn_limits, one cdn_store source=boot, the mount through the same open), a cold client whose fetch runs (the boot half's open is
+// logged once, and the fetch's own open is logged as the fetch's), and a run with no boot-only labels (the Quest: one of each, no decision).
+void TheBootHalfLogsItsLimitsAndItsStoreOnce() {
+  FakeEnv whole;
+  World w(4);
+  w.label = kCombat;
+  w.Serve(whole);
+  Captured seed;
+  nc::FetchAndMount(whole, w.config, seed.Sink(), kGo);
+  const std::size_t limitsBefore = CountRecords(whole, "cdn_limits", "", "");
+  const std::size_t storeBefore = CountRecords(whole, "cdn_store", "source", "boot");
+  Captured cap;
+  nc::ClientBoot(whole, ClientConfig(w), cap.Sink());
+  QCHECK(CountRecords(whole, "cdn_limits", "", "") - limitsBefore == 1);
+  QCHECK(CountRecords(whole, "cdn_store", "source", "boot") - storeBefore == 1);
+
+  FakeEnv cold;
+  w.Serve(cold);
+  Captured fetched;
+  nc::ClientBoot(cold, ClientConfig(w), fetched.Sink());
+  QCHECK(CountRecords(cold, "cdn_store", "source", "boot") == 1);
+  QCHECK(CountRecords(cold, "cdn_store", "source", "fetch") == 1);
+  QCHECK(CountRecords(cold, "cdn_limits", "", "") == 2);  // the boot half's, and the fetch's own run, which logs its limits as every run does
+
+  FakeEnv quest;
+  w.Serve(quest);
+  nc::RunConfig noBootOnly = w.config;
+  noBootOnly.boot_state = true;
+  Captured none;
+  nc::ClientBoot(quest, noBootOnly, none.Sink());
+  QCHECK(CountRecords(quest, "cdn_limits", "", "") == 1);
+  QCHECK(CountRecords(quest, "cdn_store", "source", "boot") == 1);
+  QCHECK(quest.requests.empty());
+}
+
+// The end of a boot fetch reaches RunConfig::on_end once, with the cause the run settled on (PLAN-v7 5.4 "The end of a fetch").
+void TheEndOfABootFetchReachesOnEnd() {
+  FakeEnv env;
+  World b(4);
+  b.label = kCombat;
+  b.Serve(env);
+  nc::RunConfig c = ClientConfig(b);
+  std::string cause = "unset";
+  int ends = 0;
+  c.on_end = [&cause, &ends](const char* settled) {
+    cause = settled;
+    ++ends;
+  };
+  Captured cap;
+  nc::ClientBoot(env, c, cap.Sink());
+  QCHECK(ends == 1 && cause == "settled");
+}
+
+// A pin label the plan skips for its bytes (over_storage) is the boot fetch's `no_space`: the stamp names the free space it stopped at and
+// the bytes the pin labels still need (PLAN-v7 5.4 item 2; 5.5 "The boot-fetch stamp").
+void AnOverStorageBootFetchStampsNoSpaceWithItsRoom() {
+  FakeEnv env;
+  World b(4);
+  b.label = kCombat;
+  b.Serve(env);
+  env.device.free_bytes = 500;
+  Captured cap;
+  nc::ClientBoot(env, ClientConfig(b), cap.Sink());
+  QCHECK(BootFetchRecord(env, "no_space") != nullptr && cap.sets.empty());
+  QCHECK(Exists(env, kStampPath));
+  if (!Exists(env, kStampPath)) return;
+  const json stamp = json::parse(FileText(env, kStampPath));
+  QCHECK(stamp["cause"] == "no_space");
+  QCHECK(stamp["free_bytes"] == 500);
+  QCHECK(stamp["need_bytes"] == 522);  // the four frames the label would have added: 120 + 127 + 134 + 141 bytes
+}
+
+// A self-update trial's last start makes no boot fetch and says why, once, at Info (PLAN-v7 G9): the reason is logged and no request is made.
+void ALastUpdateTrialSaysSoAndMakesNoRequest() {
+  FakeEnv env;
+  World b(4);
+  b.label = kCombat;
+  b.Serve(env);
+  nc::RunConfig c = ClientConfig(b);
+  c.last_update_trial = true;
+  Captured cap;
+  const nc::BootMount bm = nc::ClientBoot(env, c, cap.Sink());
+  const std::size_t i = IndexOfRecord(env, "cdn_start", "reason", "update_last_trial");
+  QCHECK(i != std::string::npos && env.records[i].level == nc::EventLevel::kInfo && env.records[i].Get("fetch") == "none");
+  QCHECK(env.requests.empty() && bm.boot_fetch == "none");
+}
+
+// The boot fetch's state reaches the mount (PLAN-v7 5.4 item 4, the PC pin's R11 input): a fetch that ends undeliverable says so in the
+// boot mount, and the next start, whose stamp settles the saved manifest, says the same with no request.
+void TheBootFetchStateReachesTheMountAndTheNextStart() {
+  FakeEnv env;
+  World b(4);
+  b.label = kCombat;
+  b.Serve(env);
+  env.server[BlobUrl(b.objs[0])] = Response{404, std::string(), std::string::npos, std::string()};
+  const nc::RunConfig c = ClientConfig(b);
+  Captured first;
+  const nc::BootMount one = nc::ClientBoot(env, c, first.Sink());
+  QCHECK(one.boot_fetch == "undeliverable");
+  const std::size_t after = env.requests.size();
+  Captured second;
+  const nc::BootMount two = nc::ClientBoot(env, c, second.Sink());
+  QCHECK(env.requests.size() == after);
+  QCHECK(two.boot_fetch == "undeliverable");
 }
 
 int main() {
+  AStartWithAWholeCacheMakesNoRequestBeforeTheBootPublish();
+  TheBootHalfLogsItsLimitsAndItsStoreOnce();
+  TheEndOfABootFetchReachesOnEnd();
+  AnOverStorageBootFetchStampsNoSpaceWithItsRoom();
+  ALastUpdateTrialSaysSoAndMakesNoRequest();
+  TheBootFetchStateReachesTheMountAndTheNextStart();
   AManifestIsReadByItsBytesNotByItsName();
   APlainManifestOverTheTextLimitEndsAtTheLimitAsItArrives();
   AFrameWithABrokenHeaderIsRefusedBeforeTheBody();
@@ -1751,6 +2165,16 @@ int main() {
   AnUnchangedBootOnlyLabelWithNewObjectsOfAnotherLabelPublishes();
   AnEmptyListFetchesAndPublishesAsBefore();
   MountFromCacheHandsBackTheManifestItPublished();
+  AColdClientFetchesItsBootLabelBeforeThePublish();
+  AClientWhoseSavedManifestAndStoreHoldBWholeMakesNoRequest();
+  TheBackgroundSetAfterABootFetchKeepsCombatContent();
+  AStalledBootFetchEndsAtTheStallAndSavesNothing();
+  ATransferThatKeepsSendingPastTheCeilingEndsAtTheCeiling();
+  ALabelRefusedAtTheLastMountWithItsObjectsHeldMakesNoRequest();
+  ASavedManifestWithoutTheBootLabelFetchesOnceThenSettles();
+  ARefusedLabelWritesNoMarkerWhileTheCdnServesTheSavedSet();
+  AnUndeliverableObjectSettlesAcrossTwoStarts();
+  AStoreOnlyFetchSavesAndPublishesNothing();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "cdn_run_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

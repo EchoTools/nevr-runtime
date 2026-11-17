@@ -87,6 +87,7 @@ struct PrefetchResult {
   std::size_t held = 0;             // already stored, not requested
   std::uint64_t bytes_fetched = 0;  // bytes stored by this run
   std::string failed_sha256;        // the object that ended the run, when one did
+  long http_status = 0;             // the status the object's transfer answered with, when the run ended on one (0 when none)
   std::string detail;               // the reason token, or the status code, for the log and the failure line
 };
 

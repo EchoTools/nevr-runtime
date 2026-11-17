@@ -415,6 +415,15 @@ bool WindowsEnv::WriteFileAtomically(const std::string& path, const std::string&
   return ok;
 }
 
+bool WindowsEnv::RemoveFile(const std::string& path) {
+  std::wstring wide;
+  if (!ToWide(path, &wide)) return false;
+  if (DeleteFileW(wide.c_str()) != FALSE) return true;
+  // A file that is not there is removed already: that is what the caller asked for.
+  const DWORD error = GetLastError();
+  return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+}
+
 std::unique_ptr<AppendFile> WindowsEnv::OpenAppend(const std::string& path) {
   std::wstring wide;
   if (!ToWide(path, &wide)) return nullptr;

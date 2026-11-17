@@ -211,6 +211,7 @@ PrefetchResult Prefetch(Env& env, PrefetchStore& store, const PrefetchConfig& co
     result.status = attempt.status;
     result.failed_sha256 = entry.sha256;
     result.detail = attempt.detail;
+    result.http_status = attempt.http_status;
     if (IsRefusal(attempt.status)) {
       std::vector<Field> fields = {{"label", entry.label},
                                    {"name", FormatHex64(entry.name)},

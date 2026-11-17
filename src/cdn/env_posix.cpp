@@ -163,6 +163,11 @@ bool PosixEnv::WriteFileAtomically(const std::string& path, const std::string& d
   return nevr::quest_auth::AtomicWrite(path, data, error, warning);
 }
 
+bool PosixEnv::RemoveFile(const std::string& path) {
+  // A file that is not there is removed already: that is what the caller asked for.
+  return ::unlink(path.c_str()) == 0 || errno == ENOENT;
+}
+
 bool PosixEnv::OpenBlob(const std::string& path, std::int64_t* handle, std::uint64_t* size) {
   const int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
   if (fd < 0) return false;

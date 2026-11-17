@@ -78,6 +78,9 @@ class Env {
   virtual bool WriteFileAtomically(const std::string& path, const std::string& data) = 0;
   // Opens `path` for appending, creating it when it is absent. Null when it cannot be opened.
   virtual std::unique_ptr<AppendFile> OpenAppend(const std::string& path) = 0;
+  // Removes the file at `path`; true when it is gone afterwards (an absent file counts). The default removes nothing and says so, so an
+  // Env that does not implement it keeps every file (PLAN-v7 5.4: the refetch marker and the boot-fetch stamp are removed through it).
+  virtual bool RemoveFile(const std::string&) { return false; }
 
   // The machine's own numbers for the limits (free space of `dir`'s file system, the descriptor limit, memory). False only when
   // nothing could be read; a fact that could not be read is left absent in `*out`.

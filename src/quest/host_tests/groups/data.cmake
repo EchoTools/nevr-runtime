@@ -47,7 +47,11 @@ nevr_ht_test(resource_shadow_test GROUP data HOST NOEXC
 nevr_ht_obj(o_cdn_cdn_prefetch GROUP data NOEXC HOST SRC src/cdn/cdn_prefetch.cpp)
 # The demand resolve (docs/adr/0045 decision 9, PLAN-v7 R6-a-1): the server's per-session set, built on cdn_run and the prefetch.
 nevr_ht_obj(o_cdn_cdn_demand GROUP data NOEXC HOST SRC src/cdn/cdn_demand.cpp)
-set(_cdn_objs o_cdn_device_memory o_cdn_resource_shadow o_cdn_cdn_limits o_cdn_cdn_validate o_cdn_cdn_manifest o_cdn_cdn_plan o_cdn_cdn_script_gate o_cdn_cdn_scripts o_cdn_cdn_store o_cdn_cdn_run o_cdn_cdn_prefetch o_cdn_cdn_demand o_cdn_cdn_boot_fetch o_data_sha256)
+# The cargo pin (PLAN-v7 R7): CargoPinOf, which the boot fetch and the mount feed use; it needs the map pin's header.
+nevr_ht_obj(o_core_cargo_session_pin GROUP data NOEXC HOST INCS sdk/include src SRC src/core/cargo_session_pin.cpp)
+nevr_ht_obj(o_core_map_session_pin GROUP data NOEXC HOST INCS sdk/include src SRC src/core/map_session_pin.cpp)
+# cdn_run.cpp's ClientBoot calls ResolveManifestPath (cdn_service.cpp), so every target that links cdn_run links the service too.
+set(_cdn_objs o_cdn_device_memory o_cdn_resource_shadow o_cdn_cdn_limits o_cdn_cdn_validate o_cdn_cdn_manifest o_cdn_cdn_plan o_cdn_cdn_script_gate o_cdn_cdn_scripts o_cdn_cdn_store o_cdn_cdn_run o_cdn_cdn_prefetch o_cdn_cdn_demand o_cdn_cdn_boot_fetch o_core_cargo_session_pin o_core_map_session_pin o_cdn_cdn_service o_data_sha256)
 nevr_ht_test(device_memory_test GROUP data HOST
   SRC src/quest/tests/device_memory_test.cpp OBJS o_cdn_device_memory)
 nevr_ht_test(cdn_limits_test GROUP data HOST
@@ -78,12 +82,12 @@ nevr_ht_obj(o_cdn_hook_log GROUP data NOEXC HOST INCS src/quest/sentinel SRC src
 nevr_ht_obj(o_cdn_atomic_write GROUP data NOEXC HOST SRC src/quest/auth/atomic_write.cpp)
 nevr_ht_test(cdn_service_test GROUP data HOST INCS src/quest/sentinel ENV ${_data_env}
   SRC src/quest/tests/cdn_service_test.cpp
-  OBJS ${_cdn_objs} o_cdn_env_posix o_cdn_cdn_service o_cdn_worker o_cdn_hook_log o_cdn_atomic_write o_data_staging o_core_owned_remove_posix o_data_zip
+  OBJS ${_cdn_objs} o_cdn_env_posix o_cdn_worker o_cdn_hook_log o_cdn_atomic_write o_data_staging o_core_owned_remove_posix o_data_zip
   LIBS ${NEVR_ZLIB_LIB} ${NEVR_ZSTD_LIB})
 # The whole-game launch (#2398): the data step in its all-assets mode, with the worker the sentinel sets, over a scripted transport.
 nevr_ht_test(whole_game_launch_test GROUP data HOST INCS src/quest/sentinel ENV ${_data_env}
   SRC src/quest/tests/whole_game_launch_test.cpp
-  OBJS ${_cdn_objs} o_cdn_env_posix o_cdn_cdn_service o_cdn_worker o_cdn_hook_log o_cdn_atomic_write o_data_staging o_core_owned_remove_posix o_data_zip o_data_fetch o_data_data_step o_data_boot_stub
+  OBJS ${_cdn_objs} o_cdn_env_posix o_cdn_worker o_cdn_hook_log o_cdn_atomic_write o_data_staging o_core_owned_remove_posix o_data_zip o_data_fetch o_data_data_step o_data_boot_stub
   LIBS ${NEVR_ZLIB_LIB} ${NEVR_ZSTD_LIB})
 nevr_ht_test(cdn_resolver_test GROUP data HOST PTHREAD
   SRC src/quest/tests/cdn_resolver_test.cpp OBJS o_cdn_resource_shadow o_cdn_cdn_resolver)

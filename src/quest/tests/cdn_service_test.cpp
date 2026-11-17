@@ -130,6 +130,13 @@ void ThePosixEnvWorksOnRealFiles() {
   QCHECK(!env.ReadSmallFile(deep + "/missing", &text, 100));
   QCHECK(::symlink((deep + "/index.json").c_str(), (deep + "/link").c_str()) == 0);
   QCHECK(!env.ReadSmallFile(deep + "/link", &text, 100));            // a link is not followed
+  // RemoveFile: a file is removed (true, and it is gone); a file that is not there is removed already (true); a directory is not removed
+  // (false, and it stays with its file). The marker and the stamp of the boot fetch rely on the first two.
+  QCHECK(env.WriteFileAtomically(deep + "/gone", "x") && env.RemoveFile(deep + "/gone"));
+  QCHECK(!env.ReadSmallFile(deep + "/gone", &text, 100));
+  QCHECK(env.RemoveFile(deep + "/gone"));
+  QCHECK(!env.RemoveFile(deep));
+  QCHECK(env.ReadSmallFile(deep + "/index.json", &text, 100));
   // An append file: created when absent, grows by appending, gives bytes back by truncating, and says its own length.
   {
     std::unique_ptr<nc::AppendFile> a = env.OpenAppend(deep + "/store-0.pack");
