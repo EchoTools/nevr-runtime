@@ -118,6 +118,7 @@ set(PATCHES_SOURCES
     "combat/orb_pause.cpp"
     "combat/point_rate.cpp"
     "combat/rules_button.cpp"
+    "combat/wall_script.cpp"
     "combat/script_guard.cpp"
     "combat/shared_magazine.cpp"
     "combat/station_cells.cpp"
@@ -1405,6 +1406,14 @@ if(BUILD_TESTING)
     target_include_directories(test_loc_script PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_loc_script PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_loc_script DISCOVERY_MODE PRE_TEST)
+
+    # #2242 (H-WALL-a): the UMBRAL VEIL wall's decision, renew rule and checked global-length patch (runtime/combat/wall_script.h),
+    # on buffers and a fake script image. Pure apart from the Log() call on a refused patch (nevr_core).
+    add_executable(test_wall_script tests/test_wall_script.cpp combat/wall_script.cpp)
+    set_source_files_properties(tests/test_wall_script.cpp combat/wall_script.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_wall_script PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_wall_script PRIVATE GTest::gtest GTest::gtest_main nevr_core)
+    gtest_discover_tests(test_wall_script DISCOVERY_MODE PRE_TEST)
 
     # #600: the shared magazine's frisbee condition (runtime/combat/shared_magazine.h), on a fake shared magazine script.
     add_executable(test_shared_magazine tests/test_shared_magazine.cpp combat/shared_magazine.cpp hook/script_hooks.cpp
