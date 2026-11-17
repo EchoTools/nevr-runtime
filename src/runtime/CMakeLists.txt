@@ -102,6 +102,8 @@ set(PATCHES_SOURCES
     "hook/script_resource_hook.cpp"
     # EchoCombat: he_is_the_cat's three plugins, ported, see runtime/combat/combat.h
     "combat/announcer_callouts.cpp"
+    # #2242 (H-BARR): the UMBRAL VEIL and NEUTRON barrier copies' value sites (runtime/combat/barrier_copies.h).
+    "combat/barrier_copies.cpp"
     "combat/clock_pause.cpp"
     "combat/capture_scores.cpp"
     "combat/capture_time.cpp"
@@ -1383,6 +1385,16 @@ if(BUILD_TESTING)
     target_include_directories(test_gear_controller PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_gear_controller PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk)
     gtest_discover_tests(test_gear_controller DISCOVERY_MODE PRE_TEST)
+
+    # #2242 (H-BARR): the barrier copies' value sites through the script hook table (runtime/combat/barrier_copies.h),
+    # on a fake copy image holding the stock bytes at each site.
+    add_executable(test_barrier_copies tests/test_barrier_copies.cpp combat/barrier_copies.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_barrier_copies.cpp combat/barrier_copies.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_barrier_copies PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_barrier_copies PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_barrier_copies PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_barrier_copies DISCOVERY_MODE PRE_TEST)
 
     # #2242 (H-LOC): the translocator's effect (runtime/combat/loc_script.h): the token, the counter and the guard, on a fake
     # detonator image that holds the pinned bytes. Links the drone's guard and spawn (drone_script.cpp), which it calls.

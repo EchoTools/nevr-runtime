@@ -13,6 +13,8 @@
 
 #include "core/logging.h"
 #include "runtime/hook/patching.h"
+#include "runtime/hook/process_memory.h"
+#include "runtime/patch/checked_patch.h"
 #include "nevr/pc/nevr_common.h"
 
 namespace nevr_script_hooks {
@@ -29,13 +31,20 @@ struct Module {
   std::size_t refs = 0;
   std::vector<void*> targets;    // the hooks installed in this module, removed when the last reference goes
   std::vector<Swapped> swapped;  // the slots replaced in this module, put back before it is freed
+  std::size_t patched = 0;       // the patches applied to this module's image (not put back: the image is freed with it)
 };
 
 std::mutex g_mu;
 std::vector<Hook> g_rows;
 std::vector<Slot> g_slots;
+std::vector<Patch> g_patches;
 std::map<void*, Module> g_modules;
 std::vector<std::pair<std::uint64_t, FreeListener>> g_free_listeners;
+
+// The production writer of a patch: ProcessMemcpy lifts the page protection, writes, flushes and records the range.
+bool WritePatch(void* dest, const void* src, std::size_t n) {
+  return ProcessMemcpy(dest, src, n, nullptr, "script patch");
+}
 
 // Whether `p` lies in the game executable's image: where the engine callbacks a script calls through are.
 bool InGameImage(const void* p) {
@@ -150,6 +159,24 @@ void Register(const Slot* slots, std::size_t count) {
   }
 }
 
+void Register(const Patch* patches, std::size_t count) {
+  std::lock_guard<std::mutex> lock(g_mu);
+  for (std::size_t i = 0; i < count; ++i) {
+    const char* owner = nullptr;
+    for (const Hook& h : g_rows) {
+      if (h.script == patches[i].script && h.rva == patches[i].rva) owner = h.name;
+    }
+    for (const Patch& p : g_patches) {
+      if (p.script == patches[i].script && p.rva == patches[i].rva) owner = p.name;
+    }
+    if (owner != nullptr) {
+      LogRefusedRow(patches[i].script, patches[i].rva, patches[i].name, owner);
+      continue;
+    }
+    g_patches.push_back(patches[i]);
+  }
+}
+
 void OnLoaded(std::uint64_t script, void* base) {
   if (base == nullptr) return;
   std::lock_guard<std::mutex> lock(g_mu);
@@ -172,7 +199,11 @@ void OnLoaded(std::uint64_t script, void* base) {
   for (const Slot& s : g_slots) {
     if (s.script == script) slots.push_back(&s);
   }
-  if (rows.empty() && slots.empty()) {
+  std::vector<const Patch*> patches;
+  for (const Patch& p : g_patches) {
+    if (p.script == script) patches.push_back(&p);
+  }
+  if (rows.empty() && slots.empty() && patches.empty()) {
     g_modules.emplace(base, m);
     Log(EchoVR::LogLevel::Debug, "[NEVR.SCRIPT] script loaded script=%016llx base=%p hooks=0",
         static_cast<unsigned long long>(script), base);
@@ -203,12 +234,23 @@ void OnLoaded(std::uint64_t script, void* base) {
         "engine function from the game executable, so this script is not the one the hook was written against)",
         static_cast<unsigned long long>(script), s->name, s->rva, static_cast<void*>(at), readable ? value : nullptr);
   }
+  for (const Patch* p : patches) {
+    auto* target = static_cast<std::uint8_t*>(base) + p->rva;
+    const bool readable = Readable(target, p->len);
+    if (readable && nevr::ValidatePrologue(target, p->expected, p->len)) continue;
+    ++mismatched;
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.SCRIPT] patch not installed script=%016llx name=\"%s\" rva=0x%x va=%p expected=%s actual=%s (this "
+        "script's bytes are not the ones the patch was written against: nothing is written to it)",
+        static_cast<unsigned long long>(script), p->name, p->rva, static_cast<void*>(target), Hex(p->expected, p->len).c_str(),
+        readable ? Hex(target, p->len).c_str() : "unreadable");
+  }
   if (mismatched > 0) {
     g_modules.emplace(base, m);
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.SCRIPT] script hooks refused script=%016llx base=%p rows=%zu mismatched=%zu (none of this script's hooks "
-        "is installed; the script runs stock)",
-        static_cast<unsigned long long>(script), base, rows.size() + slots.size(), mismatched);
+        "or patches is installed; the script runs stock)",
+        static_cast<unsigned long long>(script), base, rows.size() + slots.size() + patches.size(), mismatched);
     return;
   }
 
@@ -241,12 +283,29 @@ void OnLoaded(std::uint64_t script, void* base) {
     InterlockedExchangePointer(reinterpret_cast<void* volatile*>(at), s->replacement);
     m.swapped.push_back(Swapped{at, engine, s});
   }
+  // The patches go last, after every detour and slot is in: a load that refuses one of them is never left with the
+  // others written. Each site was checked above; Apply checks it again on the bytes it writes.
+  for (const Patch* p : patches) {
+    auto* target = static_cast<std::uint8_t*>(base) + p->rva;
+    const nevr_checked_patch::Site site{p->expected, p->patched, p->len};
+    const nevr_checked_patch::Result result = nevr_checked_patch::Apply(target, site, &WritePatch);
+    if (result == nevr_checked_patch::Result::Applied || result == nevr_checked_patch::Result::AlreadyApplied) {
+      ++m.patched;
+      continue;
+    }
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.SCRIPT] patch not applied script=%016llx name=\"%s\" rva=0x%x va=%p result=%s (the write did not hold the "
+        "patch; the script's other rows are installed, so this one site runs as stock)",
+        static_cast<unsigned long long>(script), p->name, p->rva, static_cast<void*>(target),
+        nevr_checked_patch::ResultName(result));
+  }
   const std::size_t n = m.targets.size();
   const std::size_t k = m.swapped.size();
+  const std::size_t q = m.patched;
   g_modules.emplace(base, m);
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.SCRIPT] script hooks installed script=%016llx base=%p hooks=%zu slots=%zu pins=%zu",
-      static_cast<unsigned long long>(script), base, n, k, pins);
+      "[NEVR.SCRIPT] script hooks installed script=%016llx base=%p hooks=%zu slots=%zu pins=%zu patches=%zu",
+      static_cast<unsigned long long>(script), base, n, k, pins, q);
 }
 
 void OnUnloading(std::uint64_t script, void* base) {
@@ -270,13 +329,14 @@ void OnUnloading(std::uint64_t script, void* base) {
   }
   const std::size_t n = it->second.targets.size();
   const std::size_t k = it->second.swapped.size();
+  const std::size_t q = it->second.patched;
   PutBack(it->second);
   Remove(it->second.targets, it->second.script);
   g_modules.erase(it);
-  if (n + k > 0) {
+  if (n + k + q > 0) {
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.SCRIPT] script hooks removed script=%016llx base=%p hooks=%zu slots=%zu (the game frees it)",
-        static_cast<unsigned long long>(script), base, n, k);
+        "[NEVR.SCRIPT] script hooks removed script=%016llx base=%p hooks=%zu slots=%zu patches=%zu (the game frees it)",
+        static_cast<unsigned long long>(script), base, n, k, q);
   } else {
     Log(EchoVR::LogLevel::Debug, "[NEVR.SCRIPT] script freed script=%016llx base=%p hooks=0",
         static_cast<unsigned long long>(script), base);
@@ -304,7 +364,7 @@ std::size_t LoadedModules() {
 std::size_t HookedModules() {
   std::lock_guard<std::mutex> lock(g_mu);
   std::size_t n = 0;
-  for (const auto& [base, m] : g_modules) n += (m.targets.empty() && m.swapped.empty()) ? 0 : 1;
+  for (const auto& [base, m] : g_modules) n += (m.targets.empty() && m.swapped.empty() && m.patched == 0) ? 0 : 1;
   return n;
 }
 
@@ -312,6 +372,7 @@ void ResetForTest() {
   std::lock_guard<std::mutex> lock(g_mu);
   g_rows.clear();
   g_slots.clear();
+  g_patches.clear();
   g_modules.clear();
   g_free_listeners.clear();
 }
