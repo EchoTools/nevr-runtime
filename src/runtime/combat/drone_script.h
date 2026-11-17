@@ -77,12 +77,24 @@ inline constexpr std::uint64_t kSelfSymbol = 0xC8C33E48297612B6ULL;   // CSymbol
 inline constexpr std::uint64_t kDeathAsset = 0xC9EB32D35038EB4CULL;   // the detonator's explosion smoke
 inline constexpr std::uint32_t kPointSoundEvent = 3404182162U;        // POINT's sound event
 
+/// What a spawn node asks the particle effect for: the asset, the particle life (a multiplier), the emitter and particle
+/// size, and the seconds before the effect is killed (0: never). The drone's death uses kDeathSpawn; the translocator
+/// (loc_script.h) has its own.
+struct SpawnSpec {
+  std::uint64_t asset;
+  float life;
+  float scale;
+  float duration;
+};
+
+inline constexpr SpawnSpec kDeathSpawn{kDeathAsset, kDeathLife, kDeathScale, kDeathDuration};
+
 /// The dispatcher's record for one node run: the context into the token's last-context field, and the node count up by one.
 /// `token` is the token block (the exe's kTokenRva). Pure, so a test can run it on a buffer.
 void RecordDispatch(std::uint8_t* token, void* ctx);
 
 /// Writes the fields the spawn stub sets after the constructor ran on `node` (kNodeBufferBytes).
-void BuildSpawnNode(std::uint8_t* node, float life, float scale, float duration);
+void BuildSpawnNode(std::uint8_t* node, const SpawnSpec& spec);
 
 /// Writes the fields the sound stub sets after the constructor ran on `node`.
 void BuildSoundNode(std::uint8_t* node, std::uint32_t event);
@@ -95,6 +107,16 @@ bool DetonatorPinned(const std::uint8_t* base);
 
 /// Whether the stubs run for a context: its disabled byte is 0.
 bool ContextEnabled(const std::uint8_t* ctx);
+
+/// The detonator's base when a particle effect can run for node context `ctx`: the context is enabled, the detonator is
+/// loaded (script_hooks LoadedBase) and its four functions are the pinned bytes. Null otherwise; a loaded detonator that
+/// is not the pinned build is logged once. A caller that must not spend a resource unless the effect runs checks this first.
+const std::uint8_t* DetonatorFor(const void* ctx);
+
+/// Runs the detonator's spawn node on `ctx` with `spec` (asset, particle life, size, duration): the stock constructor, the
+/// fields of BuildSpawnNode, the state of the context cleared as the stock spawn stub clears it, then the stock Execute.
+/// Does nothing unless DetonatorFor(ctx) is non-null.
+void SpawnEffect(void* ctx, const SpawnSpec& spec);
 
 #ifdef NEVR_TEST_HOOKS
 /// Tests only: the token block the dispatcher wrapper writes (Register sets the exe's). Does not install anything.

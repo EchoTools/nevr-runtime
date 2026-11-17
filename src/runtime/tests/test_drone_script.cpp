@@ -201,7 +201,7 @@ TEST(DroneScript, SpawnNodeAfterTheStockConstructorHasTheStubsFields) {
     alignas(16) std::uint8_t node[drone::kNodeBufferBytes];
     std::memset(node, kPoison, sizeof node);
     reinterpret_cast<NodeCtor>(code)(node);
-    drone::BuildSpawnNode(node, drone::kDeathLife, drone::kDeathScale, drone::kDeathDuration);
+    drone::BuildSpawnNode(node, drone::kDeathSpawn);
 
     EXPECT_EQ(drone::kDeathAsset, U64(node + drone::kSpawnAsset));
     EXPECT_EQ(1u, node[drone::kSpawnDurationOn]);

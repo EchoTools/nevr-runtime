@@ -106,6 +106,7 @@ set(PATCHES_SOURCES
     "combat/dot_script.cpp"
     "combat/dot_trigger.cpp"
     "combat/drone_script.cpp"
+    "combat/loc_script.cpp"
     "combat/orb_pause.cpp"
     "combat/point_rate.cpp"
     "combat/rules_button.cpp"
@@ -1366,6 +1367,16 @@ if(BUILD_TESTING)
     target_include_directories(test_dot_trigger PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_dot_trigger PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_dot_trigger DISCOVERY_MODE PRE_TEST)
+
+    # #2242 (H-LOC): the translocator's effect (runtime/combat/loc_script.h): the token, the counter and the guard, on a fake
+    # detonator image that holds the pinned bytes. Links the drone's guard and spawn (drone_script.cpp), which it calls.
+    add_executable(test_loc_script tests/test_loc_script.cpp combat/loc_script.cpp combat/drone_script.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_loc_script.cpp combat/loc_script.cpp combat/drone_script.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_loc_script PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_loc_script PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_loc_script PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_loc_script DISCOVERY_MODE PRE_TEST)
 
     # #600: the shared magazine's frisbee condition (runtime/combat/shared_magazine.h), on a fake shared magazine script.
     add_executable(test_shared_magazine tests/test_shared_magazine.cpp combat/shared_magazine.cpp hook/script_hooks.cpp

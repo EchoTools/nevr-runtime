@@ -46,22 +46,6 @@ Fn DetonatorFn(const std::uint8_t* det, std::uint32_t rva) {
     return reinterpret_cast<Fn>(const_cast<std::uint8_t*>(det) + rva);
 }
 
-// The guard both stubs share: the detonator is loaded, its four functions are the pinned bytes, and the context is
-// enabled. A loaded detonator that is not the pinned build is logged once and not called.
-const std::uint8_t* ReadyDetonator(const std::uint8_t* ctx) {
-    if (!ContextEnabled(ctx)) return nullptr;
-    const auto* det = static_cast<const std::uint8_t*>(nevr_script_hooks::LoadedBase(kDetonatorScript));
-    if (det == nullptr) return nullptr;
-    if (DetonatorPinned(det)) return det;
-    bool expected = false;
-    if (g_warned_unpinned.compare_exchange_strong(expected, true)) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.COMBAT] drone explosion not run: the detonator script (190ed14fe3da5ed1) is loaded but its node "
-            "functions are not the bytes this build was written against, so the stubs call none of them");
-    }
-    return nullptr;
-}
-
 }  // namespace
 
 void RecordDispatch(std::uint8_t* token, void* ctx) {
@@ -69,21 +53,21 @@ void RecordDispatch(std::uint8_t* token, void* ctx) {
     InterlockedIncrement(reinterpret_cast<volatile LONG*>(token + kTokenNodesRun));
 }
 
-void BuildSpawnNode(std::uint8_t* node, float life, float scale, float duration) {
-    node[kSpawnDurationOn] = duration > 0.0f ? 1 : 0;
-    Store(node, kSpawnDuration, duration);
+void BuildSpawnNode(std::uint8_t* node, const SpawnSpec& spec) {
+    node[kSpawnDurationOn] = spec.duration > 0.0f ? 1 : 0;
+    Store(node, kSpawnDuration, spec.duration);
     node[kSpawnKillAtEnd] = 1;
-    Store(node, kSpawnAsset, kDeathAsset);
+    Store(node, kSpawnAsset, spec.asset);
     Store(node, kSpawnActor, kSelfSymbol);
     Store(node, kSpawnRefPoint, kRefPointFlags);
     Store(node, kSpawnEmission, kUnit);
-    Store(node, kSpawnLife, life);
+    Store(node, kSpawnLife, spec.life);
     Store(node, kSpawnAlpha, kUnit);
     Store(node, kSpawnColorR, kUnit);
     Store(node, kSpawnColorG, kUnit);
     Store(node, kSpawnColorB, kUnit);
-    for (std::uint32_t off : kSpawnParticle) Store(node, off, scale);
-    for (std::uint32_t off : kSpawnScale) Store(node, off, scale);
+    for (std::uint32_t off : kSpawnParticle) Store(node, off, spec.scale);
+    for (std::uint32_t off : kSpawnScale) Store(node, off, spec.scale);
     for (std::size_t k = 0; k < kRingEntries; ++k) Store(node, kSpawnRing + static_cast<std::uint32_t>(k * kRingStride), 0u);
 }
 
@@ -106,6 +90,34 @@ bool DetonatorPinned(const std::uint8_t* base) {
 
 bool ContextEnabled(const std::uint8_t* ctx) {
     return ctx != nullptr && ctx[kCtxDisabled] == 0;
+}
+
+// The guard every effect shares: the context is enabled, the detonator is loaded, and its four functions are the pinned
+// bytes. A loaded detonator that is not the pinned build is logged once and not called.
+const std::uint8_t* DetonatorFor(const void* ctx) {
+    if (!ContextEnabled(static_cast<const std::uint8_t*>(ctx))) return nullptr;
+    const auto* det = static_cast<const std::uint8_t*>(nevr_script_hooks::LoadedBase(kDetonatorScript));
+    if (det == nullptr) return nullptr;
+    if (DetonatorPinned(det)) return det;
+    bool expected = false;
+    if (g_warned_unpinned.compare_exchange_strong(expected, true)) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.COMBAT] drone explosion not run: the detonator script (190ed14fe3da5ed1) is loaded but its node "
+            "functions are not the bytes this build was written against, so the stubs call none of them");
+    }
+    return nullptr;
+}
+
+void SpawnEffect(void* ctx, const SpawnSpec& spec) {
+    const std::uint8_t* det = DetonatorFor(ctx);
+    if (det == nullptr) return;
+    alignas(16) std::uint8_t node[kNodeBufferBytes] = {};
+    DetonatorFn<DetonatorCtor>(det, kSpawnCtorRva)(node);
+    BuildSpawnNode(node, spec);
+    // Each effect starts its cloud fresh (the stock spawn stub clears the context's state the same way).
+    std::uint8_t* state = static_cast<std::uint8_t*>(ctx) + kCtxState;
+    std::memset(state, 0, kQwordBytes);
+    DetonatorFn<DetonatorExec>(det, kSpawnExecRva)(node, ctx);
 }
 
 }  // namespace nevr_combat::drone_script
@@ -172,20 +184,10 @@ static_assert(kStubStackAlign == 16 && kStubShadowBytes == 32, "the asm's `and r
 
 namespace nevr_combat::drone_script {
 
-void __fastcall SpawnDeathEffect(void* ctx) {
-    const std::uint8_t* det = ReadyDetonator(static_cast<const std::uint8_t*>(ctx));
-    if (det == nullptr) return;
-    alignas(16) std::uint8_t node[kNodeBufferBytes] = {};
-    DetonatorFn<DetonatorCtor>(det, kSpawnCtorRva)(node);
-    BuildSpawnNode(node, kDeathLife, kDeathScale, kDeathDuration);
-    // Each explosion starts its cloud fresh (the stock spawn stub clears the context's state the same way).
-    std::uint8_t* state = static_cast<std::uint8_t*>(ctx) + kCtxState;
-    std::memset(state, 0, kQwordBytes);
-    DetonatorFn<DetonatorExec>(det, kSpawnExecRva)(node, ctx);
-}
+void __fastcall SpawnDeathEffect(void* ctx) { SpawnEffect(ctx, kDeathSpawn); }
 
 void __fastcall PlayDeathSound(void* ctx) {
-    const std::uint8_t* det = ReadyDetonator(static_cast<const std::uint8_t*>(ctx));
+    const std::uint8_t* det = DetonatorFor(ctx);
     if (det == nullptr) return;
     alignas(16) std::uint8_t node[kNodeBufferBytes] = {};
     DetonatorFn<DetonatorCtor>(det, kSoundCtorRva)(node);
