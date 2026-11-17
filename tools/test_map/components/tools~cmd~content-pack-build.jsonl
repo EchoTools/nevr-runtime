@@ -34,6 +34,8 @@
 {"file":"tools/cmd/content-pack-build/steps_drone_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_equipment.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_equipment_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
+{"file":"tools/cmd/content-pack-build/steps_gear_icons.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
+{"file":"tools/cmd/content-pack-build/steps_gear_icons_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_mapterm.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_mapterm_tables.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_mapterm_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}

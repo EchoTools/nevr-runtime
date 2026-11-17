@@ -73,7 +73,9 @@ actor the shared script row, in the bullet, particle and script tables of the fi
 lists: six the game defines in mp_weapon_settings but does not list, and the translocator
 (`tools/cmd/content-pack-build/steps_equipment.go`). It writes the pack into a new folder beside `-out` and renames it
 to `-out` when every file is in it, so a failed write leaves no `-out`, and it refuses an `-out` inside `-game-dir`, links
-resolved: nothing of ours is written into a game folder.
+resolved: nothing of ours is written into a game folder. The gear-icon step takes its art by flag: `-gear-icons-dir <dir>` is
+he_is_the_cat's `ICONS/hd`, the build refuses without it, each of its 11 files is read by name and must match its pinned sha-256,
+and the summary line's `inputs` and the log's `input_pinned` records list what was read.
 
 ## A pack's records as a CDN label
 

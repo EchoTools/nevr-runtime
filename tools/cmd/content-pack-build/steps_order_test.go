@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -266,6 +267,14 @@ func TestTheRegistrationsAreTheLiteralsOfTheSteps(t *testing.T) {
 	}
 }
 
+// withoutUnsetGearIcons is list without the gear icons step when gearIconsEnv is not set, as stockSteps leaves it out.
+func withoutUnsetGearIcons(list []Step) []Step {
+	if os.Getenv(gearIconsEnv) != "" {
+		return list
+	}
+	return slices.DeleteFunc(slices.Clone(list), func(st Step) bool { return st.Name == gearIconsStepName })
+}
+
 // TestTheTieOrderOfUnrelatedStepsChangesNoByte is the independent measurement of "the declared order is enough": applying the
 // steps in the production order and in the reverse tie order must give the same changes, scripts and rekeys. Gated on
 // NEVR_STOCK_DATA (a stock PC data folder); it is not run without one.
@@ -274,8 +283,8 @@ func TestTheTieOrderOfUnrelatedStepsChangesNoByte(t *testing.T) {
 	if data == "" {
 		t.Skip("NEVR_STOCK_DATA is not set (a stock PC data folder: manifests/ and packages/)")
 	}
-	production := mustProductionSteps(t)
-	reversed, err := orderedWith(steps, highestFirst)
+	production := stockSteps(t)
+	reversed, err := orderedWith(withoutUnsetGearIcons(steps), highestFirst)
 	if err != nil {
 		t.Fatal(err)
 	}

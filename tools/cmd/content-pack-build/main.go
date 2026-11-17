@@ -56,6 +56,20 @@ type Pack struct {
 	changes map[string]map[radpack.Key][]byte // set -> resource -> bytes
 	scripts map[string][]byte                 // 16 hex -> DLL
 	rekeys  []RekeyEntry                      // the copies a step named: listed, never carried (Rekey)
+
+	gearIconsDir string        // -gear-icons-dir: he_is_the_cat's ICONS/hd, the gear icons' art (steps_gear_icons.go)
+	inputs       []PinnedInput // the outside files a step read, each with the sha-256 it matched (ADR 0035 rule 4)
+}
+
+// Inputs are the outside inputs a build is given by flag. Each is read by one step, and a step whose input is absent refuses.
+type Inputs struct{ GearIconsDir string }
+
+// PinnedInput is one outside file a step read, with the sha-256 it matched. The build logs one `input_pinned` record for each
+// and lists them in the summary line; content.json is unchanged.
+type PinnedInput struct {
+	Step   string `json:"step"`
+	File   string `json:"file"`
+	Sha256 string `json:"sha256"`
 }
 
 // RekeyPlatform is the platform a rekey entry names: Rekey reads the PC's stock scripts.
@@ -218,6 +232,7 @@ func runWith(list []Step, args []string, getenv func(string) string, stdout, std
 		out := flags.String("out", "", "the pack's new folder, <root>/content/<id>")
 		id := flags.String("id", "", "the pack's id")
 		ver := flags.String("version", "", "the pack's version, shown in the runtime's log")
+		gearIcons := flags.String("gear-icons-dir", "", "he_is_the_cat's ICONS/hd: the gear icons' art, read by name and checked against the pinned sha-256")
 		if err := flags.Parse(args); err != nil {
 			return 2
 		}
@@ -225,7 +240,7 @@ func runWith(list []Step, args []string, getenv func(string) string, stdout, std
 			fmt.Fprintln(stderr, "content-pack-build: -game-dir, -out, -id and -version are required")
 			return 2
 		}
-		result, err := Build(list, *gameDir, *out, *id, *ver, log)
+		result, err := Build(list, *gameDir, *out, *id, *ver, Inputs{GearIconsDir: *gearIcons}, log)
 		if err != nil {
 			log.Warn("refused", "game_dir", *gameDir, "out", *out, "id", *id, "error", err.Error())
 			fmt.Fprintf(stderr, "content-pack-build: %v\n", err)
@@ -241,13 +256,14 @@ func runWith(list []Step, args []string, getenv func(string) string, stdout, std
 
 // Result is the build's summary line.
 type Result struct {
-	Event     string `json:"event"`
-	ID        string `json:"id"`
-	Manifests int    `json:"manifests"`
-	Resources int    `json:"resources"`
-	Scripts   int    `json:"scripts"`
-	Rekeys    int    `json:"rekeys,omitempty"`
-	Files     int    `json:"files"`
+	Event     string        `json:"event"`
+	ID        string        `json:"id"`
+	Manifests int           `json:"manifests"`
+	Resources int           `json:"resources"`
+	Scripts   int           `json:"scripts"`
+	Rekeys    int           `json:"rekeys,omitempty"`
+	Files     int           `json:"files"`
+	Inputs    []PinnedInput `json:"inputs,omitempty"`
 }
 
 type manifestEntry struct {
@@ -276,7 +292,7 @@ func digest(b []byte) string {
 
 // Build runs the steps over the stock install at gameDir and writes the pack to out, which must not exist. Nothing is
 // written when a step fails or no step changes anything.
-func Build(list []Step, gameDir, out, id, ver string, log *slog.Logger) (Result, error) {
+func Build(list []Step, gameDir, out, id, ver string, in Inputs, log *slog.Logger) (Result, error) {
 	if !packID.MatchString(id) {
 		return Result{}, fmt.Errorf("%q is not a pack id", id)
 	}
@@ -295,7 +311,7 @@ func Build(list []Step, gameDir, out, id, ver string, log *slog.Logger) (Result,
 		return Result{}, fmt.Errorf("%s exists; a pack is made into a new folder", out)
 	}
 	data := filepath.Join(gameDir, filepath.FromSlash(DataDir))
-	p := &Pack{gameDir: gameDir, sets: map[string]*radpack.Set{}, changes: map[string]map[radpack.Key][]byte{}, scripts: map[string][]byte{}}
+	p := &Pack{gameDir: gameDir, sets: map[string]*radpack.Set{}, changes: map[string]map[radpack.Key][]byte{}, scripts: map[string][]byte{}, gearIconsDir: in.GearIconsDir}
 	stockRaw := map[string][]byte{}
 	for _, setID := range Sets {
 		s, raw, err := radpack.OpenSet(data, setID)
@@ -310,13 +326,16 @@ func Build(list []Step, gameDir, out, id, ver string, log *slog.Logger) (Result,
 		}
 		log.Info("step_applied", "step", st.Name)
 	}
+	for _, pin := range p.inputs {
+		log.Info("input_pinned", "step", pin.Step, "file", pin.File, "sha256", pin.Sha256)
+	}
+	res := Result{Event: "pack_made", ID: id, Inputs: p.inputs}
 	if len(p.changes) == 0 && len(p.scripts) == 0 && len(p.rekeys) == 0 {
 		return Result{}, errors.New("no step changes the stock data, so there is nothing to pack")
 	}
 
 	files := map[string][]byte{}
 	cj := contentJSON{Format: 1, ID: id, Version: ver, DataDir: DataDir, Files: map[string]string{}}
-	res := Result{Event: "pack_made", ID: id}
 	sets := make([]string, 0, len(p.changes))
 	for s := range p.changes {
 		sets = append(sets, s)

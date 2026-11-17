@@ -104,8 +104,8 @@ func TestStepsMatchStage82(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &Pack{gameDir: filepath.Join(stock, "..", "..", "..", ".."), sets: map[string]*radpack.Set{Sets[0]: s},
-		changes: map[string]map[radpack.Key][]byte{}, scripts: map[string][]byte{}}
-	diffs, err := oracleDiffs(mustProductionSteps(t), p, stage)
+		changes: map[string]map[radpack.Key][]byte{}, scripts: map[string][]byte{}, gearIconsDir: os.Getenv(gearIconsEnv)}
+	diffs, err := oracleDiffs(stockSteps(t), p, stage)
 	if err != nil {
 		t.Fatal(err)
 	}

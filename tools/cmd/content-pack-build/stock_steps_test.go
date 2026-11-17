@@ -49,11 +49,28 @@ var gunPatchTables = map[uint64]map[uint64]string{
 // what a run really changed, so a step that changes a record it does not declare, or declares one it does not change,
 // fails there.
 
+// gearIconsEnv names the folder of the gear icons' art (he_is_the_cat's ICONS/hd) for the tests that run every production step
+// over the stock data. The gear icons step refuses without it, so a run without it leaves that step out of the list it applies
+// and checks (stockSteps) and says so.
+const gearIconsEnv = "NEVR_GEAR_ICONS_DIR"
+
+// stockSteps is the production list for a test that applies it over the stock data: the whole list when gearIconsEnv is set,
+// else the list without the gear icons step.
+func stockSteps(t *testing.T) []Step {
+	t.Helper()
+	list := mustProductionSteps(t)
+	if os.Getenv(gearIconsEnv) != "" {
+		return list
+	}
+	t.Logf("%s is not set: the %q step is left out (it refuses without the art)", gearIconsEnv, gearIconsStepName)
+	return slices.DeleteFunc(slices.Clone(list), func(st Step) bool { return st.Name == gearIconsStepName })
+}
+
 // newStockPack opens both client sets of the stock data as Build does, with nothing changed yet.
 func newStockPack(t *testing.T, data string) *Pack {
 	t.Helper()
 	p := &Pack{gameDir: filepath.Join(data, "..", "..", "..", ".."), sets: map[string]*radpack.Set{},
-		changes: map[string]map[radpack.Key][]byte{}, scripts: map[string][]byte{}}
+		changes: map[string]map[radpack.Key][]byte{}, scripts: map[string][]byte{}, gearIconsDir: os.Getenv(gearIconsEnv)}
 	for _, setID := range Sets { // both client sets, as Build opens them: a step may change a resource in either
 		s, _, err := radpack.OpenSet(data, setID)
 		if err != nil {
@@ -73,7 +90,7 @@ func TestTheEchoCombatStepsReproduceTheGunPatchFilesFromTheShippedData(t *testin
 	// The gun patch's mp_equipment has no OVERCHARGE, NEUTRON or UMBRAL VEIL (the steps that are PastGunPatch add them), and
 	// its four map levels' script tables have no map buttons (steps_mapterm.go adds them), so its sha-256 values are
 	// compared before those steps.
-	for _, st := range mustProductionSteps(t) {
+	for _, st := range stockSteps(t) {
 		if st.PastGunPatch {
 			continue
 		}
@@ -104,12 +121,12 @@ func TestTheChangedResourcesAreTheDeclaredOnes(t *testing.T) {
 		t.Skip("NEVR_STOCK_DATA is not set (a stock PC data folder: manifests/ and packages/)")
 	}
 	p := newStockPack(t, data)
-	for _, st := range mustProductionSteps(t) {
+	for _, st := range stockSteps(t) {
 		if err := st.Apply(p); err != nil {
 			t.Fatalf("%s: %v", st.Name, err)
 		}
 	}
-	if err := checkChanged(mustProductionSteps(t), p.changes); err != nil {
+	if err := checkChanged(stockSteps(t), p.changes); err != nil {
 		t.Error(err)
 	}
 	distinct := map[radpack.Key]bool{}
