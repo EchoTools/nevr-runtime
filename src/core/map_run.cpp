@@ -395,7 +395,7 @@ class MountRun {
       // A fetch drops a version a manifest revoked: the mount says why the map is gone.
       const bool revoked = std::any_of(listings.begin(), listings.end(),
                                        [&](const Listing& l) { return revoked_sha_.count(l.entry.index.sha256) != 0; });
-      return revoked ? Refuse(id, "revoked") : Skip(id, "not_cached");
+      return revoked ? Refuse(id, "revoked") : Skip(id, kNotCachedToken);
     }
     const CachedMap& cached = found->second;
     const auto earlier = mounted_.find(id);
@@ -407,9 +407,11 @@ class MountRun {
       return Skip(id, kMountedOtherVersionToken);
     }
     if (revoked_sha_.count(cached.index_sha256)) return Refuse(id, "revoked");
-    if (only_ != nullptr && !Contains(*only_, id)) return Skip(id, kNotAskedToken);
+    // A copy no verified manifest lists is stale whether or not a session asked for it: an on-demand boot says so (a Warning) and the
+    // session's request downloads the listed version, rather than the copy hiding behind not_asked.
     const Listing* pinning = Pinning(listings, cached.index_sha256);
     if (pinning == nullptr) return Refuse(id, kStaleToken);
+    if (only_ != nullptr && !Contains(*only_, id)) return Skip(id, kNotAskedToken);
     const Listing selected = *pinning;
     const std::string version_dir = Join(config_.dir, cached.dir);
 

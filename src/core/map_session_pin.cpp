@@ -68,6 +68,7 @@ TickState& g_tick() {
 // (NoteFetchFailed, NoteHoldProgress) and the mount observer (NoteMapsMounted); all under g_mutex.
 struct JoinHoldState {
   bool armed = false;
+  bool cached = false;  // the map is on disk and only needs its mount: the notices say Loading, not Downloading
   std::string id, failed;  // failed: the consequence of a failed fetch of `id`
   std::uint64_t lobby = 0, level = 0, pin = 0, armed_ms = 0;
   nevr_maps::HoldPlan plan;
@@ -327,8 +328,10 @@ bool HoldStep(GameAccess& game, std::uint64_t lobby, std::uint64_t now) {
     return false;
   }
   const ClientDecision decision = DecideClient(hold.level, hold.pin);
+  // An unpinned session's cached map still waiting for its mount (not_asked) keeps the hold; once mounted the decision is a plain stay.
+  const bool unpinnedWaiting = decision.action == ClientAction::kUnpinned && decision.holdable;
   if ((mounted && decision.action == ClientAction::kNone) ||
-      (decision.action != ClientAction::kNone && decision.action != ClientAction::kLeave)) {
+      (decision.action != ClientAction::kNone && decision.action != ClientAction::kLeave && !unpinnedWaiting)) {
     {
       std::lock_guard<std::mutex> lock(g_mutex());
       g_hold().armed = false;
@@ -344,13 +347,13 @@ bool HoldStep(GameAccess& game, std::uint64_t lobby, std::uint64_t now) {
   if (!hold.failed.empty()) {
     HoldLeave(game, now, hold,
               HoldLeaveDecision(hold.id, "fetch_failed",
-                                FitLine({{"Map "}, {hold.id, true}, {" could not be downloaded. See the nevr log."}})));
+                                FitLine({{"Map "}, {hold.id, true}, {hold.cached ? " could not be loaded. See the nevr log." : " could not be downloaded. See the nevr log."}})));
     return false;
   }
   if (now >= hold.armed_ms + nevr_maps::MapHoldTimeoutMs(hold.plan)) {
     HoldLeave(game, now, hold,
               HoldLeaveDecision(hold.id, "hold_timeout",
-                                FitLine({{"Downloading "}, {hold.id, true}, {" took too long; join again later."}})));
+                                FitLine({{hold.cached ? "Loading " : "Downloading "}, {hold.id, true}, {" took too long; join again later."}})));
     return false;
   }
   // Another version mounted (or the map cannot be had): no wait cures it, so the one leave takes it with its own notice.
@@ -414,6 +417,8 @@ void ClientTick(GameAccess& game, std::uint64_t lobby, std::uint64_t now, const 
     case ClientAction::kUnpinned:
       event.kind = PinEventKind::kUnpinned;
       game.Event(event);
+      // A load the hold could not take (a platform that cannot hold it) still asks for the cached map's mount: it plays from the next load.
+      if (decision.request_fetch) AskFetch(decision.id);
       break;
     case ClientAction::kLocal:
       if (g_tick().local_warned) break;
@@ -529,6 +534,12 @@ std::vector<MapPin> MountedPins() {
   return g_mounted();
 }
 
+bool CachedMapAwaitsMount(const std::string& id) {
+  std::lock_guard<std::mutex> lock(g_mutex());
+  const std::string* token = SecondOf(g_view().not_mounted, id);
+  return token != nullptr && *token == nevr_maps::kNotAskedToken;
+}
+
 void SetFetchRequest(FetchRequestFn fn) {
   std::lock_guard<std::mutex> lock(g_mutex());
   g_fetch = fn;
@@ -555,6 +566,16 @@ ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin) {
   if (pin == 0) {
     decision.action = ClientAction::kUnpinned;
     decision.reason = "map_unpinned";
+    // The server states no version, so the client never leaves for one; but a session whose level is a map this client lists and holds
+    // on disk (not_asked) runs that map, and nothing mounts a cached map at boot: the session asks for its mount, and the load waits for
+    // it as it does for a pinned one (HoldLoadBegin), so the cached map is played as it was before the mount moved to the request.
+    const std::string* unpinnedToken = SecondOf(g_view().not_mounted, id);
+    if (unpinnedToken != nullptr && *unpinnedToken == nevr_maps::kNotAskedToken) {
+      decision.request_fetch = true;
+      decision.holdable = true;
+      decision.cached = true;
+      decision.notice_line = FitLine({{"Loading "}, {id, true}, {"; join again when it is ready."}});
+    }
     return decision;
   }
   // A staged map has not mounted yet (the login and the lobby can come before the first resource request) but will.
@@ -574,10 +595,19 @@ ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin) {
     decision.reason = "not_mounted";
     // Not held, or held at a version the channel no longer lists: the request downloads the listed version, which mounts during this
     // run (ADR 0048 decision 16). A stale copy is never played in its place.
-    if (*token == "not_cached" || *token == nevr_maps::kStaleToken) {
+    if (*token == nevr_maps::kNotCachedToken || *token == nevr_maps::kStaleToken) {
       decision.request_fetch = true;
       decision.holdable = true;
       decision.notice_line = FitLine({{"Downloading "}, {id, true}, {"; join again when it is ready."}});
+      return decision;
+    }
+    // A cached map at the listed version that no session has asked for (every cached map of an on-demand boot): the request checks the
+    // manifest and mounts it in this run, so nothing downloads and the join waits only for the mount.
+    if (*token == nevr_maps::kNotAskedToken) {
+      decision.request_fetch = true;
+      decision.holdable = true;
+      decision.cached = true;
+      decision.notice_line = FitLine({{"Loading "}, {id, true}, {"; join again when it is ready."}});
       return decision;
     }
     decision.notice_line = FitLine({{"Map "}, {id, true}, {" did not load: "}, {*token, true}, {". See the nevr log."}});
@@ -660,7 +690,8 @@ bool HoldLoadBegin(GameAccess& game) {
     hold.spent = false;
   }
   const ClientDecision decision = DecideClient(level, pin);
-  if (decision.action != ClientAction::kLeave || !decision.holdable) return false;
+  const bool unpinnedCached = decision.action == ClientAction::kUnpinned && decision.holdable;
+  if ((decision.action != ClientAction::kLeave && !unpinnedCached) || !decision.holdable) return false;
   const std::uint64_t now = game.NowMs();
   {
     std::lock_guard<std::mutex> lock(g_mutex());
@@ -668,6 +699,7 @@ bool HoldLoadBegin(GameAccess& game) {
     hold = JoinHoldState();
     hold.armed = true;
     hold.id = decision.id;
+    hold.cached = decision.cached;
     hold.lobby = lobby;
     hold.level = level;
     hold.pin = pin;
@@ -682,7 +714,7 @@ bool HoldLoadBegin(GameAccess& game) {
   event.id = decision.id;
   event.fetch = true;
   event.timeout_ms = nevr_maps::MapHoldTimeoutMs(nevr_maps::HoldPlan());
-  event.notice = FitLine({{"Downloading "}, {decision.id, true}, {"; the join continues when it is ready."}});
+  event.notice = FitLine({{decision.cached ? "Loading " : "Downloading "}, {decision.id, true}, {"; the join continues when it is ready."}});
   game.Event(event);
   AskFetch(decision.id);
   return true;

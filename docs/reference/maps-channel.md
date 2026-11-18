@@ -86,10 +86,33 @@ Downloaded maps live in `<nEVR root>\cache\maps\` (`MapsCacheDir`, `src/core/nev
 - A cached copy whose version no verified manifest lists is refused: the cache is not mounted in its place. The copy is
   recorded as `map_mounted refused=stale` (Warning), the listed version is fetched when a session asks for it, and the
   session pin's decision for a stale copy is a download notice (`src/core/map_session_pin.cpp`).
-- `ChannelConfig::mount_on_demand` (`src/core/map_run.h`) defaults to `false`: the boot mount grants every cached map its
-  groups list. A map fetched during a session mounts in the same run: the fetch worker's request pass calls
+- **A client mounts no map at boot; a map mounts when a session asks for it, after the check of its manifest** (the rule is
+  `nevr_maps::MountOnDemandFor` in `src/core/map_run.h`, and both platforms' edges set `ChannelConfig::mount_on_demand` from
+  it: the PC for a client, the Quest always). `Channel::Boot` lists every cached map (the session pin knows them all) and grants
+  none: each is recorded as `map_skipped reason=not_asked` (Info), except a copy no verified manifest lists, which is
+  `refused=stale` (Warning). A background pass that refreshes a held map mounts nothing (`StoredGroupsToMount`). A dedicated
+  server's `mount_on_demand` is `false`: its boot mounts every cached map and its fetch of the session's group mounts that
+  group (K5). No config key sets it (ADR 0048 decision 16). The session pin asks for a not_asked map when a session names it
+  (`DecideClient`: leave or hold, with the notice "Loading <id>; join again when it is ready."), the request checks the group's
+  manifest, stores a newer version first, and mounts the named map. A request for a map the cache holds at the listed version
+  (`not_asked` in the pin's view, `CachedMapAwaitsMount`) fetches nothing: it is queued apart (`MapRequests::TakeMountOnly`),
+  wakes the worker's light job (`FetchWorker::RequestLight`), which is not held by the gap, and mounts the stored version as
+  soon as the one worker is idle (`ServeMountOnly`, one `map_request outcome=cached reason=mount_only` record); it does not check
+  the manifest, which the group's request does under the gap, so inside the gap a map can mount at a version the channel has since
+  replaced (`mounted_other_version`, applies at the next start). A map whose mount defers (a moved file stamp, a changed stock file) is
+  asked for again as a fetching request, whose fetch hashes the channel's deferred set first (`Channel::TakeDeferred`) and whose
+  mount then grants it. Every full pass serves such requests first. The
+  group's own request still goes through the gap and checks the manifest for a newer version; the gap applies to anything that
+  needs a fetch.
+- A PC client whose cache root another game process holds (the lock `TryLockRoot`, taken at boot) runs no worker, so every mount after
+  the boot would never happen: that run takes `MountOnDemandFor(is_server, root_busy=true)`, which is false, and mounts its cached maps
+  at boot, fetching nothing (`map_start reason=busy`). A hold on a cached map that ends in a leave says "Loading <id> took too long" or
+  "Map <id> could not be loaded", not Downloading.
+- On the Quest a manifest the game has not ready within `kManifestWaitMs` abandons the run's map registration, so every later
+  request is refused `too_late` and nothing retries (KNOWN-WRONG #TBD, `quest/cdn/map_service.cpp`).
+- A map fetched during a session mounts in the same run: the fetch worker's request pass calls
   `Channel::MountGroups` with `MountScope`, which grants only the ids the request named (`mount_on_demand` is the scope's
-  switch; an unasked map is recorded as `map_skipped reason=not_asked`, Info), registers each granted map's set, and calls
+  switch), registers each granted map's set, and calls
   `nevr_resource_sets::MountLaterSets` (`src/runtime/patch/resource_sets.h`). The game's own thread then runs the later mount
   on its next frame (`OnFrame`), once the game has asked its first resource; nothing waits for it, and a frame with no
   later mount pending costs one atomic load. No config key sets `mount_on_demand` (ADR 0048 decision 16).
@@ -140,7 +163,9 @@ hand-installed copies exists on either platform. The session pin's own `local_ma
 ### Session pin (ADR 0048 decision 9)
 
 The pin is `id@version`. A client whose map version differs from the session's pin leaves before it loads. Two cases do not
-leave: a session that states no pin (`map_unpinned`), and a client with a local copy of the session's map (`local_map`, PC).
+leave: a session that states no pin (`map_unpinned`), and a client with a local copy of the session's map (`local_map`, PC). An
+unpinned session on a map the client lists and holds on disk (`not_asked`) still asks for the map's mount and holds the load for it,
+because nothing mounts a cached map at boot; any other unpinned session is a stay with no request.
 
 - **PC login:** the login carries `nevr_maps` when a pin is set (`LoginEntries`, `src/runtime/compat/ws_bridge.cpp`).
 - **PC tick:** `nevr_map_session_pin::Tick` runs on the game thread every frame (`src/runtime/frame/tick.cpp`).
@@ -198,7 +223,7 @@ All records carry the tag `[NEVR.MAPS]`. The full table, with each event's field
 | Line | Meaning |
 | --- | --- |
 | `map_start reason=not_configured` | No `maps.base_url`: the channel does not run. |
-| `map_start reason=ok` | The channel runs; `mounted`, `deferred` and `local` count its maps. |
+| `map_start reason=ok` | The channel runs; `on_demand` says whether the boot mounts none (a client), and `mounted`, `deferred` and `local` count its maps. |
 | `map hold off reason=no_group` | A dedicated server's session names no group to fetch: the session starts on the stock maps. |
 | `map_start reason=bad_key` / `reason=mixed_keys` | The configuration is refused; nothing is mounted. |
 | `map_skipped reason=local_map` | A CDN map is skipped because a local copy wins. The local name is in `local_name`. |

@@ -1660,6 +1660,114 @@ TEST_F(OnDemandTest, AMountGrantsOnlyTheAskedMapsAndTheFlagIsOffByDefault) {
   EXPECT_FALSE(mounter.Called("set map:alpha"));
 }
 
+// The one rule both platforms take (ADR 0048 decision 16, amended): a client mounts a map when a session asks for it, a dedicated server
+// mounts its cached groups at boot.
+TEST_F(OnDemandTest, AClientMountsOnDemandAndAServerMountsAtBoot) {
+  EXPECT_TRUE(MountOnDemandFor(/*is_server=*/false));
+  EXPECT_FALSE(MountOnDemandFor(/*is_server=*/true));
+  // A client whose cache root another game process holds runs no worker, and every mount after the boot is the worker's: it keeps the old
+  // rule for that run (mounts its cached maps at boot). A server mounts at boot either way.
+  EXPECT_FALSE(MountOnDemandFor(/*is_server=*/false, /*root_busy=*/true));
+  EXPECT_FALSE(MountOnDemandFor(/*is_server=*/true, /*root_busy=*/true));
+}
+
+// The channel's boot, for each side of the rule: a client's boot mounts no cached map (each one is listed, not_asked), and a later mount
+// grants only the map a session named; a server's boot mounts every cached map, as before.
+TEST_F(OnDemandTest, AClientsBootMountsNoCachedMapAndASessionsMountGrantsTheMapItNamed) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+  channel.Sign(1);
+  ASSERT_EQ(Fetch().outcome, FetchOutcome::kFetched);  // both cached
+  nevr_map_channel::Settings settings;
+  settings.base_url = kBase;
+  settings.keys = {key.pin};
+  config.mount_on_demand = MountOnDemandFor(/*is_server=*/false);
+  nevr_map_channel::Channel client(config, settings);
+  const nevr_map_channel::BootResult& boot = client.Boot(env, fs, mounter, nullptr, kNow, {});
+  EXPECT_EQ(boot.reason, "ok");
+  EXPECT_TRUE(boot.report.mounted.empty());
+  EXPECT_FALSE(mounter.Called("set map:alpha"));
+  EXPECT_FALSE(mounter.Called("set map:beta"));
+  EXPECT_EQ(TokenOf(boot.report, "alpha"), kNotAskedToken);
+  EXPECT_EQ(TokenOf(boot.report, "beta"), kNotAskedToken);
+  EXPECT_EQ(boot.report.listed.size(), 2u);  // the session pin still knows both maps: it asks for the one a session names
+  const FetchReport request = FetchOnDemand({"beta"});
+  EXPECT_EQ(request.outcome, FetchOutcome::kCached);  // the check of the manifest; nothing new to store
+  const MountReport mounted = client.MountGroups({kGroup}, kNow, {"beta"});
+  EXPECT_EQ(mounted.mounted, (std::vector<std::string>{"beta"}));
+  EXPECT_TRUE(mounter.Called("set map:beta"));
+  EXPECT_FALSE(mounter.Called("set map:alpha"));
+}
+
+// A client whose root is busy boots with the flag the rule gives it, and its boot mounts every cached map (the old rule): no worker will
+// ever serve a request for it.
+TEST_F(OnDemandTest, AClientWhoseRootIsBusyMountsItsCachedMapsAtBoot) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Sign(1);
+  ASSERT_EQ(Fetch().outcome, FetchOutcome::kFetched);
+  nevr_map_channel::Settings settings;
+  settings.base_url = kBase;
+  settings.keys = {key.pin};
+  config.mount_on_demand = MountOnDemandFor(/*is_server=*/false, /*root_busy=*/true);
+  nevr_map_channel::Channel busy(config, settings);
+  EXPECT_EQ(busy.Boot(env, fs, mounter, nullptr, kNow, {}).report.mounted, (std::vector<std::string>{"alpha"}));
+}
+
+TEST_F(OnDemandTest, AServersBootMountsEveryCachedMap) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Sign(1);
+  ASSERT_EQ(Fetch().outcome, FetchOutcome::kFetched);
+  nevr_map_channel::Settings settings;
+  settings.base_url = kBase;
+  settings.keys = {key.pin};
+  config.mount_on_demand = MountOnDemandFor(/*is_server=*/true);
+  nevr_map_channel::Channel server(config, settings);
+  EXPECT_EQ(server.Boot(env, fs, mounter, nullptr, kNow, {}).report.mounted, (std::vector<std::string>{"alpha"}));
+}
+
+// An on-demand boot defers nothing (it skips every map no session asked for before its stamp check), so a map whose file stamp moved
+// defers at the request's mount, and the next fetch must hash it again from the channel's current deferred set, not from the boot's list
+// (which is empty): the rehash settles the stamp and the next request mount grants the map.
+TEST_F(OnDemandTest, AMapDeferredByARequestsMountIsRehashedByTheNextFetchAndThenMounts) {
+  channel.Publish("alpha", "1.0.0", MakeSet(3, 'a'));
+  channel.Sign(1);
+  ASSERT_EQ(Fetch().outcome, FetchOutcome::kFetched);
+  fs.Touch(channel.VersionDir("alpha") + "/package.json");  // the stamp moved: the mount defers rather than hashes
+  nevr_map_channel::Settings settings;
+  settings.base_url = kBase;
+  settings.keys = {key.pin};
+  config.mount_on_demand = MountOnDemandFor(/*is_server=*/false);
+  nevr_map_channel::Channel client(config, settings);
+  ASSERT_TRUE(client.Boot(env, fs, mounter, nullptr, kNow, {}).report.deferred.empty());
+  const MountReport deferred = client.MountGroups({kGroup}, kNow, {"alpha"});
+  EXPECT_EQ(TokenOf(deferred, "alpha"), "package_stamp");
+  EXPECT_EQ(deferred.deferred, (std::vector<std::string>{"alpha"}));
+  EXPECT_EQ(env.FindRecord("map_rehash", "result", "refreshed"), nullptr);
+  ASSERT_EQ(client.FetchPass(env, fs, nullptr, {kGroup}, kNow, keep_going).size(), 1u);
+  EXPECT_NE(env.FindRecord("map_rehash", "result", "refreshed"), nullptr);  // from the channel's set; the boot's list is empty
+  EXPECT_TRUE(client.TakeDeferred().empty());                                // taken once, hashed once
+  EXPECT_EQ(client.MountGroups({kGroup}, kNow, {"alpha"}).mounted, (std::vector<std::string>{"alpha"}));
+}
+
+// A cached copy no verified manifest lists is refused stale whether or not a session asked for it: the on-demand boot does not hide it
+// behind not_asked, so the Warning still says an old version never plays and the pin's decision is the download notice.
+TEST_F(OnDemandTest, AStaleCopyIsReportedStaleAtAnOnDemandBoot) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Sign(1);
+  ASSERT_EQ(FetchOnDemand({"alpha"}).outcome, FetchOutcome::kFetched);
+  channel.Publish("alpha", "1.1.0", MakeSet(4, 'b'));
+  channel.Sign(2);
+  const std::string v2_index = std::string(kBase) + "blobs/sha256/" + channel.IndexSha("alpha");
+  env.server.erase(v2_index);  // the manifest arrives, the new version cannot be had: the cache holds 1.0.0, the manifest lists 1.1.0
+  ASSERT_EQ(FetchOnDemand({"alpha"}).outcome, FetchOutcome::kFailed);
+  config.mount_on_demand = true;
+  CacheMount mount(env, fs, config, mounter, nullptr);
+  const std::vector<std::string> none;
+  const MountReport boot = mount.Mount({kGroup}, kNow, &none);
+  EXPECT_EQ(TokenOf(boot, "alpha"), kStaleToken);
+  EXPECT_NE(env.FindRecord("map_mounted", "refused", "stale"), nullptr);
+}
+
 // ---- The request entry (core/map_request.h): a session's group and the map it lacks, queued for the worker.
 
 TEST_F(OnDemandTest, ASessionSuccessDownloadsNoMapOfItsGroup) {

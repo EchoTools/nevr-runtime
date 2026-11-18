@@ -19,6 +19,8 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "cdn/cdn_env.h"
 #include "core/map_fetch_queue.h"
@@ -53,6 +55,19 @@ class MapRequests {
   bool WaitForRequest(std::uint32_t timeout_ms) { return queue_.WaitForRequest(timeout_ms); }
 
   void SetWake(Wake wake);
+  // Called after a mount-only request is queued, on the thread that queued it: the edge wakes its worker's light job (FetchWorker::RequestLight),
+  // which is not held by the gap, because a mount of a map already stored fetches nothing (ADR 0048 decision 16).
+  void SetWakeLight(Wake wake);
+
+  // The worker. The maps whose requests named a map the cache holds at the listed version (nevr_map_session_pin::CachedMapAwaitsMount),
+  // by group: they are mounted at once, with no fetch (ServeMountOnly). Each is returned once.
+  using MountOnly = std::vector<std::pair<std::string, std::vector<std::string>>>;
+  MountOnly TakeMountOnly();
+
+  // The worker. A map the mount-only path found deferred (a moved file stamp, a changed stock file) is asked for again as a fetching
+  // request: its fetch hashes the deferred maps first (Channel::TakeDeferred), and its mount then grants the map. Under the gap, like any
+  // fetching request.
+  bool RetryAfterRehash(const std::string& group, const std::string& id, std::string* reason) { return Queue(group, id, reason); }
 
   // Any thread. Later requests are refused, and every waiting one is answered failed/cancelled now.
   void Stop();
@@ -63,6 +78,7 @@ class MapRequests {
 
  private:
   bool Queue(const std::string& group, const std::string& id, std::string* reason);
+  bool QueueMountOnly(const std::string& group, const std::string& id, std::string* reason);
   void Refused(const std::string& group, const std::string& id, const std::string& reason);
   void WakeWorker();
 
@@ -72,7 +88,8 @@ class MapRequests {
   mutable std::mutex mutex_;  // guards session_group_, ids_ and wake_
   std::string session_group_;
   std::map<std::string, std::set<std::string>> ids_;  // group -> the ids asked for since its last run began
-  Wake wake_;
+  Wake wake_, wake_light_;
+  std::map<std::string, std::set<std::string>> mount_only_;  // group -> the ids to mount with no fetch
 };
 
 // Installs one process's request entry on the two seams a session uses: the session success's group request

@@ -56,7 +56,6 @@ struct State {
   PosixMapFs fs;
   std::unique_ptr<nevr_map_channel::Channel> channel;
   std::unique_ptr<QuestMounter> mounter;  // the boot's cache mount keeps a reference to it, so it lives as long as the state
-  std::vector<std::string> deferred;      // the boot's deferred maps: a request's fetch hashes them again, as the pass does
   std::unique_ptr<nevr_maps::MapRequests> requests;  // the sessions' requests (core/map_request.h); the seams call into it for the process
   std::unique_ptr<nevr_map_channel::FetchWorker> worker;  // one pass, then parked until a request (core/map_channel.h)
   std::atomic<nevr_map_channel::FetchWorker*> worker_ptr{nullptr};  // set before the worker starts, so a request from then on wakes it
@@ -74,6 +73,7 @@ nevr_maps::ChannelConfig MakeChannelConfig(const std::string& cache_dir) {
   nevr_maps::ChannelConfig c;
   c.dir = cache_dir;
   c.platform = nevr_maps::kPlatformQuest;
+  c.mount_on_demand = nevr_maps::MountOnDemandFor(/*is_server=*/false);  // the Quest has no dedicated server
   return c;
 }
 
@@ -106,12 +106,17 @@ bool MountWhenManifestReady(std::uint64_t (*records)(), bool (*has)(std::uint64_
                             void (*publish)(const nevr_shadow::Shadow*), std::uint32_t wait_ms,
                             const std::function<bool()>& keep_going) {
   std::uint32_t waited = 0;
+  // KNOWN-WRONG #TBD: a manifest that is not ready within wait_ms abandons the run's map registration for good. Every map now mounts
+  // through it (ADR 0048 decision 16, on demand), so each later request's set is refused too_late, the pin tells the player "did not
+  // load" with that token, and nothing retries: the wait runs once per process (State::manifest_waited). Only a restart recovers.
   while (records() == 0) {
     if (waited >= wait_ms || !keep_going()) {
       sentinel::LogFields(sentinel::LogLevel::kWarn, "maps_mount",
                           {{"result", "abandoned"},
                            {"waited_ms", waited},
-                           {"consequence", "no downloaded map is served this run"}});
+                           {"consequence",
+                            "no downloaded map is served this run: later requests are refused too_late and are not retried, restart the "
+                            "game to mount a map"}});
       map_sets::Abandon();
       return false;
     }
@@ -144,6 +149,15 @@ nevr_maps::MountReport MountGranted(State* state, const std::vector<std::string>
   return mounted;
 }
 
+// The edge's mount of a group's asked ids and its listing for the pin: the served requests' mount (ServeSessionRequests) and the light
+// job's (ServeMountOnly) are the same.
+nevr_map_channel::GroupMount GroupMountOf(State* state) {
+  return [state](const std::string& group, const std::vector<std::string>& asked) { return MountGranted(state, {group}, asked); };
+}
+nevr_map_channel::GroupListing GroupListingOf(State* state) {
+  return [state](const std::string& group) { return state->channel->ListGroups({group}, NowUtc()); };
+}
+
 bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_maps::Deriver* deriver) noexcept {
   if (env == nullptr || g_started.exchange(true)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "maps_start",
@@ -163,7 +177,6 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
     return false;  // the core logged why (not_configured or the refusal); nothing was granted, no thread starts
   }
   for (const std::string& id : boot.report.mounted) g_granted_owners().push_back(std::string(nevr_resource_sets::kMapOwnerPrefix) + id);
-  state->deferred = boot.report.deferred;
   // A session success asks for its group, and the session pin for a map of it the Quest lacks: both land in the request entry, which
   // the worker serves below (core/map_request.h, the PC's InstallClientRequests). The pin reads the boot's view until a pass lists more.
   state->requests = std::make_unique<nevr_maps::MapRequests>(*env);
@@ -188,28 +201,30 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
     }
     const nevr_map_channel::GroupFetch fetch = [state, deriver, &keep_going](const std::string& group,
                                                                              const nevr_maps::FetchScope& scope) {
-      return nevr_maps::FetchGroup(*state->env, state->fs, state->channel->config(), group, state->deferred, deriver, NowUtc(),
+      return nevr_maps::FetchGroup(*state->env, state->fs, state->channel->config(), group, state->channel->TakeDeferred(), deriver, NowUtc(),
                                    keep_going, nullptr, scope);
     };
     // A map a request fetched mounts in this run (the core decides it, ServeSessionRequests), through the same MountGranted as the
     // post-pass block below.
-    const nevr_map_channel::GroupMount mount = [state](const std::string& group, const std::vector<std::string>& asked) {
-      return MountGranted(state, {group}, asked);
-    };
-    const nevr_map_channel::GroupListing list = [state](const std::string& group) {
-      return state->channel->ListGroups({group}, NowUtc());
-    };
-    nevr_map_channel::ServeSessionRequests(*state->requests, fetch, list, &nevr_map_session_pin::SetChannelView, keep_going, mount);
+    nevr_map_channel::ServeSessionRequests(*state->requests, fetch, GroupListingOf(state), &nevr_map_session_pin::SetChannelView, keep_going,
+                                           GroupMountOf(state));
     const nevr_map_channel::Seams seams = nevr_map_channel::RecordedGroupSeams(*state->env, state->channel->config().dir);
     const std::vector<std::string> groups = nevr_map_channel::FetchGroups(Ask(seams.recorded_groups));
     const std::vector<nevr_maps::FetchReport> reports = state->channel->FetchPass(*state->env, state->fs, deriver, groups, NowUtc(), keep_going);
     // What the pass stored mounts in this run (ADR 0048 decision 16), on this thread: the cache mount grants each map's set, the
     // registry mounts it beside the earlier ones and the resolver is given the one new shadow.
-    const std::vector<std::string> stored = nevr_map_channel::StoredGroupsToMount(reports);
+    const std::vector<std::string> stored = nevr_map_channel::StoredGroupsToMount(reports, state->channel->config().mount_on_demand);
     if (stored.empty()) return;
     MountGranted(state, stored, {});
   };
   state->worker = std::make_unique<nevr_map_channel::FetchWorker>(std::move(pass), [state] { return state->env->NowMs(); });
+  // A request for a map stored at the listed version is a mount with no fetch: the light job runs it at once, whatever the gap says.
+  state->worker->SetLight([state] {
+    nevr_map_channel::ServeMountOnly(*state->requests, GroupMountOf(state), GroupListingOf(state), &nevr_map_session_pin::SetChannelView);
+  });
+  state->requests->SetWakeLight([state] {
+    if (nevr_map_channel::FetchWorker* const worker = state->worker_ptr.load()) worker->RequestLight();
+  });
   // The wake is set before the worker starts: a request queued from here on is taken by the first pass, or its wake reaches a started worker.
   state->requests->SetWake([state] {
     if (nevr_map_channel::FetchWorker* const worker = state->worker_ptr.load()) worker->Request();  // a refused one still gets a pass when the gap ends

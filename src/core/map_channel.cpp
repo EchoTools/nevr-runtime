@@ -309,14 +309,19 @@ const BootResult& Channel::Boot(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_m
   config_.local_maps = LocalShadowIds(local_ids);
   // The cache index's groups, latest first: the mount reads them, and hashes nothing it has stamped (decision 4, ADR 0045 decision 7).
   mount_ = std::make_unique<nevr_maps::CacheMount>(env, fs, config_, mounter, deriver);
-  result_.report = mount_->Mount(nevr_maps::CachedGroupIds(env, config_.dir), now_utc);
+  // Under the on-demand rule (MountOnDemandFor) no map is asked for yet: the boot lists every cached map and grants none, and a session's
+  // request mounts the map it names. Without it the boot mounts every cached map its groups list.
+  const std::vector<std::string> none;
+  result_.report = mount_->Mount(nevr_maps::CachedGroupIds(env, config_.dir), now_utc, MountScope(config_, none));
   {
     std::lock_guard<std::mutex> lock(run_mutex_);
     run_ = result_.report;
+    deferred_ = result_.report.deferred;  // the first fetch hashes them (TakeDeferred)
   }
   result_.reason = "ok";
   env.Event(nevr_cdn::EventLevel::kInfo, "map_start",
             {{"reason", "ok"},
+             {"on_demand", config_.mount_on_demand ? "true" : "false"},
              {"mounted", result_.report.mounted.size()},
              {"deferred", result_.report.deferred.size()},
              {"local", config_.local_maps.size()}});
@@ -337,12 +342,25 @@ nevr_maps::MountReport Channel::ListGroups(const std::vector<std::string>& group
 }
 
 void FoldListing(nevr_maps::MountReport* run, const nevr_maps::MountReport& listing) {
+  // A listing grants nothing, so it can only say not_asked about a map: it never judges one. A row that says why the run did not mount a
+  // map (a refusal, stale, stock_changed) stays against the listing's not_asked, because not_asked is the token a session's request
+  // acts on and a map that failed to mount is not asked for again. A map the run only lacked (not_cached) takes the listing's token.
+  std::set<std::string> judged;
+  for (const auto& row : run->not_mounted) {
+    if (row.second != nevr_maps::kNotAskedToken && row.second != nevr_maps::kNotCachedToken) judged.insert(row.first);
+  }
+  std::set<std::string> kept;  // the ids whose run row stays
+  for (const auto& row : listing.not_mounted) {
+    if (row.second == nevr_maps::kNotAskedToken && judged.count(row.first) != 0) kept.insert(row.first);
+  }
   std::set<std::string> listed_ids, named;  // the ids the listing lists, and every id it names (listed or not)
   for (const auto& row : listing.listed) {
     listed_ids.insert(row.second);
-    named.insert(row.second);
+    if (kept.count(row.second) == 0) named.insert(row.second);
   }
-  for (const auto& row : listing.not_mounted) named.insert(row.first);
+  for (const auto& row : listing.not_mounted) {
+    if (kept.count(row.first) == 0) named.insert(row.first);
+  }
   std::set<std::string> mounted(run->mounted.begin(), run->mounted.end());
   run->listed.erase(std::remove_if(run->listed.begin(), run->listed.end(),
                                    [&listed_ids](const auto& row) { return listed_ids.count(row.second) != 0; }),
@@ -352,7 +370,7 @@ void FoldListing(nevr_maps::MountReport* run, const nevr_maps::MountReport& list
                          run->not_mounted.end());
   run->listed.insert(run->listed.end(), listing.listed.begin(), listing.listed.end());
   for (const auto& row : listing.not_mounted) {
-    if (mounted.count(row.first) == 0) run->not_mounted.push_back(row);
+    if (mounted.count(row.first) == 0 && kept.count(row.first) == 0) run->not_mounted.push_back(row);
   }
 }
 
@@ -366,10 +384,16 @@ std::vector<nevr_maps::FetchReport> Channel::FetchPass(nevr_cdn::Env& env, nevr_
   nevr_maps::FetchScope scope;
   scope.on_demand = true;
   scope.in_use = MountedIds();  // the maps this run mounted are never evicted (FetchScope::in_use)
+  std::vector<std::string> deferred;  // taken with the first fetch that runs, so a pass that fetches nothing keeps them
+  bool taken = false;
   for (const std::string& group : groups) {
     if (!keep_going()) break;
+    if (!taken) {
+      deferred = TakeDeferred();
+      taken = true;
+    }
     reports.push_back(
-        nevr_maps::FetchGroup(env, fs, config_, group, result_.report.deferred, deriver, now_utc, keep_going, nullptr, scope));
+        nevr_maps::FetchGroup(env, fs, config_, group, deferred, deriver, now_utc, keep_going, nullptr, scope));
   }
   return reports;
 }
@@ -380,7 +404,19 @@ nevr_maps::MountReport Channel::MountGroups(const std::vector<std::string>& grou
   nevr_maps::MountReport mounted = mount_->Mount(groups, now_utc, MountScope(config_, asked));
   std::lock_guard<std::mutex> lock(run_mutex_);
   MergeMountReport(run_, mounted);
+  // A map this mount deferred is hashed again by the next fetch (under the on-demand rule the boot defers nothing, so this is the only
+  // way a moved stamp or a changed stock file is ever rehashed).
+  for (const std::string& id : mounted.deferred) {
+    if (std::find(deferred_.begin(), deferred_.end(), id) == deferred_.end()) deferred_.push_back(id);
+  }
   return mounted;
+}
+
+std::vector<std::string> Channel::TakeDeferred() {
+  std::lock_guard<std::mutex> lock(run_mutex_);
+  std::vector<std::string> taken;
+  taken.swap(deferred_);
+  return taken;
 }
 
 nevr_maps::MountReport Channel::RunReport() const {
@@ -413,7 +449,12 @@ void FetchWorker::Run() {
     pass_([this] { return keep_going_.load(); });
     passes_.fetch_add(1);
     lock.lock();
-    WaitForPass(lock);
+    // A light request runs its job and waits again: the gap and the pass count are not touched.
+    while (!stop_ && WaitForPass(lock) == Wait::kLight) {
+      lock.unlock();
+      if (light_) light_();
+      lock.lock();
+    }
   }
   finished_ = true;
   wake_.notify_all();
@@ -422,8 +463,9 @@ void FetchWorker::Run() {
 // Parks until a pass is due: a request was accepted, a refused request's gap has ended, or a stop. A refused request arms a timed
 // wait for the rest of the gap, on this thread, so the pass runs when the gap ends with no further request. The wait never spins:
 // it is armed only while the gap is still open, so its time is at least one millisecond.
-void FetchWorker::WaitForPass(std::unique_lock<std::mutex>& lock) {
-  while (!stop_ && !requested_) {
+FetchWorker::Wait FetchWorker::WaitForPass(std::unique_lock<std::mutex>& lock) {
+  bool full = false;
+  while (!stop_ && !requested_ && !light_requested_) {
     if (!pending_) {
       wake_.wait(lock);
       continue;
@@ -434,11 +476,27 @@ void FetchWorker::WaitForPass(std::unique_lock<std::mutex>& lock) {
       // The deferred pass is the extra pass that starts the next gap, and it runs every request refused before now.
       pending_ = false;
       last_extra_ms_ = now;
+      full = true;
       break;
     }
     wake_.wait_for(lock, std::chrono::milliseconds(gap_ms_ - elapsed));
   }
+  // A full pass is taken first when one is due; the light flag stays, so the light job runs after it (the edge's pass serves the light
+  // work first, so that run finds nothing left and does nothing).
+  if (!full && !requested_ && light_requested_ && !stop_) {
+    light_requested_ = false;
+    return Wait::kLight;
+  }
   requested_ = false;
+  return Wait::kFullPass;
+}
+
+bool FetchWorker::RequestLight() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!started_ || stop_) return false;
+  light_requested_ = true;
+  wake_.notify_all();
+  return true;
 }
 
 bool FetchWorker::Request() {

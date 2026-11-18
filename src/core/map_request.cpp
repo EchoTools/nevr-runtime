@@ -48,11 +48,50 @@ bool MapRequests::RequestMap(const std::string& id, std::string* reason) {
     *reason = "bad_id";
   } else if (group.empty()) {
     *reason = "no_session_group";
+  } else if (nevr_map_session_pin::CachedMapAwaitsMount(id)) {
+    return QueueMountOnly(group, id, reason);
   } else {
     return Queue(group, id, reason);
   }
   Refused(group, id, *reason);
   return false;
+}
+
+// A map the cache holds at the listed version needs its mount only: no fetch, so no gap (FetchWorker::RequestLight) and no download.
+// The group's own request (RequestGroup) still goes the gated way and checks the manifest for updates.
+bool MapRequests::QueueMountOnly(const std::string& group, const std::string& id, std::string* reason) {
+  if (stopped_.load()) {
+    *reason = "stopped";
+    Refused(group, id, *reason);
+    return false;
+  }
+  Wake wake;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    mount_only_[group].insert(id);
+    wake = wake_light_;
+  }
+  env_.Event(nevr_cdn::EventLevel::kInfo, "map_request",
+             {{"outcome", "cached"},
+              {"group", group},
+              {"id", id},
+              {"reason", "mount_only"},
+              {"consequence", "your copy is stored at the listed version: it mounts during this run, with no download"}});
+  if (wake) wake();
+  return true;
+}
+
+MapRequests::MountOnly MapRequests::TakeMountOnly() {
+  MountOnly taken;
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (auto& entry : mount_only_) taken.emplace_back(entry.first, std::vector<std::string>(entry.second.begin(), entry.second.end()));
+  mount_only_.clear();
+  return taken;
+}
+
+void MapRequests::SetWakeLight(Wake wake) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  wake_light_ = std::move(wake);
 }
 
 bool MapRequests::Queue(const std::string& group, const std::string& id, std::string* reason) {

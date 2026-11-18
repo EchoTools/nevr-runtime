@@ -114,6 +114,11 @@ void SetChannelView(ChannelView view);
 void SetMountedPins(std::vector<MapPin> pins);
 std::vector<MapPin> MountedPins();  // any thread; a copy taken under the same mutex
 
+// True when the view lists `id` and the run holds it stored at the listed version without having mounted it (the not_asked token of an
+// on-demand boot): a request for it needs no fetch, only its mount (core/map_request.h). Not a map the cache lacks, a stale copy or a
+// refused one. Any thread.
+bool CachedMapAwaitsMount(const std::string& id);
+
 using FetchRequestFn = void (*)(const std::string& id);
 void SetFetchRequest(FetchRequestFn fn);  // default none: no request is made
 
@@ -146,12 +151,15 @@ struct ClientDecision {
   // the map is not cached, stale, or not yet asked for, or held at no version at all. A copy held at another version stays mounted
   // (a mounted set is never replaced in this process), so no wait cures it.
   bool holdable = false;
+  // The map is on disk at the listed version and only needs its mount (not_asked): the notices say "Loading", not "Downloading".
+  bool cached = false;
 };
 
 // The decision table (ADR 0048 decision 9), over the view and the mounted and staged pins. `pin` is the owner JSON's
 // nevr_map_pin, 0 when absent:
 //   level 0, or a level no listed map has                      -> none
-//   pin 0                                                       -> unpinned (the server states no version)
+//   pin 0                                                       -> unpinned (the server states no version; never a leave). A map this client
+//                                                                  lists and holds on disk (not_asked) is requested and held for, like a pinned one
 //   a mounted or staged pin of the same map equals `pin`        -> none
 //   a local copy of the map (PC only)                           -> local (stays; no leave, no fetch)
 //   the map has a not-mounted token                             -> leave (reason not_mounted); fetch only for stock_changed

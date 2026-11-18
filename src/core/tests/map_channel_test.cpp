@@ -278,7 +278,23 @@ void ABootOverAnEmptyCacheReachesNoNetworkAndHashesNothing() {
   if (record != nullptr) {
     QCHECK(record->level == nevr_cdn::EventLevel::kInfo);
     QCHECK(record->Get("reason") == "ok");
+    QCHECK(record->Get("on_demand") == "false");  // the platform's config did not ask for the on-demand rule
   }
+}
+
+// The start record states the mount rule the run follows (logging.md Rule 11): a client's boot lists the cached maps and mounts none.
+void TheStartRecordSaysWhetherTheBootMountsOnDemand() {
+  FakeEnv env;
+  FakeMapFs fs(env);
+  CountingMounter mounter;
+  const mc::Settings s = mc::ReadSettings(Scalars(ConfiguredValues()), Items({}), mc::CompiledOfficialKeys());
+  nevr_maps::ChannelConfig config = PlatformConfig();
+  config.mount_on_demand = nevr_maps::MountOnDemandFor(/*is_server=*/false);
+  mc::Channel channel(config, s);
+  channel.Boot(env, fs, mounter, nullptr, kNow, {});
+  const cdn_test::Record* record = FirstEvent(env, "map_start");
+  QCHECK(record != nullptr);
+  if (record != nullptr) QCHECK(record->Get("on_demand") == "true");
 }
 
 // A second Boot answers the first: the same result, no record, no call.
@@ -504,6 +520,24 @@ void FoldListingReplacesTheListedIdsAndKeepsTheRestOfTheRun() {
   QCHECK(!a_listed);  // a mounted map is never listed as not mounted
 }
 
+// A listing grants nothing, so it can only say not_asked: it never judges a map. A refusal the run already holds for a map stays, so a
+// map that failed to mount is not asked for again by the session pin (not_asked is the token that asks); a map the run only lacked
+// (not_cached) is replaced by what the listing found.
+void FoldListingKeepsARefusalTheListingCannotJudge() {
+  nevr_maps::MountReport run;
+  run.listed = {{1, "a"}, {2, "b"}, {3, "c"}};
+  run.not_mounted = {{"a", "bad_script"}, {"b", "not_cached"}, {"c", "stale"}};
+  nevr_maps::MountReport listing;
+  listing.listed = {{1, "a"}, {2, "b"}, {3, "c"}};
+  listing.not_mounted = {{"a", "not_asked"}, {"b", "not_asked"}, {"c", "not_asked"}};
+  mc::FoldListing(&run, listing);
+  std::map<std::string, std::string> tokens(run.not_mounted.begin(), run.not_mounted.end());
+  QCHECK(run.not_mounted.size() == 3);
+  QCHECK(tokens["a"] == "bad_script");  // kept: the mount refused it
+  QCHECK(tokens["b"] == "not_asked");   // the cache holds it now
+  QCHECK(tokens["c"] == "stale");       // kept
+}
+
 // ---- The mount observer's decision (both platforms call it) ------------------------------------------------------------------
 
 // An expected owner no mounted set belongs to is withdrawn; a mounted owner is kept and not withdrawn.
@@ -549,6 +583,26 @@ void AWorkerRefusesARequestInsideTheGap() {
   // At most the initial pass and the two accepted requests run: the thread may stop before its first pass starts (Stop follows
   // Start at once), so the count is bounded above, not below.
   QCHECK(passes.load() <= 3);
+}
+
+// A light request (a mount of a map already stored, no fetch) is not held by the gap and does not start one: it runs the light job on the
+// worker at once, the full pass count stays, and a full request inside the gap is still refused.
+void ALightRequestRunsInsideTheGapAndLeavesTheGapAlone() {
+  std::uint64_t now = 0;
+  std::atomic<int> passes{0};
+  std::atomic<int> lights{0};
+  mc::FetchWorker worker([&passes](const std::function<bool()>&) { passes.fetch_add(1); }, [&now] { return now; });
+  worker.SetLight([&lights] { lights.fetch_add(1); });
+  QCHECK(!worker.RequestLight());  // not started
+  worker.Start();
+  QCHECK(worker.Request());   // a full pass: the gap starts
+  QCHECK(!worker.Request());  // inside the gap
+  QCHECK(worker.RequestLight());  // inside the gap: accepted
+  for (int i = 0; i < 2000 && lights.load() == 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  QCHECK(lights.load() >= 1);
+  QCHECK(!worker.Request());  // the light request did not move or reset the gap
+  QCHECK(worker.Stop(std::chrono::milliseconds(5000)));
+  QCHECK(passes.load() <= 2);  // the initial pass and the one accepted request; the light request ran no full pass
 }
 
 // ---- The session pin's group requests and the recorded groups (ADR 0048 decisions 15 and 16) -------------------------------------------
@@ -615,11 +669,13 @@ int main() {
   WithoutBaseUrlTheChannelMakesNoCallAndWritesOneInfoRecord();
   ARefusedConfigurationMountsNothing();
   ABootOverAnEmptyCacheReachesNoNetworkAndHashesNothing();
+  TheStartRecordSaysWhetherTheBootMountsOnDemand();
   ASecondBootIsIdempotent();
   TheFetchRunsOnlyOnTheWorkerAfterBoot();
   MountGroupsIsEmptyUntilBootAndMountsNothingUncached();
   ListGroupsGrantsNothingAndListsNothingWithoutACache();
   FoldListingReplacesTheListedIdsAndKeepsTheRestOfTheRun();
+  FoldListingKeepsARefusalTheListingCannotJudge();
   ALaterMountSettlesTheMapsItGrantedInTheRunReport();
   ALaterMountKeepsOneTokenPerMapAndSettlesTheKept();
   ALaterMountsRefusalsAreAddedToTheRunReport();
@@ -631,6 +687,7 @@ int main() {
   AKeptMapIsTheCurrentVersion();
   AWorkerNeverStartedHasNoThread();
   AWorkerRefusesARequestInsideTheGap();
+  ALightRequestRunsInsideTheGapAndLeavesTheGapAlone();
   TheMountDecisionWithdrawsTheUnmountedAndKeepsTheRest();
   TheGroupRequestsAreQueuedLatestFirstOnceAndBounded();
   TheRecordedGroupsAreTheRequestsThenTheCachedOnes();

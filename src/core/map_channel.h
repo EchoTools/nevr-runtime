@@ -164,6 +164,12 @@ class Channel {
   nevr_maps::MountReport MountGroups(const std::vector<std::string>& groups, const std::string& now_utc,
                                      const std::vector<std::string>& asked = std::vector<std::string>());
 
+  // The maps whose mount deferred (a moved file stamp, a changed stock file) and that no fetch has hashed again yet: the boot's, then
+  // each MountGroups'. Taking them empties the set: the caller hands them to the fetch that hashes them (FetchGroup's `deferred`), which
+  // does so first. FetchPass takes them itself; an edge's own FetchGroup call takes them here, so a map a request's mount deferred is
+  // hashed by the next fetch. Any thread.
+  std::vector<std::string> TakeDeferred();
+
   // Every mount of the run folded into one report (the boot's, then each MountGroups): the session pin's view is taken from it.
   // Any thread; a copy taken under the channel's lock.
   nevr_maps::MountReport RunReport() const;
@@ -182,6 +188,7 @@ class Channel {
   mutable std::mutex run_mutex_;  // guards run_: the worker folds a mount in while the game's thread reads it
   // The boot's report, then each later mount folded in (MergeMountReport), and every ListGroups listing folded in (FoldListing).
   nevr_maps::MountReport run_;
+  std::vector<std::string> deferred_;  // guarded by run_mutex_: see TakeDeferred
 };
 
 // Folds one listing (ListGroups) into the run's report: every id the listing names replaces its earlier listed and not_mounted rows,
@@ -204,6 +211,14 @@ class FetchWorker {
   FetchWorker(const FetchWorker&) = delete;
   FetchWorker& operator=(const FetchWorker&) = delete;
 
+  // The light job (set before Start): work that needs no fetch, such as the mount of a map already stored at the listed version. A
+  // RequestLight runs it on the worker's thread at once, at any time, whatever the gap says; it is not an extra pass and starts no gap.
+  using Light = std::function<void()>;
+  void SetLight(Light light) { light_ = std::move(light); }
+  // False when the worker is stopping or not started. A request the worker has not run yet is not lost: the next full pass runs the
+  // light job's work too (the edge's pass serves it first).
+  bool RequestLight();
+
   void Start();
   // False when the last extra pass started under the gap ago, or the worker is stopping or not started. A refused request is not
   // dropped: the worker runs one pass for it when the gap ends, with no further request.
@@ -216,9 +231,12 @@ class FetchWorker {
 
  private:
   void Run();
-  void WaitForPass(std::unique_lock<std::mutex>& lock);
+  enum class Wait { kFullPass, kLight };
+  Wait WaitForPass(std::unique_lock<std::mutex>& lock);
 
   Pass pass_;
+  Light light_;
+  bool light_requested_ = false;
   Clock now_ms_;
   std::uint64_t gap_ms_;
   mutable std::mutex mutex_;

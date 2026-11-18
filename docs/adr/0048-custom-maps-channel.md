@@ -78,7 +78,7 @@ session they are in is the lobby group id.
    registration report is not called yet (KNOWN-WRONG #TBD, see What is built). A client whose version differs from the session's
    pin leaves before loading.
    Two cases do not leave, and the decision table (`map_session_pin.h`) keeps both:
-   - **`kUnpinned`.** A session whose owner JSON states no pin (`nevr_map_pin` 0) is logged as `map_unpinned` and the client stays.
+   - **`kUnpinned`.** A session whose owner JSON states no pin (`nevr_map_pin` 0) is logged as `map_unpinned` and the client stays (a map it lists and holds on disk is still asked for and held for, decision 16).
      The client has no version to compare, and a server that states none has nothing to match; leaving would split the players of
      every server that does not write a pin. What would change it: every server writing a pin, which needs the registration report
      (KNOWN-WRONG #TBD, decision 9 above).
@@ -114,7 +114,27 @@ session they are in is the lobby group id.
     fetch runs in the background and the maps mount in the same run (ADR 0045 decision 7 had them mount at the next launch; the
     later mount changes that for the maps a session fetched: the registry builds one new shadow of every mounted set, the
     resolver is given it in place of the earlier one, and the player is told to join the session again when the map is ready).
-    A map is never withdrawn once mounted. Until #2356, the groups a client
+    A map is never withdrawn once mounted.
+    **Amendment (KFC-PORT K7): no map mounts at boot.** A client's boot lists the cached maps and mounts none; a map mounts when a
+    session asks for it. A request that needs a fetch mounts after it and after the check of its group's manifest (a newer version is
+    stored first and a copy no manifest lists is never mounted). A request for a map already stored at the listed version
+    (the pin's view says `not_asked`) mounts that stored version with no fetch and no manifest check of its own; the group's request
+    that checks the manifest is held by the gap between extra passes (ten minutes), so inside the gap a map can mount at a version the
+    channel has since replaced and keeps it until the next start (`mounted_other_version`). Before, the boot mounted every cached map of the groups the cache index named, so a map mounted from a manifest
+    the channel had since replaced could not be swapped in the run. This changes what an existing install does at start: the same
+    maps play, but each loads when a session names it (a join to a cached map leaves with "Loading <id>; join again when it is
+    ready", or waits through the join hold, decision 17's client twin), where a map was available at once. The rule is code, not
+    config (`nevr_maps::MountOnDemandFor`). "At once" for that request means as soon as the one worker thread is idle, with no wait for
+    the gap between extra passes (it shares the thread with a pass in a download); only a request that needs a fetch waits for the gap.
+    **A client whose cache root another game process holds** (the player's own dedicated server on the same PC, a second client) runs no fetch worker, and every mount after the boot is the worker's, so it takes the old rule for that run: `MountOnDemandFor(is_server, root_busy)` is false and its boot mounts every cached map. Chosen over serving mounts without the worker because the boot mount is what such a client did before and reads files only; no mount is attempted under the other process's fetch, and nothing is fetched for that run. The PC edge takes the root lock at boot, before the rule is decided.
+    **A session that states no pin** (`kUnpinned`) never makes the client leave for a version mismatch (the hold below can still leave on its timeout or a failed load), but nothing mounts at boot any more: a session whose
+    level is a map this client lists and holds on disk (`not_asked`) asks for that map's mount in the same way, and the load waits for
+    it (the join hold), so the cached map plays as it did when the boot mounted it. A map not cached, or refused, is a stay with no
+    request, as before. **A cached map whose mount defers** (a moved file stamp, a changed stock file) is deferred at the request's
+    mount, because the on-demand boot defers nothing; the channel keeps the deferred set (`Channel::TakeDeferred`), the mount-only
+    request is asked for again as a fetching request (`MapRequests::RetryAfterRehash`), its fetch hashes the map first (the one place
+    a stored file is hashed) and its mount then grants it, so the player joins again when the map is ready. A dedicated server keeps the boot mount of its cached groups and mounts the group it
+    fetches for its session (decision 17). Until #2356, the groups a client
     fetches are the ones it last played in, kept in the cache index, latest first, as many as the device's storage share holds
     (ADR 0045 decision 8). What would change it: #2356, where the service names each client's manifest.
 17. **A server takes its group from its session and holds joins for it.** A dedicated server learns its group from the session

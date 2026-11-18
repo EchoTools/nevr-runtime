@@ -97,10 +97,18 @@ struct ChannelConfig {
   bool signed_only = false;          // -require-signed-plugins: a map's scripts count only under an official key (ADR 0048 decision 7)
   std::string channel;               // maps.channel; empty = the channel base_url was bound to at its first fetch
   std::uint32_t boot_budget_ms = 0;  // maps.boot_budget_ms: how long one mount may take; 0 = no limit
-  // A mount grants only the maps a session asked for (CacheMount::Mount's `only`), not every cached map at boot. Off by default:
-  // no platform sets it in this tree, and no config key does (ADR 0048 decision 16: no key chooses which maps a player has).
+  // A mount grants only the maps a session asked for (CacheMount::Mount's `only`), not every cached map at boot: the boot mounts none.
+  // Off in the struct's default, so a test or a tool that builds a config mounts as it always did; a platform sets it from
+  // MountOnDemandFor. No config key sets it (ADR 0048 decision 16: no key chooses which maps a player has).
   bool mount_on_demand = false;
 };
+
+// The one rule for both platforms (ADR 0048 decision 16): a client mounts no map at boot and mounts a map when a session asks for it,
+// after the check of its manifest; a dedicated server mounts its cached groups at boot and the group it fetches for its session. Each
+// platform's edge sets ChannelConfig::mount_on_demand from this and decides nothing else about it. Every mount after the boot is the
+// fetch worker's, so a client whose cache root is held by another game process (`root_busy`: no worker runs) keeps the old rule for
+// that run and mounts its cached maps at boot, which reads files and fetches nothing.
+constexpr bool MountOnDemandFor(bool is_server, bool root_busy = false) { return !is_server && !root_busy; }
 
 // Where a group's manifest is on the channel, and where the cache keeps the copy it verified.
 std::string GroupManifestUrl(const std::string& base_url, const std::string& group);
@@ -119,8 +127,11 @@ inline constexpr const char* kStaleToken = "stale";
 // The skip token of a map an earlier mount of this process holds at another version: a mounted map is never replaced in the
 // process, so a session that names the newer version is told to restart.
 inline constexpr const char* kMountedOtherVersionToken = "mounted_other_version";
-// The skip token of a cached, current map that no session asked for, under ChannelConfig::mount_on_demand.
+// The skip token of a cached, current map that no session asked for, under ChannelConfig::mount_on_demand: every cached map of a
+// client's boot. The session pin asks for such a map when a session names it (DecideClient).
 inline constexpr const char* kNotAskedToken = "not_asked";
+// The skip token of a map the cache does not hold (a request downloads it).
+inline constexpr const char* kNotCachedToken = "not_cached";
 
 struct MountedMap {
   std::string id, version, index_sha256, platform, source_sha256, title, group;

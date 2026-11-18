@@ -192,6 +192,24 @@ TEST_F(MapSessionPin, AnAbsentPinIsUnpinned) {
   EXPECT_FALSE(decision.request_fetch);
 }
 
+// A server that states no pin never makes the client leave, but nothing mounts a cached map at boot: a session on a level this client lists and
+// holds on disk (not_asked) asks for the map's mount, and the load waits for it like a pinned one (ADR 0048 decision 16). A map that is
+// not cached, or is refused, is a stay with no request: there is nothing a mount could cure.
+TEST_F(MapSessionPin, AnUnpinnedSessionOnACachedMapRequestsItsMountAndNeverLeaves) {
+  sp::ChannelView view;
+  view.listed = {{Level("arena_c"), "arena_c"}, {Level("arena_d"), "arena_d"}, {Level("arena_e"), "arena_e"}};
+  view.not_mounted = {{"arena_c", nevr_maps::kNotAskedToken}, {"arena_d", nevr_maps::kNotCachedToken}, {"arena_e", "bad_script"}};
+  sp::SetChannelView(view);
+  const sp::ClientDecision cached = sp::DecideClient(Level("arena_c"), 0);
+  EXPECT_EQ(cached.action, sp::ClientAction::kUnpinned);
+  EXPECT_TRUE(cached.request_fetch);
+  EXPECT_TRUE(cached.holdable);
+  EXPECT_TRUE(cached.cached);
+  EXPECT_EQ(cached.notice_line, "Loading arena_c; join again when it is ready.");
+  EXPECT_FALSE(sp::DecideClient(Level("arena_d"), 0).request_fetch);
+  EXPECT_FALSE(sp::DecideClient(Level("arena_e"), 0).request_fetch);
+}
+
 TEST_F(MapSessionPin, TheMountedOrStagedPinMatches) {
   ClientWithArena2();
   EXPECT_EQ(sp::DecideClient(Level("arena2"), sp::PinValue(Pin("arena2", "1.0", kSourceA))).action, sp::ClientAction::kNone);
@@ -863,6 +881,34 @@ TEST_F(MapSessionPin, AListedMapNotCachedLeavesWithADownloadNoticeAndRequestsIt)
   EXPECT_EQ(decision.notice_line, "Downloading arena_c; join again when it is ready.");
 }
 
+// A cached, current map no session asked for yet (the on-demand boot lists every cached map and mounts none): the session asks for it, and the
+// notice says it loads, since nothing is downloaded (ADR 0048 decision 16).
+TEST_F(MapSessionPin, ACachedMapNoSessionAskedForYetLeavesAndRequestsItsMount) {
+  sp::ChannelView view;
+  view.listed = {{Level("arena_c"), "arena_c"}};
+  view.not_mounted = {{"arena_c", nevr_maps::kNotAskedToken}};
+  sp::SetChannelView(view);
+  const sp::ClientDecision decision = sp::DecideClient(Level("arena_c"), sp::PinValue(Pin("arena_c", "1.0", kSourceA)));
+  EXPECT_EQ(decision.action, sp::ClientAction::kLeave);
+  EXPECT_EQ(decision.reason, "not_mounted");
+  EXPECT_TRUE(decision.request_fetch);
+  EXPECT_TRUE(decision.holdable);
+  EXPECT_EQ(decision.notice_line, "Loading arena_c; join again when it is ready.");
+}
+
+// Only a map stored at the listed version and not yet mounted awaits its mount: the request for it needs no fetch (core/map_request.h).
+TEST_F(MapSessionPin, OnlyACachedCurrentMapAwaitsItsMount) {
+  sp::ChannelView view;
+  view.listed = {{Level("a"), "a"}, {Level("b"), "b"}, {Level("c"), "c"}, {Level("d"), "d"}};
+  view.not_mounted = {{"a", nevr_maps::kNotAskedToken}, {"b", nevr_maps::kNotCachedToken}, {"c", nevr_maps::kStaleToken}, {"d", "bad_script"}};
+  sp::SetChannelView(view);
+  EXPECT_TRUE(sp::CachedMapAwaitsMount("a"));
+  EXPECT_FALSE(sp::CachedMapAwaitsMount("b"));  // not on disk: a download
+  EXPECT_FALSE(sp::CachedMapAwaitsMount("c"));  // on disk at a version no manifest lists: a download
+  EXPECT_FALSE(sp::CachedMapAwaitsMount("d"));  // refused: a fetch cannot cure it
+  EXPECT_FALSE(sp::CachedMapAwaitsMount("unlisted"));
+}
+
 TEST_F(MapSessionPin, AStaleCopyLeavesAndRequestsTheListedVersion) {
   sp::ChannelView view;
   view.listed = {{Level("arena_c"), "arena_c"}};
@@ -1080,15 +1126,68 @@ TEST_F(MapJoinHold, AnotherSessionDropsTheHoldWithoutALeave) {
   EXPECT_EQ(game.replays, 0);  // dropped: the late mount replays nothing
 }
 
-TEST_F(MapJoinHold, AStaleCopyIsHeldLikeAMapTheCacheLacksAndANotAskedOneIsNot) {
+TEST_F(MapJoinHold, AStaleCopyAndACachedMapNoSessionAskedForAreHeldLikeAMapTheCacheLacks) {
   // A copy the channel no longer lists is fetched anew, so the join waits for it (ADR 0048 decision 16).
   ArenaCSession(nevr_maps::kStaleToken);
   EXPECT_TRUE(sp::HoldLoadBegin(game));
-  // A cached map no session asked for (the on-demand mode no platform sets) leaves with its own notice, as before the hold.
+  // A cached map no session asked for (every cached map of an on-demand boot) is mounted for this join, so the join waits for the mount.
   sp::ResetForTest();
   g_fetches.clear();
   ArenaCSession(nevr_maps::kNotAskedToken);
-  EXPECT_FALSE(sp::HoldLoadBegin(game));
+  EXPECT_TRUE(sp::HoldLoadBegin(game));
+  EXPECT_EQ(g_fetches.size(), 1u);  // and the one request that mounts it goes out
+  // Nothing downloads for it, so the hold's notice says it loads.
+  const std::string armed = game.events.back().notice;
+  EXPECT_EQ(armed, "Loading arena_c; the join continues when it is ready.");
+}
+
+// An unpinned session on a cached map is held for the mount and replayed once it mounts, as a pinned one is; a platform that cannot hold the
+// load still asks for the mount from the tick, and the client is never sent out of the session.
+TEST_F(MapJoinHold, AnUnpinnedSessionOnACachedMapIsHeldForItsMountAndReplayed) {
+  ArenaCSession(nevr_maps::kNotAskedToken);
+  game.owner[sp::kOwnerPinKey] = 0;
+  EXPECT_TRUE(sp::HoldLoadBegin(game));
+  EXPECT_EQ(g_fetches, std::vector<std::string>{"arena_c"});
+  sp::TickWith(game);
+  EXPECT_EQ(game.replays, 0);  // still waiting for the mount, not released by the unpinned decision
+  EXPECT_EQ(game.schedule_calls, 0);
+  Mounted();
+  sp::TickWith(game);
+  EXPECT_EQ(game.replays, 1);
+  EXPECT_EQ(game.schedule_calls, 0);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldReleased), 1u);
+
+  sp::ResetForTest();
+  g_fetches.clear();
+  FakeGame noHold;
+  ArenaCSession(nevr_maps::kNotAskedToken);
+  noHold.can_hold = false;
+  noHold.owner[sp::kOwnerLevelKey] = Level("arena_c");
+  noHold.owner[sp::kOwnerPinKey] = 0;
+  EXPECT_FALSE(sp::HoldLoadBegin(noHold));
+  sp::TickWith(noHold);
+  EXPECT_EQ(g_fetches, std::vector<std::string>{"arena_c"});
+  EXPECT_EQ(noHold.schedule_calls, 0);
+}
+
+// A hold for a map that is on disk and only needs its mount says so when it ends in a leave: nothing was downloading.
+TEST_F(MapJoinHold, ATimeoutOrAFailureOnACachedMapSaysLoadingNotDownloading) {
+  ArenaCSession(nevr_maps::kNotAskedToken);
+  ASSERT_TRUE(sp::HoldLoadBegin(game));
+  game.now += nevr_maps::kMapHoldCeilingMs;
+  sp::TickWith(game);
+  ASSERT_EQ(game.notices.size(), 1u);
+  EXPECT_EQ(game.notices[0].second, "Loading arena_c took too long; join again later.");
+
+  sp::ResetForTest();
+  g_fetches.clear();
+  game.notices.clear();
+  ArenaCSession(nevr_maps::kNotAskedToken);
+  ASSERT_TRUE(sp::HoldLoadBegin(game));
+  sp::NoteFetchFailed("arena_c", "the manifest check failed");
+  sp::TickWith(game);
+  ASSERT_EQ(game.notices.size(), 1u);
+  EXPECT_EQ(game.notices[0].second, "Map arena_c could not be loaded. See the nevr log.");
 }
 
 TEST_F(MapJoinHold, WhatNoMountCanCureIsNotHeld) {

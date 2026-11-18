@@ -1,5 +1,6 @@
 // The session request pass the Quest runs (core/map_request_serve.h, K6, K1b): a queued group is fetched on demand, then listed for the
 // session pin, and a requested map is fetched with the one id asked for. Driven over the shared fake Env: no network, no mount.
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,42 @@ nevr_maps::FetchReport Fetched(Trace* trace, const std::string& group, const nev
   nevr_maps::FetchReport report;
   report.outcome = nevr_maps::FetchOutcome::kFetched;
   return report;
+}
+
+// A mount-only request whose mount defers the map (its file stamp moved: nothing hashes it at an on-demand boot) is asked for again as a
+// fetching request, so the next fetch hashes it (Channel::TakeDeferred) and its mount then grants the map. A mount that deferred
+// nothing asks for nothing more.
+void AMountOnlyRequestThatDefersIsAskedForAgainAsAFetch() {
+  cdn_test::FakeEnv env;
+  nevr_map_session_pin::ResetForTest();
+  nevr_map_session_pin::ChannelView view;
+  view.listed = {{nevr_map_session_pin::SessionLevelOf(kMap), kMap}};
+  view.not_mounted = {{kMap, nevr_maps::kNotAskedToken}};
+  nevr_map_session_pin::SetChannelView(view);
+  nevr_maps::MapRequests requests(env);
+  std::string reason;
+  QCHECK(requests.RequestGroup(kGroup, &reason));
+  QCHECK(requests.RequestMap(kMap, &reason));
+  Trace trace;
+  nevr_map_channel::ServeSessionRequests(
+      requests, [&trace](const std::string& group, const nevr_maps::FetchScope& scope) { return Fetched(&trace, group, scope); },
+      [](const std::string&) { return nevr_maps::MountReport{}; }, [](nevr_map_session_pin::ChannelView) {}, kAlways,
+      [](const std::string&, const std::vector<std::string>& asked) {
+        nevr_maps::MountReport report;
+        report.deferred = asked;  // the mount deferred every map it was asked for
+        return report;
+      });
+  // The pass served the mount-only request first (deferred), then the retry and the group request: the fetch that hashes it ran.
+  QCHECK(std::find(trace.events.begin(), trace.events.end(), std::string("fetch:") + kGroup + ":" + kMap) != trace.events.end());
+  // A mount that deferred nothing asks for nothing more.
+  nevr_map_session_pin::SetChannelView(view);
+  QCHECK(requests.RequestMap(kMap, &reason));
+  Trace quiet;
+  nevr_map_channel::ServeSessionRequests(
+      requests, [&quiet](const std::string& group, const nevr_maps::FetchScope& scope) { return Fetched(&quiet, group, scope); },
+      [](const std::string&) { return nevr_maps::MountReport{}; }, [](nevr_map_session_pin::ChannelView) {}, kAlways, kNoMount);
+  QCHECK(std::none_of(quiet.events.begin(), quiet.events.end(), [](const std::string& e) { return e.rfind("fetch:", 0) == 0; }));
+  nevr_map_session_pin::ResetForTest();
 }
 
 // A group request is fetched on demand (no id) and listed once after its fetch; nothing is fetched before the request.
@@ -154,14 +191,75 @@ void APassMountsOnlyTheGroupsItStored() {
   later.group = kStoredLater;
   later.outcome = nevr_maps::FetchOutcome::kFetched;
   later.maps_updated = 1;
-  const std::vector<std::string> mount = nevr_map_channel::StoredGroupsToMount({stored, cached, failed, later});
+  const std::vector<std::string> mount = nevr_map_channel::StoredGroupsToMount({stored, cached, failed, later}, /*mount_on_demand=*/false);
   QCHECK((mount == std::vector<std::string>{std::string(kStored), std::string(kStoredLater)}));
-  QCHECK(nevr_map_channel::StoredGroupsToMount({}).empty());
+  QCHECK(nevr_map_channel::StoredGroupsToMount({}, /*mount_on_demand=*/false).empty());
+  // Under the on-demand rule a pass that stored a map mounts none: a map mounts when a session asks for it (the request's own mount).
+  QCHECK(nevr_map_channel::StoredGroupsToMount({stored, later}, /*mount_on_demand=*/true).empty());
+}
+
+// A request for a map the cache holds at the listed version (the pin's view says not_asked) names no fetch: the mount is queued apart from the
+// group's fetch, and the pass mounts it first, with its one id, then lists the group for the pin. A map the cache lacks still fetches.
+void ARequestForACachedCurrentMapIsAMountWithNoFetch() {
+  cdn_test::FakeEnv env;
+  nevr_map_session_pin::ResetForTest();
+  nevr_map_session_pin::ChannelView view;
+  view.listed = {{nevr_map_session_pin::SessionLevelOf(kMap), kMap}};
+  view.not_mounted = {{kMap, nevr_maps::kNotAskedToken}};
+  nevr_map_session_pin::SetChannelView(view);
+  nevr_maps::MapRequests requests(env);
+  std::string reason;
+  QCHECK(requests.RequestGroup(kGroup, &reason));
+  QCHECK(requests.RequestMap(kMap, &reason));
+  QCHECK(env.FindRecord("map_request", "reason", "mount_only") != nullptr);
+  std::vector<std::string> events;
+  nevr_map_channel::ServeMountOnly(
+      requests, [&events](const std::string& group, const std::vector<std::string>& asked) { events.push_back("mount:" + group + ":" + asked[0]); return nevr_maps::MountReport{}; },
+      [&events](const std::string& group) { events.push_back("list:" + group); return nevr_maps::MountReport{}; },
+      [](nevr_map_session_pin::ChannelView) {});
+  QCHECK((events == std::vector<std::string>{std::string("mount:") + kGroup + ":" + kMap, std::string("list:") + kGroup}));
+  events.clear();
+  nevr_map_channel::ServeMountOnly(
+      requests, [&events](const std::string&, const std::vector<std::string>&) { events.push_back("mount"); return nevr_maps::MountReport{}; },
+      [&events](const std::string&) { events.push_back("list"); return nevr_maps::MountReport{}; }, [](nevr_map_session_pin::ChannelView) {});
+  QCHECK(events.empty());  // taken once
+  // The group's own request carried no id: its fetch asks for none.
+  Trace trace;
+  nevr_map_channel::ServeSessionRequests(
+      requests, [&trace](const std::string& group, const nevr_maps::FetchScope& scope) { return Fetched(&trace, group, scope); },
+      [](const std::string&) { return nevr_maps::MountReport{}; }, [](nevr_map_session_pin::ChannelView) {}, kAlways, kNoMount);
+  QCHECK((trace.events == std::vector<std::string>{std::string("fetch:") + kGroup}));
+  // The pass serves a queued mount first too, so a mount the light job has not taken yet is not left behind it.
+  nevr_map_session_pin::SetChannelView(view);
+  QCHECK(requests.RequestMap(kMap, &reason));
+  std::vector<std::string> passMounts;
+  nevr_map_channel::ServeSessionRequests(
+      requests, [&trace](const std::string& group, const nevr_maps::FetchScope& scope) { return Fetched(&trace, group, scope); },
+      [](const std::string&) { return nevr_maps::MountReport{}; }, [](nevr_map_session_pin::ChannelView) {}, kAlways,
+      [&passMounts](const std::string& group, const std::vector<std::string>& asked) {
+        passMounts.push_back(group + ":" + asked[0]);
+        return nevr_maps::MountReport{};
+      });
+  QCHECK((passMounts == std::vector<std::string>{std::string(kGroup) + ":" + kMap}));
+  // A map the cache lacks is still a fetch under the gap.
+  nevr_map_session_pin::ChannelView lacking;
+  lacking.listed = {{nevr_map_session_pin::SessionLevelOf(kMap), kMap}};
+  lacking.not_mounted = {{kMap, nevr_maps::kNotCachedToken}};
+  nevr_map_session_pin::SetChannelView(lacking);
+  QCHECK(requests.RequestMap(kMap, &reason));
+  trace.events.clear();
+  nevr_map_channel::ServeSessionRequests(
+      requests, [&trace](const std::string& group, const nevr_maps::FetchScope& scope) { return Fetched(&trace, group, scope); },
+      [](const std::string&) { return nevr_maps::MountReport{}; }, [](nevr_map_session_pin::ChannelView) {}, kAlways, kNoMount);
+  QCHECK((trace.events == std::vector<std::string>{std::string("fetch:") + kGroup + ":" + kMap}));
+  nevr_map_session_pin::ResetForTest();
 }
 
 }  // namespace
 
 int main() {
+  ARequestForACachedCurrentMapIsAMountWithNoFetch();
+  AMountOnlyRequestThatDefersIsAskedForAgainAsAFetch();
   AServedRequestMountsItsGroupEvenWhenItStoredNothingNew();
   AFailedRequestFetchMountsNothing();
   AGroupRequestIsFetchedOnDemandThenListed();
