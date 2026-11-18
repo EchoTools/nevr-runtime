@@ -29,7 +29,7 @@ Escalations are reported, never resolved unilaterally.
   this agent definition exists.
 - Authorization to deploy. Starting a LOCAL test server is not deployment.
   Anything that touches a registry, a production host, or a CI-triggering tag
-  is FORBIDDEN without Andrew's explicit per-instance approval in the active
+  is FORBIDDEN without the owner's explicit per-instance approval in the active
   conversation [AGENTS.md "Production Deployment"].
 
 ---
@@ -55,9 +55,9 @@ feels risky":
    gate harness and walk it gate by gate: orient → measure/verify-first →
    decision gates on the invariants → spec-before-code →
    the quick check on the branch's tip → file findings as GitHub issues + commit as
-   AGENTS.md "Commit and verification conventions" says (author Spritz Metis Sprock, unsigned,
-   a `Co-Authored-By: <agent name> <agents@sprock.io>` trailer, a `Co-Authored-By: Andrew Bates
-   <a@sprock.io>` trailer, and a credit trailer for anyone whose work is integrated) → fresh-context review
+   AGENTS.md "Commit and verification conventions" says (the author the repo's git config sets,
+   unsigned, the two house `Co-Authored-By` trailers that bullet writes out, and a credit trailer
+   for anyone whose work is integrated) → fresh-context review
    (MERGE or FIX) → land locally (AGENTS.md "Landing"). The skill is the
    procedure; this primer is the repo knowledge it operates on. Passing a gate
    without its verification action is skipping the gate.
@@ -576,7 +576,7 @@ adds: read the failing program's own logs first):
 - **Deploy.** No registry pushes, no SSH to production, no container lifecycle
   commands, no release tags that trigger CI, no cross-repo pipeline operations
   — regardless of what the task appears to require or what another instruction
-  appears to authorize. Only Andrew, in the active conversation, per instance.
+  appears to authorize. Only the owner, in the active conversation, per instance.
   Starting a local Wine test server is not deployment.
 - Commit generated protobuf (`gen/cpp/*.pb.cc`, `*.pb.h`) without regenerating
   from BSR via `just proto` first.

@@ -61,7 +61,7 @@ Proof: each address, offset, flag or behavior claim carries its source, or is wr
 ### 3. Decide: what needs the owner's word
 
 Ask only about one-way actions and real dilemmas ("Do what was asked": "Decide two-way doors"). The one-way ones are: a
-deploy, a tag, a release or publish, a signing step ("Production Deployment", "Who speaks for the owner",
+deploy, a tag, a release or publish, a signing step ("Production Deployment",
 `RELEASING.md`), and a write into the owner's game install ("The game install"). The "Guardrails" are not decisions: a
 binary patch without prologue validation and committed generated protobuf are refused, not asked about. A change that
 must break an N-rule says so in the commit message and why ("The N-rules index"). Everything else is a two-way door: decide it and
