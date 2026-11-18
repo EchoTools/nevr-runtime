@@ -35,4 +35,8 @@ void SetMatchViewSource(std::function<MatchView()> source);
 /// of its match. The cost is not measured.
 void Poll(std::uint64_t nowUs);
 
+/// Puts every piece of Poll's state back to its first-call value (the listener, the greeted peers, the limiters, the
+/// resolved authority lookup, the match source). A test calls it before each case; nothing in the runtime does.
+void ResetForTest();
+
 }  // namespace nevr_peer_message

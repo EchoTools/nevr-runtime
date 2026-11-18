@@ -281,6 +281,26 @@ void SetMatchViewSource(std::function<MatchView()> source) {
   g_source = std::move(source);
 }
 
+void ResetForTest() {
+  {
+    std::lock_guard<std::mutex> lock(g_sourceLock);
+    g_source = nullptr;
+  }
+  g_listenedBroadcaster = nullptr;
+  g_listenHandle = 0;
+  g_listenRetryAtUs = 0;
+  g_listenFailures = 0;
+  g_authorityChecked = false;
+  g_authorityPeer = nullptr;
+  g_lastPollUs = 0;
+  g_greet = GreetBook();
+  g_broadcasterCompared = false;
+  g_lastAuthority = kPeerInvalid;
+  g_refusals = RefusalLimiter();
+  g_accepts = AcceptLimiter();
+  g_pings = PingBook();
+}
+
 void Poll(std::uint64_t nowUs) {
   // At most every 250 ms: the reads below go through VirtualQuery, and nothing here needs a finer step.
   if (nowUs - g_lastPollUs < kPollUs) return;

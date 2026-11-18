@@ -2320,6 +2320,16 @@ if(BUILD_TESTING)
       nevr::plugin_sdk)
     gtest_discover_tests(test_peer_message_rules DISCOVERY_MODE PRE_TEST)
 
+    # peer_message_test.cpp (#2365): the PC half (compat/peer_message.cpp) against a fake game context, a fake broadcaster and a
+    # fake GetAuthorityPeer: when it listens, who it greets and answers, what it refuses and logs.
+    add_executable(test_peer_message tests/peer_message_test.cpp compat/peer_message.cpp)
+    set_source_files_properties(tests/peer_message_test.cpp compat/peer_message.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_peer_message PRIVATE -Werror)
+    target_include_directories(test_peer_message PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_peer_message PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json nevr_api nevr_core
+      nevr::plugin_sdk)
+    gtest_discover_tests(test_peer_message DISCOVERY_MODE PRE_TEST)
+
     # test_lobby_settings_hook.cpp (#2333): the LobbySettingsCB hook under MinHook against a fake game image.
     add_executable(test_lobby_settings_hook tests/test_lobby_settings_hook.cpp patch/lobby_settings_hook.cpp hook/hook_guard.cpp
       log/boot_log_tee.cpp)
