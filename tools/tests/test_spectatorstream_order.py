@@ -34,6 +34,12 @@ RECORD_RESULT = re.compile(r"FormatSpectatorStreamRecord\([^;]*,\s*result\s*\)\s
 SPECTATOR_BITS = re.compile(r"\b0x0*2[01]00000\b|<<\s*25\b", re.IGNORECASE)
 
 
+# The one form a file other than boot.cpp may name the game flags field in: the offset argument of a ReadAt<T>(base, ...).
+GAME_FLAGS_READ = re.compile(
+    r"\bReadAt<[^<>()]*>\(\s*[A-Za-z_]\w*\s*,\s*(?:nevr_patch_addresses::)?GAME_WINDOWED_FLAGS_OFFSET\s*\)"
+)
+
+
 def runtime_sources():
     """The shipped C++ sources under src/, comments stripped: no tests."""
     for path in sorted((ROOT / "src").rglob("*.cpp")):
@@ -95,9 +101,20 @@ class SpectatorStreamOrder(unittest.TestCase):
 
     def test_the_game_flags_field_is_written_only_from_boot_cpp(self):
         # game+0x7AE0 (GAME_WINDOWED_FLAGS_OFFSET) holds the spectator bits; boot.cpp never sets them
-        # (test_boot_never_sets_the_spectator_bits_itself), and no other shipped file addresses the field by name.
-        users = [path for path, code in runtime_sources() if "GAME_WINDOWED_FLAGS_OFFSET" in code]
-        self.assertEqual(users, ["src/runtime/lifecycle/boot.cpp"])
+        # (test_boot_never_sets_the_spectator_bits_itself). Another shipped file may name the field only to read it,
+        # as the offset of a ReadAt<...>(...) (dinput_enumerate.cpp reads the game's flags to choose its mode); any
+        # other use of the name outside boot.cpp is a second way to address, and so to write, the field.
+        named, users = [], []
+        for path, code in runtime_sources():
+            uses = len(re.findall(r"\bGAME_WINDOWED_FLAGS_OFFSET\b", code))
+            if uses:
+                named.append(path)
+            if not uses or path == "src/runtime/lifecycle/boot.cpp":
+                continue
+            if len(GAME_FLAGS_READ.findall(code)) != uses:
+                users.append(path)
+        self.assertIn("src/runtime/lifecycle/boot.cpp", named)
+        self.assertEqual(users, [])
 
     def test_only_the_routine_names_the_site_in_shipped_code(self):
         # Any other use of SPECTATORSTREAM_CHECK in a .cpp, in any spelling (ApplyPatch(SPECTATORSTREAM_CHECK, ...),
