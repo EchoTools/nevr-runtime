@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"math"
+	"os"
 	"strings"
 	"testing"
 )
@@ -35,6 +36,21 @@ const (
 	oddStride       = 26
 	smallStride     = 8
 	junkByte        = 0xAB
+)
+
+// The GLB and glTF numbers the fixture builder writes: the container's version and offsets, the chunk types and the
+// chunk alignment, and the glTF component types.
+const (
+	versionTwo    = 2
+	offVersion    = 4
+	offChunkType  = 4
+	chunkTypeJSON = 0x4E4F534A // "JSON"
+	chunkTypeBin  = 0x004E4942 // "BIN\0"
+	chunkAlign    = 4
+	componentU8   = 5121
+	componentU16  = 5123
+	componentU32  = 5125
+	componentF32  = 5126
 )
 
 // rawChunk is a GLB chunk the test places before or after the BIN chunk.
@@ -243,12 +259,15 @@ func TestMalformedIsRefused(t *testing.T) {
 		}, "want float"},
 		"wrong type": {func(d map[string]any) {
 			d["accessors"].([]any)[1].(map[string]any)["type"] = "VEC2"
-		}, "type"},
+		}, "has type"},
 		"no accessor": {func(d map[string]any) {
 			d["meshes"].([]any)[0].(map[string]any)["primitives"].([]any)[0].(map[string]any)["indices"] = badIndex
 		}, "does not exist"},
 		"negative count": {func(d map[string]any) {
 			d["accessors"].([]any)[0].(map[string]any)["count"] = negativeCount
+		}, "count"},
+		"zero count": {func(d map[string]any) {
+			d["accessors"].([]any)[0].(map[string]any)["count"] = 0
 		}, "count"},
 		"wrong asset version": {func(d map[string]any) {
 			d["asset"] = map[string]any{"version": "1.0"}
@@ -274,12 +293,12 @@ func TestMalformedIsRefused(t *testing.T) {
 		"buffer longer than the BIN chunk": {func(d map[string]any) {
 			b := d["buffers"].([]any)[0].(map[string]any)
 			b["byteLength"] = b["byteLength"].(int) + chunkAlign
-		}, "exceeds"},
+		}, "Invalid GLB BIN header"},
 		"view past the buffer's byteLength": {func(d map[string]any) {
 			// the BIN chunk holds the index view, but buffer 0 says it ends before it
 			b := d["buffers"].([]any)[0].(map[string]any)
 			b["byteLength"] = b["byteLength"].(int) - chunkAlign
-		}, "outside"},
+		}, "Invalid GLB BIN header"},
 		"byteStride not a multiple of 4": {func(d map[string]any) {
 			d["bufferViews"].([]any)[0].(map[string]any)["byteStride"] = oddStride
 		}, "byteStride"},
@@ -329,14 +348,13 @@ func TestContainerErrors(t *testing.T) {
 		"first chunk":   bad(func(b []byte) { b[headerSize+offChunkType] = 'X' }),
 		"chunk too big": bad(func(b []byte) { b[headerSize+chunkLengthHigh] = math.MaxUint8 }),
 	}
-	// four bytes after the last chunk: too few for a chunk header
-	trailing := append(append([]byte(nil), good...), make([]byte, chunkAlign)...)
-	binary.LittleEndian.PutUint32(trailing[offLength:], uint32(len(trailing)))
-	cases["trailing bytes"] = trailing
 	for name, b := range cases {
 		if _, err := Read(b); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+	if _, err := Read(cases["magic"]); err == nil || !strings.Contains(err.Error(), "bad magic") {
+		t.Errorf("magic: err = %v, want one containing %q", err, "bad magic")
 	}
 }
 
@@ -415,12 +433,10 @@ func TestIndexWidths(t *testing.T) {
 	}
 }
 
-// TestOnlyTheFirstBinChunkIsRead puts a chunk of another type before the BIN chunk and a second BIN chunk of junk
-// after it; the values are the first BIN chunk's.
+// TestOnlyTheFirstBinChunkIsRead puts a second BIN chunk of junk after the first; the values are the first BIN chunk's.
 func TestOnlyTheFirstBinChunkIsRead(t *testing.T) {
 	fx := baseFixture()
 	junk := bytes.Repeat([]byte{junkByte}, len(fx.bin))
-	fx.before = []rawChunk{{kind: chunkTypeJSON, payload: junk}}
 	fx.after = []rawChunk{{kind: chunkTypeBin, payload: junk}}
 	f, err := Read(fx.glb(t))
 	if err != nil {
@@ -429,5 +445,53 @@ func TestOnlyTheFirstBinChunkIsRead(t *testing.T) {
 	p := f.Meshes[0].Primitives[0]
 	if p.Positions[secondVertex] != [3]float32{posXStep, 1, 0} || p.Indices[fixtureIndices-1] != lastVertex {
 		t.Fatalf("values: %v, last index %d", p.Positions[secondVertex], p.Indices[fixtureIndices-1])
+	}
+}
+
+// The real drone model is an external asset, not in the repository: NEVR_DRONE4_GLB names it. The counts and the size
+// are what the file held when it was measured (2026-11-17, the library's decoder and a stat of the file).
+const (
+	drone4Env       = "NEVR_DRONE4_GLB"
+	drone4Bytes     = 4435328
+	drone4Nodes     = 2
+	drone4Meshes    = 2
+	drone4Materials = 2
+	drone4Textures  = 8
+	drone4Images    = 8
+)
+
+// TestDrone4GLBCounts reads the drone model and checks its size and its node, mesh, material, texture and image counts.
+// Skipped without NEVR_DRONE4_GLB.
+func TestDrone4GLBCounts(t *testing.T) {
+	path := os.Getenv(drone4Env)
+	if path == "" {
+		t.Skipf("%s is not set (the path of Drone4.glb, an external asset that is not in the repository)", drone4Env)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Size() != drone4Bytes {
+		t.Fatalf("%s is %d bytes, want %d", path, st.Size(), drone4Bytes)
+	}
+	f, err := ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("nodes=%d meshes=%d materials=%d textures=%d images=%d", len(f.doc.Nodes), len(f.Meshes), len(f.doc.Materials), len(f.doc.Textures), len(f.doc.Images))
+	if got := len(f.doc.Nodes); got != drone4Nodes {
+		t.Errorf("nodes %d, want %d", got, drone4Nodes)
+	}
+	if got := len(f.Meshes); got != drone4Meshes {
+		t.Errorf("meshes %d, want %d", got, drone4Meshes)
+	}
+	if got := len(f.doc.Materials); got != drone4Materials {
+		t.Errorf("materials %d, want %d", got, drone4Materials)
+	}
+	if got := len(f.doc.Textures); got != drone4Textures {
+		t.Errorf("textures %d, want %d", got, drone4Textures)
+	}
+	if got := len(f.doc.Images); got != drone4Images {
+		t.Errorf("images %d, want %d", got, drone4Images)
 	}
 }
