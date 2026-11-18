@@ -25,6 +25,7 @@
 #include "runtime/content/cdn_scripts_install.h"
 #include "runtime/ext/plugin_trust.h"
 #include "runtime/content/content_pack.h"
+#include "runtime/lifecycle/cdn_start_rules.h"
 #include "runtime/lifecycle/update_fs_win32.h"
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/lifecycle/update_worker.h"
@@ -79,13 +80,13 @@ void KeepServerSet(const nevr_cdn::Mounted* kept) {
 }
 
 void PublishServerSet(std::unique_ptr<nevr_cdn::Mounted> set) {
-  if (!set || !set->shadow) return;
+  if (!HoldsShadow(set.get())) return;
   KeepServerSet(set.release());
 }
 
 // nevr_cdn::StartServer's publisher: the boot set, which the core publishes only when it has a shadow.
 void PublishServerBootSet(const nevr_cdn::Mounted* set) {
-  if (set != nullptr && set->shadow != nullptr) KeepServerSet(set);
+  if (HoldsShadow(set)) KeepServerSet(set);
 }
 
 // The Env holds no state, so one object for the process lifetime (the fetch thread and the published sets outlive every caller) is all the
@@ -103,30 +104,18 @@ bool LastUpdateTrialThisStart(const std::string& root) {
   const std::string path = nevr_root::Join(nevr_root::Join(root, nevr_update_names::kUpdateDir), nevr_update_names::kPendingJson);
   std::string text;
   const nevr_update::ReadResult read = nevr_update::Win32UpdateFs().ReadSmallFile(path, &text);
-  if (read == nevr_update::ReadResult::kAbsent) return nevr_update::LastUpdateTrial(std::nullopt, std::string_view());
-  const char* cause = nullptr;
-  nlohmann::json doc;
-  nevr_update::Pending pending;
-  std::string runtime_sha256;
-  if (read == nevr_update::ReadResult::kUnreadable) {
-    cause = "unreadable";
-  } else if (read == nevr_update::ReadResult::kTooBig) {
-    cause = "too_big";
-  } else if (!nevr_update::ParseJsonText(text, &doc) || !nevr_update::ParsePending(doc, &pending)) {
-    cause = "unparsed";
-  } else {
+  const TrialDecision decision = DecideLastUpdateTrial(read, text, [](std::string* sha256) {
     std::string version;
     std::string error;
-    if (!nevr_update::ReadRunningRuntime(&version, &runtime_sha256, &error)) cause = "runtime_unhashed";
-  }
-  if (cause != nullptr) {
+    return nevr_update::ReadRunningRuntime(&version, sha256, &error);
+  });
+  if (decision.cause != nullptr) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.CDN] cdn_start role=client fetch=none reason=update_pending_unreadable cause=%s consequence=\"this start makes no boot fetch: "
         "the pending self-update is taken as its trial\"",
-        cause);
-    return true;
+        decision.cause);
   }
-  return nevr_update::LastUpdateTrial(std::string_view(text), runtime_sha256);
+  return decision.trial;
 }
 
 }  // namespace

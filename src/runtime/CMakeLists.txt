@@ -311,6 +311,7 @@ set(PATCHES_HEADERS
     "lifecycle/cli.h"
     "lifecycle/boot.h"
     "lifecycle/cdn_start.h"
+    "lifecycle/cdn_start_rules.h"
     "${CMAKE_SOURCE_DIR}/src/cdn/cdn_env.h"
     "${CMAKE_SOURCE_DIR}/src/cdn/cdn_service.h"
     "${CMAKE_SOURCE_DIR}/src/cdn/env_windows.h"
@@ -2319,6 +2320,18 @@ if(BUILD_TESTING)
     target_link_libraries(test_peer_message_rules PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json nevr_api
       nevr::plugin_sdk)
     gtest_discover_tests(test_peer_message_rules DISCOVERY_MODE PRE_TEST)
+
+    # cdn_start_rules_test.cpp (PLAN-v7 G9; header-only lifecycle/cdn_start_rules.h): the self-update trial the PC client's CDN start
+    # decides over pending.json, and which sets a server publishes. Compiles the engine's start unit and the names it reads.
+    add_executable(test_cdn_start_rules tests/cdn_start_rules_test.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/update/names.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/update/engine_start.cpp)
+    set_source_files_properties(tests/cdn_start_rules_test.cpp ${CMAKE_SOURCE_DIR}/src/core/update/names.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/update/engine_start.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_cdn_start_rules PRIVATE -Werror)
+    target_include_directories(test_cdn_start_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_cdn_start_rules PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_cdn_start_rules DISCOVERY_MODE PRE_TEST)
 
     # peer_message_test.cpp (#2365): the PC half (compat/peer_message.cpp) against a fake game context, a fake broadcaster and a
     # fake GetAuthorityPeer: when it listens, who it greets and answers, what it refuses and logs.
