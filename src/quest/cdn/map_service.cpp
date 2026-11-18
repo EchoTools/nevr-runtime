@@ -42,6 +42,8 @@ std::string JoinOwners(const std::vector<std::string>& owners) {
 
 void OnMount(const nevr_resource_sets::MountReport& report) {
   const MountOutcome outcome = ApplyMount(g_granted_owners(), report);
+  // The registry's mount completed: a join held for one of these maps replays its level load (a no-op until the Quest installs a hold).
+  nevr_map_session_pin::NoteMapsMounted(outcome.mounted);
   sentinel::LogFields(outcome.withdrawn.empty() ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "map_summary",
                       {{"stage", "mount"},
                        {"mounted", outcome.mounted.size()},

@@ -1854,6 +1854,64 @@ TEST(ServeSessionView, AServedGroupIsFetchedThenListedAndItsListingIsPublished) 
   EXPECT_EQ(published[0].listed[0].second, "arena_c");
 }
 
+namespace {
+
+// A client in a session on a map it lacks, with a level load the platform can hold (core/map_session_pin.h, the join hold).
+class HoldingGame : public nevr_map_session_pin::GameAccess {
+ public:
+  static constexpr std::uint64_t kLobby = 0x7000;
+  static constexpr std::uint64_t kPin = 0x1234;
+  std::vector<nevr_map_session_pin::PinEvent> events;
+  bool Callable() override { return true; }
+  bool IsServer() override { return false; }
+  std::uint64_t Lobby() override { return kLobby; }
+  std::int32_t NetState() override { return 5; }
+  std::uint64_t OwnerSymbol(std::uint64_t, const char* key) override {
+    return std::string(key) == nevr_map_session_pin::kOwnerLevelKey ? nevr_map_session_pin::SessionLevelOf("arena_c") : kPin;
+  }
+  void SetOwnerSymbol(std::uint64_t, const char*, std::uint64_t) override {}
+  std::uint64_t MainLevel() override { return 0; }
+  bool WriteNotice(const char*, const char*) override { return true; }
+  bool ScheduleLeave() override { return true; }
+  std::uint64_t NowMs() override { return 1; }
+  void Event(const nevr_map_session_pin::PinEvent& event) override { events.push_back(event); }
+  bool CanHoldLoad() override { return true; }
+};
+
+}  // namespace
+
+// A join held for a named map hears of a failed fetch of it from the worker's pass, and leaves at once with the fetch's reason.
+TEST(ServeSessionView, AFailedFetchOfTheNamedMapEndsTheHeldJoin) {
+  namespace sp = nevr_map_session_pin;
+  sp::ResetForTest();
+  sp::ChannelView view;
+  view.listed = {{sp::SessionLevelOf("arena_c"), "arena_c"}};
+  view.not_mounted = {{"arena_c", "not_cached"}};
+  sp::SetChannelView(view);
+  cdn_test::FakeEnv env;
+  MapRequests requests(env);
+  std::string reason;
+  ASSERT_TRUE(requests.RequestGroup(kServeGroup, &reason)) << reason;
+  ASSERT_TRUE(requests.RequestMap("arena_c", &reason)) << reason;
+  HoldingGame game;
+  ASSERT_TRUE(sp::HoldLoadBegin(game));
+  while (requests.RunNext([](const std::string& group, const FetchScope&) {
+    FetchReport failed;
+    failed.group = group;
+    failed.outcome = FetchOutcome::kFailed;
+    failed.reason = "http_failed";
+    return failed;
+  })) {
+  }
+  sp::TickWith(game);
+  const nevr_map_session_pin::PinEvent* skew = nullptr;
+  for (const auto& e : game.events)
+    if (e.kind == sp::PinEventKind::kSkew) skew = &e;
+  ASSERT_NE(skew, nullptr);
+  EXPECT_EQ(skew->reason, "fetch_failed");
+  sp::ResetForTest();
+}
+
 TEST(ServeSessionView, NothingWaitingPublishesNothing) {
   cdn_test::FakeEnv env;
   MapRequests requests(env);

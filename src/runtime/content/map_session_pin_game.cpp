@@ -6,18 +6,22 @@
 #include <winsock2.h>  // before windows.h (tools/tests/test_header_include_order.py)
 #include <windows.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <string>
 
+#include "abi/echovr_functions.h"
 #include "abi/game_level.h"
 #include "core/logging.h"
 #include "core/map_session_pin.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/content/map_session_pin_entry.h"
 #include "runtime/content/map_session_pin_game.h"
 #include "runtime/content/map_session_pin_notice.h"
 #include "runtime/hook/addresses.h"
+#include "runtime/hook/patching.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"  // g_pGame (the game context)
 #include "runtime/lifecycle/return_to_lobby.h"
@@ -104,6 +108,23 @@ void WriteEvent(const PinEvent& e) {
       Log(EchoVR::LogLevel::Info, "[NEVR.MAPS] session pin decision map=%s cargo=%s leave=%s level=%s", e.reason.c_str(),
           e.cargo_reason.c_str(), e.leave.c_str(), level.c_str());
       return;
+    case PinEventKind::kHoldArmed:
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.MAPS] join_hold state from=none to=held id=%s level=%s pin=%s timeout_ms=%llu notice=\"%s\" (the level load is skipped "
+          "and replayed when the map mounts)",
+          e.id.c_str(), level.c_str(), pin.c_str(), static_cast<unsigned long long>(e.timeout_ms), e.notice.c_str());
+      return;
+    case PinEventKind::kHoldReleased:
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.MAPS] join_hold state from=held to=released id=%s level=%s waited_ms=%llu (the skipped level load runs now)",
+          e.id.c_str(), level.c_str(), static_cast<unsigned long long>(e.waited_ms));
+      return;
+    case PinEventKind::kHoldDropped:
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.MAPS] join_hold state from=held to=dropped id=%s level=%s reason=%s waited_ms=%llu (the session changed; the "
+          "skipped level load is not run)",
+          e.id.c_str(), level.c_str(), e.reason.c_str(), static_cast<unsigned long long>(e.waited_ms));
+      return;
     case PinEventKind::kCargoSkew: {
       // The manifest's pin is written once this run has parsed one; until then the line says so (PLAN-v7 5.5 "The decision").
       const std::string manifest = e.manifest_known ? HexText(e.manifest) : std::string("unknown");
@@ -114,6 +135,15 @@ void WriteEvent(const PinEvent& e) {
     }
   }
 }
+
+// CR15NetGame::LoadMap(this): the game's level load of a join (addresses.h). The detour asks the pin's hold; a held join's call is
+// skipped here and run again by ReplayLoad. The prologue is checked before the detour goes in (Rule 6), and a build that differs
+// keeps no hold: the join leaves and joins again, as without it.
+using LoadMapFn = void(__fastcall*)(void* netGame);
+LoadMapFn g_originalLoadMap = nullptr;
+std::atomic<void*> g_heldNetGame{nullptr};
+std::atomic<bool> g_loadMapHookArmed{false};
+constexpr const char* kLoadMapName = "CR15NetGame::LoadMap";
 
 class WinGameAccess final : public GameAccess {
  public:
@@ -176,6 +206,16 @@ class WinGameAccess final : public GameAccess {
 
   void Event(const PinEvent& event) override { WriteEvent(event); }
 
+  bool CanHoldLoad() override { return g_loadMapHookArmed.load(std::memory_order_acquire); }
+
+  // The load the detour skipped, run now with the net game it was given. One replay per held load.
+  bool ReplayLoad() override {
+    void* const netGame = g_heldNetGame.exchange(nullptr, std::memory_order_acq_rel);
+    if (netGame == nullptr || g_originalLoadMap == nullptr) return false;
+    g_originalLoadMap(netGame);
+    return true;
+  }
+
  private:
   bool checked_ = false;
   bool callable_ = false;
@@ -188,7 +228,46 @@ WinGameAccess& Game() {
   return game;
 }
 
+void __fastcall LoadMapDetour(void* netGame) {
+  if (HoldLoadBegin(Game())) {
+    g_heldNetGame.store(netGame, std::memory_order_release);
+    return;
+  }
+  g_originalLoadMap(netGame);
+}
+
+void LogHoldOff(const char* reason, const void* address) {
+  Log(EchoVR::LogLevel::Warning,
+      "[NEVR.MAPS] join_hold status=off reason=%s name=%s va=0x%llX expected=%s actual=%s consequence=\"a join to a map this client "
+      "lacks leaves and joins again, as without the hold\"",
+      reason, kLoadMapName, static_cast<unsigned long long>(nevr::ECHOVR_DEFAULT_IMAGE_BASE + nevr_patch_addresses::CR15NETGAME_LOAD_MAP),
+      HexBytesText(nevr_patch_addresses::CR15NETGAME_LOAD_MAP_PROLOGUE, sizeof(nevr_patch_addresses::CR15NETGAME_LOAD_MAP_PROLOGUE))
+          .c_str(),
+      HexBytesText(static_cast<const std::uint8_t*>(address), sizeof(nevr_patch_addresses::CR15NETGAME_LOAD_MAP_PROLOGUE)).c_str());
+}
+
 }  // namespace
+
+void InstallLoadMapHold() {
+  std::uint8_t* const base = GameBase();
+  if (base == nullptr) return;  // the pin's own Callable() says so once
+  void* const address = base + nevr_patch_addresses::CR15NETGAME_LOAD_MAP;
+  if (!nevr::ValidatePrologue(address, nevr_patch_addresses::CR15NETGAME_LOAD_MAP_PROLOGUE,
+                              sizeof(nevr_patch_addresses::CR15NETGAME_LOAD_MAP_PROLOGUE))) {
+    LogHoldOff("prologue_mismatch", address);
+    return;
+  }
+  g_originalLoadMap = reinterpret_cast<LoadMapFn>(base + nevr_patch_addresses::CR15NETGAME_LOAD_MAP);
+  if (!PatchDetour(&g_originalLoadMap, reinterpret_cast<PVOID>(&LoadMapDetour), kLoadMapName)) {
+    g_originalLoadMap = nullptr;
+    LogHoldOff("detour_failed", address);
+    return;
+  }
+  g_loadMapHookArmed.store(true, std::memory_order_release);
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.MAPS] join_hold status=on name=%s (a join to a map this client lacks waits for the download and the mount, then loads)",
+      kLoadMapName);
+}
 
 std::uint64_t SessionLevel() { return SessionLevelWith(Game()); }
 

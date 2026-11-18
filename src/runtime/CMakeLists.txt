@@ -2702,6 +2702,8 @@ if(BUILD_TESTING)
       "${CMAKE_SOURCE_DIR}/src/core/resource_shadow.cpp"
       # ADR 0048 decision 9: ws_bridge.cpp and login_profile.cpp put the session map pin's entries into the login.
       "${CMAKE_SOURCE_DIR}/src/core/map_session_pin.cpp"
+      # The pin's client join hold bounds its wait with the ADR 0048 decision 17 timeout rule.
+      "${CMAKE_SOURCE_DIR}/src/core/map_server_hold.cpp"
       # docs/adr/0048 decision 5: a downloaded map's set registered from a held file, beside a plugin's set; the registry's re-hash
       # is the portable SHA-256.
       tests/resource_sets_test.cpp

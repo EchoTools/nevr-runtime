@@ -32,6 +32,7 @@
 #include "runtime/cargo/stock_source.h"
 #include "cdn/env_windows.h"
 #include "cdn/windows_map_fs.h"
+#include "runtime/content/map_session_pin_game.h"
 #include "runtime/content/script_provider.h"
 #include "runtime/ext/plugin_trust.h"
 #include "runtime/lifecycle/game_image_guard.h"
@@ -253,6 +254,8 @@ void OnMount(const nevr_resource_sets::MountReport&) {
       [](const std::string&, std::uint64_t alias) {
         return nevr_resource_sets::HoldsKey(nevr_config_alias::kAliasRecordTypeWin10, alias);
       });
+  // The registry's mount of these maps completed: a join held for one of them replays its level load (core/map_session_pin.h).
+  nevr_map_session_pin::NoteMapsMounted(decision.mounted);
   Log(decision.withdrawn.empty() ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
       "[NEVR.MAPS] map_summary stage=mount mounted=%zu withdrawn=%s armed=%zu", decision.mounted.size(),
       Join(decision.withdrawn).c_str(), decision.armed);
@@ -411,6 +414,8 @@ void BootUnguarded(std::uintptr_t game_base, bool is_server) {
     InstallClientRequests(st);  // and the request entry replaces that seam for a client (ADR 0048 decision 16)
     // The session pin reads this run's view from the boot: the maps it lists and the ones it could not mount (K1b, as the Quest does).
     nevr_map_channel::PublishBootView(boot.report, &nevr_map_session_pin::SetChannelView);
+    // A join to a map this client lacks waits for the download and the mount, then loads (KFC-PORT K4).
+    nevr_map_session_pin::InstallLoadMapHold();
   }
 
   st->deferred = boot.report.deferred;
@@ -424,8 +429,18 @@ void BootUnguarded(std::uintptr_t game_base, bool is_server) {
 // published as the session pin's view (core/map_request_serve.h, the same pass the Quest runs). Stops when keep_going turns false.
 void DrainRequests(State* st, const std::function<bool()>& keep_going) {
   const auto fetch = [st, &keep_going](const std::string& group, const nevr_maps::FetchScope& scope) {
+    // The join hold's timeout follows this fetch's measured rate (core/map_server_hold.h, the rule the server's hold uses).
+    const nevr_maps::FetchProgressFn progress = [](const nevr_maps::FetchProgress& p) {
+      nevr_maps::HoldPlan plan;
+      plan.planned = true;  // a progress note comes after the plan (FetchGroup), so the sizes are known
+      plan.set_bytes = p.set_bytes;
+      plan.bytes_to_fetch = p.bytes_to_fetch;
+      plan.bytes_fetched = p.bytes_fetched;
+      plan.elapsed_ms = p.elapsed_ms;
+      nevr_map_session_pin::NoteHoldProgress(plan);
+    };
     return nevr_maps::FetchGroup(*st->env, *st->fs, st->channel->config(), group, st->deferred, st->deriver.get(), NowUtc(), keep_going,
-                                 nullptr, scope);
+                                 progress, scope);
   };
   // The mount of a served group is decided by the core (ServeSessionRequests: a fetch that did not fail mounts, ADR 0048 decision 16);
   // this edge only grants the mount's maps and registers them on the game's thread (InstallGrantedMap).

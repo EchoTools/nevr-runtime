@@ -11,6 +11,11 @@ namespace nevr_map_session_pin {
 // Game thread only. Not wired to a caller yet: the channel's start (a later piece) installs it.
 std::uint64_t SessionLevel();
 
+// Installs the detour on CR15NetGame::LoadMap that gives the core's client join hold its level load to skip and replay
+// (core/map_session_pin.h HoldLoadBegin). Once, for a client whose channel runs, after the boot's mount. The prologue is checked first;
+// a mismatch or a failed detour logs its Warning (expected and actual bytes) and leaves the game as stock, with no hold.
+void InstallLoadMapHold();
+
 // One tick of the pin on the game thread. The per-frame dispatcher calls it (runtime/frame/tick.cpp, ADR 0048 decision 9).
 void Tick();
 

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "core/cargo_session_pin.h"
+#include "core/map_server_hold.h"
 #include "nevr/symbol_hash.h"
 
 namespace {
@@ -54,6 +55,9 @@ class FakeGame : public sp::GameAccess {
   std::uint64_t main_level = 0;
   bool schedule_ok = true;
   bool notice_ok = true;
+  bool can_hold = false;   // the platform can hold its level load (CanHoldLoad)
+  bool replay_ok = true;   // ReplayLoad's answer
+  int replays = 0;
   std::uint64_t now = 1000;
   int game_calls = 0;  // every call the tick makes into the game, except Callable
   int set_calls = 0;
@@ -100,6 +104,11 @@ class FakeGame : public sp::GameAccess {
   }
   std::uint64_t NowMs() override { return now; }
   void Event(const sp::PinEvent& event) override { events.push_back(event); }
+  bool CanHoldLoad() override { return can_hold; }
+  bool ReplayLoad() override {
+    ++replays;
+    return replay_ok;
+  }
 
   std::size_t Count(sp::PinEventKind kind) const {
     std::size_t n = 0;
@@ -863,4 +872,243 @@ TEST_F(MapSessionPin, AStaleCopyLeavesAndRequestsTheListedVersion) {
   EXPECT_EQ(decision.action, sp::ClientAction::kLeave);
   EXPECT_TRUE(decision.request_fetch);
   EXPECT_EQ(decision.notice_line, "Downloading arena_c; join again when it is ready.");
+}
+
+// The client's join hold (KFC-PORT K4): the game's level load (CR15NetGame::LoadMap) is skipped while the map the session pins is
+// fetched and mounted; the tick then replays the load, or leaves through the one leave (ClientLeaveOnce) with the notice.
+class MapJoinHold : public MapSessionPin {
+ protected:
+  // A client that can hold its load is in a session on arena_c 1.0, which its channel lists and its cache lacks.
+  void ArenaCSession(const std::string& token = "not_cached", std::int32_t state = 5) {
+    sp::ChannelView view;
+    view.listed = {{Level("arena_c"), "arena_c"}};
+    if (!token.empty()) view.not_mounted = {{"arena_c", token}};
+    sp::SetChannelView(view);
+    sp::SetFetchRequest(&RecordFetch);
+    game.can_hold = true;
+    game.state = state;  // 5: the direct path (an ingame session) reaches LoadMap before the game parks in state 6
+    game.owner[sp::kOwnerLevelKey] = Level("arena_c");
+    game.owner[sp::kOwnerPinKey] = kPin10;
+  }
+  // The worker mounted the map: the view names it, and the registry's mount completed.
+  static void Mounted() {
+    sp::ChannelView view;
+    view.listed = {{Level("arena_c"), "arena_c"}};
+    view.staged = {Pin("arena_c", "1.0", kSourceA)};
+    sp::SetChannelView(view);
+    sp::NoteMapsMounted({"arena_c"});
+  }
+  std::uint64_t HoldTimeout(const nevr_maps::HoldPlan& plan) const { return nevr_maps::MapHoldTimeoutMs(plan); }
+
+  const std::uint64_t kPin10 = sp::PinValue(Pin("arena_c", "1.0", kSourceA));
+  FakeGame game;
+};
+
+TEST_F(MapJoinHold, AMapTheCacheLacksSkipsTheLoadAsksForItAndTheMountReplaysTheSameLoad) {
+  ArenaCSession();
+  EXPECT_TRUE(sp::HoldLoadBegin(game));
+  ASSERT_EQ(game.Count(sp::PinEventKind::kHoldArmed), 1u);
+  EXPECT_EQ(g_fetches, std::vector<std::string>{"arena_c"});
+  EXPECT_EQ(game.schedule_calls, 0);
+  EXPECT_TRUE(game.notices.empty());
+  EXPECT_EQ(game.replays, 0);
+
+  // The game calls LoadMap again (Update, state 6): the hold stands, nothing is asked twice.
+  EXPECT_TRUE(sp::HoldLoadBegin(game));
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldArmed), 1u);
+  EXPECT_EQ(g_fetches.size(), 1u);
+
+  // The tick runs in any game state while a load is held (5 here), and a view that names the map is not enough: the registry's mount is.
+  sp::ChannelView staged;
+  staged.listed = {{Level("arena_c"), "arena_c"}};
+  staged.staged = {Pin("arena_c", "1.0", kSourceA)};
+  sp::SetChannelView(staged);
+  sp::TickWith(game);
+  EXPECT_EQ(game.replays, 0);
+
+  Mounted();
+  sp::TickWith(game);
+  EXPECT_EQ(game.replays, 1);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldReleased), 1u);
+  EXPECT_EQ(game.schedule_calls, 0);
+  sp::TickWith(game);
+  EXPECT_EQ(game.replays, 1);  // once
+}
+
+TEST_F(MapJoinHold, TheHoldIsAStateTheLeaveOwnerReadsNotASecondLeave) {
+  ArenaCSession("not_cached", 6);
+  ASSERT_TRUE(sp::HoldLoadBegin(game));
+  sp::TickWith(game);  // state 6 is a session state: the pin's decision would leave here, but a held load decides nothing
+  EXPECT_EQ(game.schedule_calls, 0);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kSkew), 0u);
+  EXPECT_TRUE(game.notices.empty());
+}
+
+TEST_F(MapJoinHold, ATimeoutLeavesThroughTheOneLeaveWithThePlainNotice) {
+  ArenaCSession();
+  ASSERT_TRUE(sp::HoldLoadBegin(game));
+  game.now += nevr_maps::kMapHoldCeilingMs - 1;  // no plan yet: the ceiling
+  sp::TickWith(game);
+  EXPECT_EQ(game.schedule_calls, 0);
+  game.now += 1;
+  sp::TickWith(game);
+  const sp::PinEvent* leave = game.First(sp::PinEventKind::kSkew);
+  ASSERT_NE(leave, nullptr);
+  EXPECT_EQ(leave->reason, "hold_timeout");
+  EXPECT_FALSE(leave->fetch);
+  EXPECT_EQ(game.schedule_calls, 1);
+  ASSERT_EQ(game.notices.size(), 1u);
+  EXPECT_EQ(game.notices[0].second, "Downloading arena_c took too long; join again later.");
+  EXPECT_EQ(game.replays, 0);
+  EXPECT_EQ(g_fetches.size(), 1u);  // the leave asks for nothing more
+  EXPECT_TRUE(sp::HoldLoadBegin(game));  // the game's retry of the load is still skipped while the leave runs
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldArmed), 1u);
+}
+
+TEST_F(MapJoinHold, ALeaveTheHoldTookIsNotDecidedAgainByThePinsOwnTick) {
+  ArenaCSession();
+  ASSERT_TRUE(sp::HoldLoadBegin(game));
+  game.now += nevr_maps::kMapHoldCeilingMs;
+  sp::TickWith(game);
+  ASSERT_EQ(game.Count(sp::PinEventKind::kSkew), 1u);
+  game.state = 6;  // the game parks in state 6 after the skipped load: the pin's own tick now runs
+  sp::TickWith(game);
+  sp::TickWith(game);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kSkew), 1u);  // one leave owner, one record for the session
+}
+
+TEST_F(MapJoinHold, AnotherLevelInTheSameLobbyDropsTheHold) {
+  ArenaCSession();
+  ASSERT_TRUE(sp::HoldLoadBegin(game));
+  game.owner[sp::kOwnerLevelKey] = Level("arena_d");
+  sp::TickWith(game);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldDropped), 1u);
+  EXPECT_EQ(game.schedule_calls, 0);
+}
+
+TEST_F(MapJoinHold, TheTimeoutFollowsTheMeasuredDownloadAndNeverExceedsTheCeiling) {
+  ArenaCSession();
+  ASSERT_TRUE(sp::HoldLoadBegin(game));
+  nevr_maps::HoldPlan plan;
+  plan.planned = true;
+  plan.set_bytes = 100;
+  plan.bytes_to_fetch = 100;
+  plan.bytes_fetched = 100;  // nothing left to download: the floor
+  plan.elapsed_ms = 1000;
+  sp::NoteHoldProgress(plan);
+  ASSERT_EQ(HoldTimeout(plan), nevr_maps::kMapHoldFloorMs);
+  game.now += nevr_maps::kMapHoldFloorMs - 1;
+  sp::TickWith(game);
+  EXPECT_EQ(game.schedule_calls, 0);
+  game.now += 1;
+  sp::TickWith(game);
+  const sp::PinEvent* leave = game.First(sp::PinEventKind::kSkew);
+  ASSERT_NE(leave, nullptr);
+  EXPECT_EQ(leave->reason, "hold_timeout");
+}
+
+TEST_F(MapJoinHold, AFailedFetchOfTheHeldMapLeavesAtOnceAndAnotherMapsFailureDoesNot) {
+  ArenaCSession();
+  ASSERT_TRUE(sp::HoldLoadBegin(game));
+  sp::NoteFetchFailed("arena_d", "no such map");
+  sp::TickWith(game);
+  EXPECT_EQ(game.schedule_calls, 0);
+  sp::NoteFetchFailed("arena_c", "not enough room for arena_c");
+  sp::TickWith(game);
+  const sp::PinEvent* leave = game.First(sp::PinEventKind::kSkew);
+  ASSERT_NE(leave, nullptr);
+  EXPECT_EQ(leave->reason, "fetch_failed");
+  EXPECT_EQ(game.schedule_calls, 1);
+  ASSERT_EQ(game.notices.size(), 1u);
+  EXPECT_EQ(game.notices[0].second, "Map arena_c could not be downloaded. See the nevr log.");
+  EXPECT_EQ(game.replays, 0);
+}
+
+TEST_F(MapJoinHold, AMountOfAnotherVersionIsNeverReplayedInto) {
+  ArenaCSession();
+  ASSERT_TRUE(sp::HoldLoadBegin(game));
+  sp::ChannelView view;
+  view.listed = {{Level("arena_c"), "arena_c"}};
+  view.staged = {Pin("arena_c", "1.1", kSourceB)};  // the bucket moved on: the server still runs 1.0
+  sp::SetChannelView(view);
+  sp::NoteMapsMounted({"arena_c"});
+  sp::TickWith(game);
+  EXPECT_EQ(game.replays, 0);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldReleased), 0u);
+  const sp::PinEvent* leave = game.First(sp::PinEventKind::kSkew);
+  ASSERT_NE(leave, nullptr);
+  EXPECT_EQ(leave->reason, "version");
+  EXPECT_EQ(game.schedule_calls, 1);
+}
+
+TEST_F(MapJoinHold, AMountThatCompletedBeforeTheHoldDoesNotReleaseIt) {
+  sp::NoteMapsMounted({"arena_c"});  // an earlier request's mount
+  ArenaCSession();
+  ASSERT_TRUE(sp::HoldLoadBegin(game));
+  sp::ChannelView view;
+  view.listed = {{Level("arena_c"), "arena_c"}};
+  view.staged = {Pin("arena_c", "1.0", kSourceA)};
+  sp::SetChannelView(view);
+  sp::TickWith(game);
+  EXPECT_EQ(game.replays, 0);
+}
+
+TEST_F(MapJoinHold, AReplayTheGameRefusesLeavesWithAPlainReason) {
+  ArenaCSession();
+  ASSERT_TRUE(sp::HoldLoadBegin(game));
+  game.replay_ok = false;
+  Mounted();
+  sp::TickWith(game);
+  EXPECT_EQ(game.replays, 1);
+  const sp::PinEvent* leave = game.First(sp::PinEventKind::kSkew);
+  ASSERT_NE(leave, nullptr);
+  EXPECT_EQ(leave->reason, "replay_failed");
+  EXPECT_EQ(game.schedule_calls, 1);
+}
+
+TEST_F(MapJoinHold, AnotherSessionDropsTheHoldWithoutALeave) {
+  ArenaCSession();
+  ASSERT_TRUE(sp::HoldLoadBegin(game));
+  game.lobby = kLobby + 1;
+  sp::TickWith(game);
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldDropped), 1u);
+  EXPECT_EQ(game.schedule_calls, 0);
+  EXPECT_EQ(game.replays, 0);
+  Mounted();
+  game.lobby = kLobby;
+  sp::TickWith(game);
+  EXPECT_EQ(game.replays, 0);  // dropped: the late mount replays nothing
+}
+
+TEST_F(MapJoinHold, AStaleCopyIsHeldLikeAMapTheCacheLacksAndANotAskedOneIsNot) {
+  // A copy the channel no longer lists is fetched anew, so the join waits for it (ADR 0048 decision 16).
+  ArenaCSession(nevr_maps::kStaleToken);
+  EXPECT_TRUE(sp::HoldLoadBegin(game));
+  // A cached map no session asked for (the on-demand mode no platform sets) leaves with its own notice, as before the hold.
+  sp::ResetForTest();
+  g_fetches.clear();
+  ArenaCSession(nevr_maps::kNotAskedToken);
+  EXPECT_FALSE(sp::HoldLoadBegin(game));
+}
+
+TEST_F(MapJoinHold, WhatNoMountCanCureIsNotHeld) {
+  // A platform that cannot hold, a server, a session whose map is current, another version already mounted, and a stay: the load runs.
+  ArenaCSession();
+  game.can_hold = false;
+  EXPECT_FALSE(sp::HoldLoadBegin(game));
+  game.can_hold = true;
+  game.server = true;
+  EXPECT_FALSE(sp::HoldLoadBegin(game));
+  game.server = false;
+  sp::SetMountedPins({Pin("arena_c", "0.9", kSourceB)});
+  sp::ChannelView view;
+  view.listed = {{Level("arena_c"), "arena_c"}};
+  sp::SetChannelView(view);
+  EXPECT_FALSE(sp::HoldLoadBegin(game));  // a mounted copy at another version stays mounted: a fetch cannot cure it
+  sp::SetMountedPins({Pin("arena_c", "1.0", kSourceA)});
+  EXPECT_FALSE(sp::HoldLoadBegin(game));  // the session's own version is mounted: nothing to wait for
+  game.owner[sp::kOwnerLevelKey] = kStockLevel;
+  EXPECT_FALSE(sp::HoldLoadBegin(game));  // a level the channel does not list
+  EXPECT_EQ(game.Count(sp::PinEventKind::kHoldArmed), 0u);
+  EXPECT_EQ(game.replays, 0);
 }

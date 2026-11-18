@@ -136,6 +136,19 @@ void WriteEvent(const core::PinEvent& e) {
                            {"leave", e.leave.c_str()},
                            {"level", level.c_str()}});
       return;
+    case core::PinEventKind::kHoldArmed:
+    case core::PinEventKind::kHoldReleased:
+    case core::PinEventKind::kHoldDropped:
+      // The core only holds a join when the access can skip the level load (CanHoldLoad), which this access does not say (the
+      // KNOWN-WRONG #TBD above), so these are not reached; if one is, it is written with the PC's keys.
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "join_hold",
+                          {{"event", e.kind == core::PinEventKind::kHoldArmed      ? "armed"
+                                     : e.kind == core::PinEventKind::kHoldReleased ? "released"
+                                                                                   : "dropped"},
+                           {"id", e.id.c_str()},
+                           {"level", level.c_str()},
+                           {"reason", e.reason.c_str()}});
+      return;
     case core::PinEventKind::kCargoSkew: {
       // The manifest's pin is "unknown" until this run has parsed one, as on the PC (PLAN-v7 5.5 "The decision").
       const std::string manifest = e.manifest_known ? core::HexText(e.manifest) : std::string("unknown");
@@ -152,6 +165,12 @@ void WriteEvent(const core::PinEvent& e) {
   }
 }
 
+// KNOWN-WRONG #TBD (no open issue found; the gh API refused the search, so the issue is to be filed): this access does not override
+// CanHoldLoad/ReplayLoad, so the core's client join hold never arms on the Quest and a join to a map the device lacks leaves and
+// joins again, as before. The level load to skip is CR15NetGame::LoadMap, libr15.so 0x1360bbc (260 bytes, first bytes
+// ff c3 01 d1 e8 23 00 fd; searched 1041 of 1041 binaries for its "[NETGAME] Loading map" string, hits only echovr.exe and libr15.so);
+// its one caller is the thunk at 0xfd6740, an indirect call, so the hook is a patch row (jump slot or glob_dat, ADR 0021) that needs a
+// device check this tree cannot make. The core makes no PC-only assumption: that row plus the two overrides finish the Quest.
 class QuestGameAccess final : public core::GameAccess {
  public:
   bool Callable() override { return g_owner_symbol != nullptr && invite::frame::NetGame() != nullptr; }

@@ -31,6 +31,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/map_run.h"
+#include "core/map_server_hold.h"
 
 namespace nevr_map_session_pin {
 
@@ -141,6 +142,10 @@ struct ClientDecision {
   ClientAction action = ClientAction::kNone;
   std::string id, reason, notice_line, local_path;
   bool request_fetch = false;
+  // A fetch and the mount that follows it can make this client current in this run, so a join hold may wait for them (HoldLoadBegin):
+  // the map is not cached, stale, or not yet asked for, or held at no version at all. A copy held at another version stays mounted
+  // (a mounted set is never replaced in this process), so no wait cures it.
+  bool holdable = false;
 };
 
 // The decision table (ADR 0048 decision 9), over the view and the mounted and staged pins. `pin` is the owner JSON's
@@ -166,6 +171,9 @@ enum class PinEventKind {
   kCargoServerSet,  // a server wrote its cargo pin (pin)
   kSessionDecision,  // a session's decision with a cargo input: map and cargo reasons, which one leaves (reason, cargo_reason, leave)
   kCargoSkew,        // a client leaves for the cargo pin (reason, level, pin = the server's, local, manifest_known, manifest, notice)
+  kHoldArmed,        // the client's level load is held for a map it lacks (id, level, pin, timeout_ms, notice, fetch)
+  kHoldReleased,     // the map mounted and the held load is replayed (id, level, pin, waited_ms)
+  kHoldDropped,      // the session changed under the hold: nothing is replayed, no leave (id, level, pin, reason, waited_ms)
 };
 
 struct PinEvent {
@@ -176,6 +184,7 @@ struct PinEvent {
   std::string cargo_reason, leave;  // kSessionDecision: the cargo reason ("none" when it names none), and map, cargo or none
   std::uint64_t local = 0, manifest = 0;  // kCargoSkew: B, and M when manifest_known
   bool manifest_known = false;
+  std::uint64_t waited_ms = 0, timeout_ms = 0;  // kHoldArmed (the timeout it starts with), kHoldReleased and kHoldDropped (the wait)
 };
 
 // The game half behind an interface, so the tick runs in a test with no game. Each platform implements it once.
@@ -193,6 +202,12 @@ class GameAccess {
   virtual bool ScheduleLeave() = 0;  // the return to lobby; false when it could not be scheduled now
   virtual std::uint64_t NowMs() = 0;
   virtual void Event(const PinEvent& event) = 0;  // every record the pin writes; the platform formats it
+  // The client's join hold (HoldLoadBegin): true when the platform skips the game's level load on request and can run the same load
+  // again later. The default is a platform that cannot: the session leaves and joins again, as before the hold.
+  virtual bool CanHoldLoad() { return false; }
+  // Runs the level load HoldLoadBegin made the platform skip, on the game thread, with the arguments the game gave it. False when
+  // it could not be run (no load was held, or the game refused).
+  virtual bool ReplayLoad() { return false; }
 };
 
 // The level a session is at: the owner JSON's `level` when a lobby exists and it is non-zero, else the main level.
@@ -208,6 +223,28 @@ void SetCargoDecide(CargoDecideFn decide);
 // pin) in a session, and the one leave takes the map's notice when both leave, else the cargo's. A leave is retried for
 // kLeaveRetryMs. With no listed map, no mounted pin and no cargo input, it makes no game call at all.
 void TickWith(GameAccess& game);
+
+// The client's join hold (KFC-PORT K4; ADR 0048 decision 16): a join to a map the client lacks waits for the download and the mount, then
+// loads the same join, with no restart. Nothing blocks: the platform's level-load call asks HoldLoadBegin, which returns true to skip
+// the load, and the tick replays it (GameAccess::ReplayLoad) once the registry's mount of the session's map is told (NoteMapsMounted)
+// and the session's version is the mounted one. The leave stays this tick's (ClientLeaveOnce): a fetch that failed (NoteFetchFailed),
+// a timeout (the server hold's rule, nevr_maps::MapHoldTimeoutMs, over the plan NoteHoldProgress gives), a replay the game refused,
+// or a decision no mount can cure ends the hold with that leave and its notice. A session that changed (lobby, level or pin) drops
+// the hold with no leave. The tick runs the hold in any game state: the load can be skipped before the game's state is in a session.
+//
+// Game thread, called from the platform's level-load detour: true = skip the load now. False when the platform cannot hold
+// (CanHoldLoad), on a server, outside a lobby, or when no fetch and mount can cure the decision.
+bool HoldLoadBegin(GameAccess& game);
+
+// Any thread. The registry's mount of these map ids completed (the mount observer; the view names a map as soon as it is granted,
+// before the registry mounts it, so the view alone never releases a hold).
+void NoteMapsMounted(const std::vector<std::string>& ids);
+
+// Any thread. A fetch that named `id` failed, with the request's consequence. Ignored unless a hold stands for `id`.
+void NoteFetchFailed(const std::string& id, const std::string& consequence);
+
+// Any thread. The progress of the fetch the hold waits for: its timeout is nevr_maps::MapHoldTimeoutMs of this plan.
+void NoteHoldProgress(const nevr_maps::HoldPlan& plan);
 
 // The login's nevr_maps: the mounted maps, then the staged maps not yet mounted (each with "mounted"). An empty array when none.
 nlohmann::json LoginEntries();

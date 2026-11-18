@@ -181,7 +181,7 @@ nevr_ht_test(posix_map_fs_test GROUP shared NOEXC ENV ${_shared_env}
 # The session map pin's pure part on the Quest (core/map_session_pin.cpp, ADR 0048 decision 9): the vectors and decision rows a Quest
 # client meets, the view's replacement and the empty-state gate, over a counting game.
 nevr_ht_test(map_session_pin_quest_test GROUP shared NOEXC INCS sdk/include src
-  SRC src/quest/tests/map_session_pin_quest_test.cpp src/core/map_session_pin.cpp)
+  SRC src/quest/tests/map_session_pin_quest_test.cpp src/core/map_session_pin.cpp src/core/map_server_hold.cpp)
 # The session's group and the groups the cache keeps (core/map_groups.h; ADR 0048 decisions 15 and 16; ADR 0045 decision 8): the group
 # id of a session's game text, the nil group, the bound over each group's record, the latest-first order and the request hook.
 nevr_ht_test(map_groups_quest_test GROUP shared NOEXC INCS sdk/include src

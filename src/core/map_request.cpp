@@ -95,7 +95,13 @@ bool MapRequests::RunNext(const Fetch& fetch) {
         ids_.erase(asked);
       }
     }
-    return fetch(group, scope);
+    FetchReport report = fetch(group, scope);
+    // A join held for a named map leaves at once on a failed fetch instead of waiting out its timeout (core/map_session_pin.h).
+    if (report.outcome == FetchOutcome::kFailed) {
+      const std::string consequence = RequestConsequence(report, true);
+      for (const std::string& id : scope.ids) nevr_map_session_pin::NoteFetchFailed(id, consequence);
+    }
+    return report;
   });
 }
 

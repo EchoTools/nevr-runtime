@@ -18,6 +18,7 @@ add_library(nevr_quest_maps STATIC
   ../../core/map_fetch_queue.cpp
   ../../core/stock_source.cpp
   ../../core/map_session_pin.cpp
+  ../../core/map_server_hold.cpp
   ../../core/map_request.cpp
   ../../core/map_set_tables.cpp
   ../../core/minisign_verify.cpp

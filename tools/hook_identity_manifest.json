@@ -69,6 +69,12 @@
       "prologue": "48895c2408574881"
     },
     {
+      "va": "0x14017A050",
+      "name": "CR15NetGame::LoadMap",
+      "prologue": "40534883ec70488b",
+      "note": "ReVault reconstruction (confidence H, verified 2026-07-29); three callers: LobbyJoinAcceptedCB, FUN_14017d8a0, Update"
+    },
+    {
       "va": "0x1401A89F0",
       "name": "EchoVR::NetGameScheduleReturnToLobby",
       "prologue": "40534883ec3033d2"

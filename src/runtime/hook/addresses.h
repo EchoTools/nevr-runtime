@@ -922,4 +922,16 @@ constexpr uintptr_t CNSLOBBY_OWNER_SYMBOL_GET = 0x60D3D0;
 constexpr unsigned char CNSLOBBY_OWNER_SYMBOL_GET_PROLOGUE[13] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x48,
                                                                   0x81, 0xc1, 0x10, 0x03, 0x00, 0x00};
 
+// ============================================================================
+// The client's join hold (core/map_session_pin.h HoldLoadBegin, runtime/content/map_session_pin_game.cpp).
+// ============================================================================
+
+/// Address: CR15NetGame::LoadMap (0x14017A050, 288 bytes; ReVault reconstruction, confidence H). `this` in RCX, nothing else. It
+/// reads the lobby's owner JSON "level" (string 0x1416D8344), submits the level load and switches the net game to state 7
+/// ("loading level"). Three callers: LobbyJoinAcceptedCB (0x14017CBE9: called straight when the account owns the lobby or its
+/// "ingame" flag is set, else the net game parks in state 6), FUN_14017D8A0 (0x14017DB69) and Update (0x1401BC76B: each frame in
+/// state 6 once "ingame" is set). A join, not a frame: the detour only decides on the first call of a join.
+constexpr uintptr_t CR15NETGAME_LOAD_MAP = 0x17A050;
+constexpr unsigned char CR15NETGAME_LOAD_MAP_PROLOGUE[8] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x70, 0x48, 0x8b};
+
 }  // namespace nevr_patch_addresses
