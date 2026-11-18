@@ -172,7 +172,7 @@ each one gives; do the step this way on yours:
 | Maintainers-only part | On your machine |
 | --- | --- |
 | "Commit identity" (author, trailer, signing) | Commit as yourself: the author is the person responsible, under the name and email they use on GitHub. When an agent wrote the change, add one `Co-Authored-By: <agent name> <email>` trailer. Conventional prefix, one logical change per commit, and the same post-commit check. |
-| "Ownership and cleanup": the ledger file | Keep the same ledger in a file of your own: a markdown table (artifact, owner, purpose, remove-when), one row per thing you create, the worktree directory or branch in the first cell and your handle, one word, in the second. Read it before deleting anything. Create worktrees under `.claude/worktrees/` in your clone, and run `REAP_LEDGER=<your ledger file> just reap-merged`: `tools/reap_merged.py` scans only `.claude/worktrees/`, exits when `REAP_LEDGER` is unset or the ledger cannot be read, and keeps any worktree the ledger does not credit to an owner. |
+| "Ownership and cleanup": the ledger file | Keep the same ledger in a file of your own: a markdown table (artifact, owner, purpose, remove-when), one row per thing you create, the worktree directory or branch in the first cell and your handle, one word, in the second. Read it before deleting anything. Create worktrees under `.claude/worktrees/` in your clone, and run `REAP_LEDGER=<your ledger file> just reap-merged`: `tools/reap_merged.py` scans only `.claude/worktrees/`, defaults the ledger to `<work root>/LEDGER.md` (made with its header row when absent) when `REAP_LEDGER` is unset or empty, exits when a ledger it was named cannot be read, and keeps any worktree the ledger does not credit to an owner. |
 | "Builds" (builds and live game runs): the shared `nevr-live.slice` | Builds, verify and tests run as the plain recipe, with no job count, slice or `MemoryMax`; a live game run runs in its own scope in `nevr-live.slice` with `systemd-run --user --scope --slice=nevr-live.slice <cmd>`. |
 | Scratch under `~/src/nevr-runtime-work/<agent>/` | The work root is `$NEVR_WORK_ROOT`, else `~/src/nevr-runtime-work` (`~` is your home directory), so the default works on any machine, and several tools write there by default (`tools/scenario/run_scenario.py`, `tools/lib/game_install.sh`, `tools/winvm/systest.py`). Use `<work root>/<your handle>/`, never `/tmp` and never the repo, and keep the work-root rule under "Working practices for every agent". |
 | "The game install" | See "Your game install" below. |
@@ -637,7 +637,7 @@ your seat name, for example `claude-main` or `codex`.
 
 ### Ownership and cleanup
 
-- **Keep a ledger.** The file `REAP_LEDGER` names is a markdown table
+- **Keep a ledger.** The file `REAP_LEDGER` names (default `<work root>/LEDGER.md`, which `just` and `tools/reap_merged.py` make with its header row when it is absent) is a markdown table
   (artifact, owner, purpose, remove-when) of every worktree, branch, scratch file, stash and issue an agent has made; the owner is your seat name. Add the row in
   the same turn you create the thing. Read the ledger before deleting anything; an item not in it
   is not yours.

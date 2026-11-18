@@ -12,6 +12,7 @@ import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools/reap_merged.py"
+TOOL_TIMEOUT_S = 120  # the longest one run of the tool may take under test
 sys.path.insert(0, str(REPO / "tools/tests"))
 import gitenv  # noqa: E402
 import real_repo_guard  # noqa: E402
@@ -38,6 +39,7 @@ class ReapMergedTest(unittest.TestCase):
         (self.main / "tools").mkdir()
         shutil.copy(SCRIPT, self.main / "tools/reap_merged.py")
         shutil.copy(REPO / "tools/remove_worktree.py", self.main / "tools/remove_worktree.py")
+        shutil.copy(REPO / "tools/work_root.py", self.main / "tools/work_root.py")
         git(self.main, "checkout", "-q", "-b", "main")
         (self.main / ".gitignore").write_text("build/\n")
         git(self.main, "add", "tools", ".gitignore")
@@ -89,7 +91,7 @@ class ReapMergedTest(unittest.TestCase):
         (self.tmp / "prs.json").write_text(json.dumps(self.gh_prs))
         env = dict(os.environ, REAP_LEDGER=str(ledger), REAP_LOG=str(self.tmp / "log/reap.jsonl"), REAP_GH=str(gh))
         return subprocess.run([sys.executable, "-I", str(self.main / "tools/reap_merged.py"), *args],
-                              cwd=cwd or self.tmp, env=env, capture_output=True, text=True, timeout=120)
+                              cwd=cwd or self.tmp, env=env, capture_output=True, text=True, timeout=TOOL_TIMEOUT_S)
 
     def records(self):
         return [json.loads(line) for line in (self.tmp / "log/reap.jsonl").read_text().splitlines()]
@@ -107,6 +109,44 @@ class ReapMergedTest(unittest.TestCase):
 
     def shared_submodule_config(self):
         return sgit(self.main, "config", "--get-regexp", r"^submodule\.", check=False).stdout
+
+    def run_tool_default_ledger(self, work_root):
+        env = {k: v for k, v in os.environ.items() if k != "REAP_LEDGER"}
+        env.update(NEVR_WORK_ROOT=str(work_root), REAP_LOG=str(self.tmp / "log/reap.jsonl"))
+        return subprocess.run([sys.executable, "-I", str(self.main / "tools/reap_merged.py")],
+                              cwd=self.tmp, env=env, capture_output=True, text=True, timeout=TOOL_TIMEOUT_S)
+
+    def test_without_reap_ledger_the_default_ledger_is_made_in_the_work_root(self):
+        wr = self.tmp / "wr"
+        result = self.run_tool_default_ledger(wr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((wr / "LEDGER.md").read_text(),
+                         "| artifact | owner | purpose | remove-when |\n|---|---|---|---|\n")
+
+    def test_an_empty_reap_ledger_is_the_default_as_an_empty_dotenv_value_sets_it(self):
+        wr = self.tmp / "wr"
+        env = dict(os.environ, NEVR_WORK_ROOT=str(wr), REAP_LEDGER="",
+                   REAP_LOG=str(self.tmp / "log/reap.jsonl"))
+        result = subprocess.run([sys.executable, "-I", str(self.main / "tools/reap_merged.py")],
+                                cwd=self.tmp, env=env, capture_output=True, text=True, timeout=TOOL_TIMEOUT_S)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((wr / "LEDGER.md").exists())
+
+    def test_an_existing_default_ledger_is_kept_as_it_is(self):
+        wr = self.tmp / "wr"
+        wr.mkdir()
+        (wr / "LEDGER.md").write_text("| a | b | c | d |\n|---|---|---|---|\n| row | s | p | r |\n")
+        result = self.run_tool_default_ledger(wr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("| row | s | p | r |", (wr / "LEDGER.md").read_text())
+
+    def test_a_named_ledger_that_is_absent_is_refused_and_not_made(self):
+        env = dict(os.environ, REAP_LEDGER=str(self.tmp / "nope.md"), REAP_LOG=str(self.tmp / "log/reap.jsonl"))
+        result = subprocess.run([sys.executable, "-I", str(self.main / "tools/reap_merged.py")],
+                                cwd=self.tmp, env=env, capture_output=True, text=True, timeout=TOOL_TIMEOUT_S)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot read the ledger", result.stderr)
+        self.assertFalse((self.tmp / "nope.md").exists())
 
     def test_a_worktree_with_an_initialised_submodule_is_reaped_and_the_shared_config_keeps_its_entry(self):
         self.add_submodule()

@@ -24,7 +24,8 @@ tip, and append a removal row to the ledger.
 Every decision and action is appended as one JSON line to the log (REAP_LOG, default
 $XDG_STATE_HOME/nevr-runtime/reap-merged.jsonl). A record that cannot be written aborts the run.
 
-Environment: REAP_LEDGER (required: the ledger file, a markdown table of the artifacts this checkout's agents made), REAP_LOG,
+Environment: REAP_LEDGER (unset or empty: the default; the ledger file, a markdown table of the artifacts this checkout's agents made; default
+<work root>/LEDGER.md, made with its header row when absent; a ledger named here is never made), REAP_LOG,
 REAP_BASE (default origin/main), REAP_GH (default gh).
 """
 import argparse
@@ -37,6 +38,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import remove_worktree as rw  # noqa: E402
+import work_root  # noqa: E402
+
+LEDGER_NAME = "LEDGER.md"
+LEDGER_HEADER = "| artifact | owner | purpose | remove-when |\n|---|---|---|---|\n"
 
 # One definition of the removal proofs (idle, clean, ignored, submodules) and of the removal itself.
 cwd_holders = rw.cwd_holders
@@ -292,7 +297,15 @@ def main():
     gh = os.environ.get("REAP_GH", "gh")
     ledger = os.environ.get("REAP_LEDGER", "")
     if not ledger:
-        sys.exit("reap-merged: REAP_LEDGER is not set; name the ledger file (a markdown table) to run")
+        ledger = str(work_root.work_root() / LEDGER_NAME)
+        try:
+            os.makedirs(os.path.dirname(ledger), exist_ok=True)
+            with open(ledger, "x", encoding="utf-8") as f:
+                f.write(LEDGER_HEADER)
+        except FileExistsError:
+            pass
+        except OSError as e:
+            sys.exit(f"reap-merged: cannot make the default ledger {ledger}: {e}")
     state = os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
     log = Log(os.environ.get("REAP_LOG", os.path.join(state, "nevr-runtime", "reap-merged.jsonl")))
     try:
