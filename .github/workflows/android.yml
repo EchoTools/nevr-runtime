@@ -15,6 +15,9 @@ concurrency:
 jobs:
   android:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
@@ -41,8 +44,8 @@ jobs:
       id: ndk
       uses: ./.github/actions/setup-ndk
 
-    # The same pinned vcpkg revision and file binary cache as build.yml (src/quest has its own, tiny
-    # manifest; the entry is keyed by its hash and the triplet).
+    # The same pinned vcpkg revision as build.yml (src/quest has its own, tiny manifest; each package is a feed
+    # entry named by its ABI hash, so the dependencies here and in build.yml share the feed without a key).
     - name: Bootstrap vcpkg
       id: vcpkg
       run: |
@@ -50,32 +53,29 @@ jobs:
         git clone https://github.com/Microsoft/vcpkg.git "$HOME/.vcpkg"
         git -C "$HOME/.vcpkg" checkout --detach "$(cat "$GITHUB_WORKSPACE/.vcpkg-commit")"
         "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
-        echo "sha=$(git -C "$HOME/.vcpkg" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         echo "VCPKG_ROOT=$HOME/.vcpkg" >> "$GITHUB_ENV"
 
-    - name: Restore the vcpkg binary cache
-      id: vcpkg_cache
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-      with:
-        path: .vcpkg-binary-cache
-        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ steps.ndk.outputs.revision }}-${{ steps.vcpkg.outputs.sha }}
-        restore-keys: |
-          vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ steps.ndk.outputs.revision }}-
+    # vcpkg's binary cache is the EchoTools GitHub Packages NuGet feed, the same one build.yml uses (its build job
+    # comment says why). mono runs nuget.exe; ubuntu-latest does not preinstall it.
+    - name: Install mono for vcpkg's NuGet client
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y mono-complete
+
+    - name: Add the GitHub Packages NuGet source for the vcpkg binary cache
+      env:
+        NUGET_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        nuget=$("$VCPKG_ROOT/vcpkg" fetch nuget | tail -n 1)
+        mono "$nuget" sources add -Source "https://nuget.pkg.github.com/EchoTools/index.json" -StorePasswordInClearText -Name GitHubPackages -UserName EchoTools -Password "$NUGET_TOKEN"
+        mono "$nuget" setapikey "$NUGET_TOKEN" -Source "https://nuget.pkg.github.com/EchoTools/index.json"
 
     - name: Build and test (just build-android, just test-android)
       env:
         CMAKE_BUILD_PARALLEL_LEVEL: 4
+        VCPKG_BINARY_SOURCES: "clear;nuget,https://nuget.pkg.github.com/EchoTools/index.json,readwrite"
       run: |
         set -euo pipefail
-        mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
-        export VCPKG_BINARY_SOURCES="clear;files,$GITHUB_WORKSPACE/.vcpkg-binary-cache,readwrite"
         just test-android
-        echo "archives in the binary cache: $(find "$GITHUB_WORKSPACE/.vcpkg-binary-cache" -name '*.zip' | wc -l)"
-
-    # Saved after a successful build, so a cache is never made from a failed one.
-    - name: Save the vcpkg binary cache
-      if: steps.vcpkg_cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-      with:
-        path: .vcpkg-binary-cache
-        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ steps.ndk.outputs.revision }}-${{ steps.vcpkg.outputs.sha }}

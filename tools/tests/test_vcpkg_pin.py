@@ -1,6 +1,7 @@
 """CI builds the vcpkg revision recorded in .vcpkg-commit, read from that one file."""
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import re
@@ -114,16 +115,10 @@ class VcpkgPinTest(unittest.TestCase):
         build = (WORKFLOWS / "build.yml").read_text()
         self.assertIn('test "$(just --version)" = "just 1.58.0"', build)
 
-    def test_the_cache_key_prefix_is_the_same_in_the_seed_and_the_consumer(self):
-        keys = {}
-        for name in ("build.yml", "vcpkg-cache.yml"):
-            keys[name] = set(re.findall(r"vcpkg-bin\d+-", (WORKFLOWS / name).read_text()))
-        self.assertEqual(len(keys["build.yml"]), 1, keys)
-        self.assertEqual(keys["build.yml"], keys["vcpkg-cache.yml"])
-
     def test_the_cache_seed_runs_on_main_when_a_key_input_changes_and_on_demand(self):
-        # A cache is restorable only from the run's own ref and the default branch, so main must hold the key
-        # build.yml asks for or every tag and release run compiles the dependencies (~39 min).
+        # The seed pre-warms the GitHub Packages feed that build.yml reads. A package is one feed entry named by its
+        # ABI hash, so the seed fills the feed for every ref; a push to main that changes an input of that hash
+        # is when a new entry has to be uploaded before a release run asks for it (~39 min of compile otherwise).
         text = (WORKFLOWS / "vcpkg-cache.yml").read_text()
         triggers = yaml.safe_load(text)
         triggers = triggers.get("on", triggers.get(True))
@@ -168,6 +163,83 @@ class VcpkgPinTest(unittest.TestCase):
             os.symlink("libcrypt32.a", os.path.join(lib, "libCrypt32.a"))
             present = subprocess.run(["just", "vcpkg-pin-check"], cwd=REPO, env=env, capture_output=True, text=True)
             self.assertEqual(present.returncode, 0, present.stdout + present.stderr)
+
+
+# vcpkg's binary cache is the GitHub Packages NuGet feed (https://learn.microsoft.com/en-us/vcpkg/consume/binary-caching-github-packages),
+# not a file directory under actions/cache: a feed entry is keyed by the package's ABI hash and is not scoped to a ref.
+NUGET_FEED = "https://nuget.pkg.github.com/EchoTools/index.json"
+BINARY_SOURCES = f"clear;nuget,{NUGET_FEED},readwrite"
+NUGET_WORKFLOWS = ("build.yml", "android.yml", "vcpkg-cache.yml")
+
+
+def steps_of(workflow):
+    for job_name, job in yaml.safe_load((WORKFLOWS / workflow).read_text())["jobs"].items():
+        for index, step in enumerate(job.get("steps", [])):
+            yield job_name, job, index, step
+
+
+class VcpkgNugetBinaryCacheTest(unittest.TestCase):
+    def binary_source_steps(self, workflow):
+        for job_name, job, index, step in steps_of(workflow):
+            text = json.dumps(step)
+            if "VCPKG_BINARY_SOURCES" in text:
+                yield job_name, job, index, step
+
+    def nuget_source_steps(self, workflow):
+        for job_name, job, index, step in steps_of(workflow):
+            if "sources add" in str(step.get("run", "")):
+                yield job_name, job, index, step
+
+    def test_every_workflow_that_installs_vcpkg_dependencies_names_the_nuget_feed_and_no_file_provider(self):
+        for name in NUGET_WORKFLOWS:
+            found = list(self.binary_source_steps(name))
+            self.assertTrue(found, f"{name} sets no VCPKG_BINARY_SOURCES")
+            for job_name, _job, _index, step in found:
+                value = (step.get("env") or {}).get("VCPKG_BINARY_SOURCES")
+                if value is None:
+                    value = re.search(r'VCPKG_BINARY_SOURCES="([^"]*)"', str(step.get("run", ""))).group(1)
+                self.assertEqual(value, BINARY_SOURCES, f"{name} {job_name}")
+            self.assertNotIn("clear;files", (WORKFLOWS / name).read_text(), f"{name} still names a file provider")
+
+    def test_no_workflow_restores_or_saves_the_binary_cache_as_an_actions_cache_entry(self):
+        for name in sorted(p.name for p in WORKFLOWS.glob("*.yml")):
+            for job_name, _job, _index, step in steps_of(name):
+                self.assertNotEqual((step.get("with") or {}).get("path"), ".vcpkg-binary-cache",
+                                    f"{name} {job_name} caches the binary cache with actions/cache")
+
+    def test_every_job_that_uses_the_nuget_feed_holds_packages_write(self):
+        for name in NUGET_WORKFLOWS:
+            for job_name, job, _index, _step in self.binary_source_steps(name):
+                self.assertEqual((job.get("permissions") or {}).get("packages"), "write",
+                                 f"{name} job {job_name} needs packages: write to push to the feed")
+
+    def test_the_nuget_source_is_added_with_the_built_in_token_and_no_other_secret(self):
+        for name in NUGET_WORKFLOWS:
+            found = list(self.nuget_source_steps(name))
+            self.assertTrue(found, f"{name} adds no NuGet source")
+            for job_name, _job, _index, step in found:
+                run = step["run"]
+                self.assertIn(NUGET_FEED, run, f"{name} {job_name}")
+                self.assertIn("setapikey", run, f"{name} {job_name}")
+                self.assertIn("-StorePasswordInClearText", run, f"{name} {job_name}")
+                secrets_used = set(re.findall(r"secrets\.(\w+)", json.dumps(step)))
+                self.assertEqual(secrets_used, {"GITHUB_TOKEN"}, f"{name} {job_name} must use only the built-in token")
+
+    def test_the_nuget_source_is_added_before_vcpkg_installs_from_it(self):
+        for name in NUGET_WORKFLOWS:
+            self.assertTrue(list(self.nuget_source_steps(name)), f"{name} adds no NuGet source")
+            for job_name, _job, source_index, _step in self.nuget_source_steps(name):
+                binary = [i for j, _, i, _ in self.binary_source_steps(name) if j == job_name]
+                self.assertTrue(binary, f"{name} {job_name} sets the feed without adding it")
+                self.assertLess(source_index, min(binary), f"{name} {job_name} uses the feed before adding it")
+
+    def test_the_linux_job_installs_mono_before_it_runs_nuget(self):
+        for name in NUGET_WORKFLOWS:
+            self.assertTrue(list(self.nuget_source_steps(name)), f"{name} adds no NuGet source")
+            for job_name, _job, source_index, _step in self.nuget_source_steps(name):
+                earlier = [s for j, _, i, s in steps_of(name) if j == job_name and i < source_index]
+                self.assertTrue(any(re.search(r"(pacman -S|apt-get install)[^\n]*\bmono", str(s.get("run", "")))
+                                    for s in earlier), f"{name} {job_name} runs nuget.exe without installing mono")
 
 
 if __name__ == "__main__":

@@ -73,8 +73,9 @@ class BuilderImageTest(unittest.TestCase):
         self.assertIn("workflow_dispatch:", text)
 
     def test_the_jobs_that_pull_the_image_may_read_packages(self):
+        # packages: write includes read; the seed job (vcpkg-cache.yml) pushes its vcpkg binary cache to the feed.
         for name in USERS:
-            self.assertIn("packages: read", (WORKFLOWS / name).read_text(), name)
+            self.assertRegex((WORKFLOWS / name).read_text(), r"packages: (read|write)", name)
 
     def test_the_base_image_is_a_dated_tag_pinned_by_digest(self):
         froms = re.findall(r"^FROM (\S+)", DOCKERFILE.read_text(), re.M)

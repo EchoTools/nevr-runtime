@@ -148,7 +148,9 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertEqual(jobs["quest"]["needs"], "guard")
         self.assertIn("needs.guard.outputs.built != 'true'", jobs["quest"]["if"])
         self.assertIn("github.event_name == 'release' || github.ref_type == 'tag'", jobs["quest"]["if"])
-        self.assertEqual(jobs["quest"]["permissions"], {"contents": "read"})
+        # packages: write is the vcpkg binary cache's NuGet feed push (test_vcpkg_pin.py); contents stays read, so the
+        # job still cannot write a release
+        self.assertEqual(jobs["quest"]["permissions"], {"contents": "read", "packages": "write"})
         for name in ("seal", "repack", "publish"):
             self.assertNotIn("rc", name)
 

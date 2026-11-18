@@ -240,7 +240,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read
+      packages: write
       # The wait step reads the installer job's conclusion from the jobs API of this run.
       actions: read
     outputs:
@@ -353,7 +353,6 @@ jobs:
         # local ~/.vcpkg to, so CI builds the dependency versions that are tested locally.
         git -C "$HOME/.vcpkg" checkout --detach "$(cat "$GITHUB_WORKSPACE/.vcpkg-commit")"
         "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
-        echo "sha=$(git -C "$HOME/.vcpkg" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         # `just verify` unsets VCPKG_ROOT; tools/vcpkg_root.sh then clones the per-checkout root from this source.
         echo "NEVR_VCPKG_SOURCE=$HOME/.vcpkg" >> "$GITHUB_ENV"
         # The compiler version plus a hash of every MinGW package vcpkg's compiler hash can see, so a
@@ -362,51 +361,38 @@ jobs:
         echo "gcc=$(pacman -Q mingw-w64-gcc | tr ' ' '-')-$(pacman -Q mingw-w64-gcc mingw-w64-binutils mingw-w64-headers mingw-w64-crt mingw-w64-winpthreads | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
     # Building the dependencies from source is about 80% of a run (29.6 of 37.8 minutes in run
-    # 37872101662). vcpkg's file binary cache stores one archive per package, named by an ABI hash that
-    # covers the port files, its dependencies, the triplet and the compiler, so a changed or bumped
-    # dependency is rebuilt even when the cache is restored. The cache key and its restore keys both
-    # contain the hash of vcpkg.json: editing vcpkg.json misses the cache entirely and builds everything.
-    # Changing the vcpkg revision or the MinGW compiler starts a new entry seeded from the latest entry
-    # for the same vcpkg.json.
-    - name: Restore the vcpkg binary cache
-      id: vcpkg_cache
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-      with:
-        path: .vcpkg-binary-cache
-        key: vcpkg-bin4-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
-        restore-keys: |
-          vcpkg-bin4-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-
-          vcpkg-bin4-${{ hashFiles('vcpkg.json') }}-
+    # 37872101662). vcpkg's binary cache is the EchoTools GitHub Packages NuGet feed (vcpkg's "binary caching with
+    # GitHub Packages" tutorial, https://learn.microsoft.com/en-us/vcpkg/consume/binary-caching-github-packages): each
+    # package is one feed entry named by its ABI hash, which covers the port files, its dependencies, the triplet and
+    # the compiler. A changed dependency is a new entry; an unchanged one is downloaded instead of built. Feed entries
+    # are not scoped to a ref, so a tag run reads what a branch run wrote. The job holds packages: write for the push.
+    # vcpkg runs nuget.exe through mono on Linux. The builder image has no mono, so the job installs it from the
+    # image's pinned archive snapshot (the mirror list in .github/builder/Dockerfile).
+    - name: Install mono for vcpkg's NuGet client
+      run: pacman -S --noconfirm --needed mono
 
-    - name: Install vcpkg dependencies
+    - name: Add the GitHub Packages NuGet source for the vcpkg binary cache
+      env:
+        NUGET_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         set -euo pipefail
-        # $GITHUB_WORKSPACE, not ${{ github.workspace }}: in a container job the second is the host's
-        # path, which does not exist here, and vcpkg would write its archives where nothing saves them.
-        mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
-        export VCPKG_BINARY_SOURCES="clear;files,$GITHUB_WORKSPACE/.vcpkg-binary-cache,readwrite"
-        echo "archives restored from the cache entry: $(find "$GITHUB_WORKSPACE/.vcpkg-binary-cache" -name '*.zip' | wc -l)"
+        nuget=$("$HOME/.vcpkg/vcpkg" fetch nuget | tail -n 1)
+        mono "$nuget" sources add -Source "https://nuget.pkg.github.com/EchoTools/index.json" -StorePasswordInClearText -Name GitHubPackages -UserName EchoTools -Password "$NUGET_TOKEN"
+        mono "$nuget" setapikey "$NUGET_TOKEN" -Source "https://nuget.pkg.github.com/EchoTools/index.json"
+
+    - name: Install vcpkg dependencies
+      env:
+        VCPKG_BINARY_SOURCES: "clear;nuget,https://nuget.pkg.github.com/EchoTools/index.json,readwrite"
+      run: |
+        set -euo pipefail
         # The x64-mingw-static triplet lists PATH in VCPKG_ENV_PASSTHROUGH, so the value of PATH is part of
-        # every mingw package ABI hash. A PATH that differs between jobs gives every archive a different name and the restore
-        # finds none. The pin is the justfile's (_vcpkg-mingw), which `just verify` installs under: with a different pin
+        # every mingw package ABI hash. A PATH that differs between jobs gives every package a different ABI hash, and the
+        # feed has no entry for it. The pin is the justfile's (_vcpkg-mingw), which `just verify` installs under: with a different pin
         # verify rebuilt all 14 mingw packages (run 39433944012, 19 of its 33 Verify minutes, #816); test_vcpkg_pin.py compares them.
-        # The key does not encode this pin: change the pin and bump the vcpkg-binN prefix in the same commit.
         env PATH=/usr/local/bin:/usr/bin \
           "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
           --x-manifest-root="$GITHUB_WORKSPACE" \
           --x-install-root="$GITHUB_WORKSPACE/build/mingw-release/vcpkg_installed"
-        count=$(find "$GITHUB_WORKSPACE/.vcpkg-binary-cache" -name '*.zip' | wc -l)
-        echo "archives in the binary cache now: $count"
-        test "$count" -gt 0
-
-    # Saved right after the install, so a failure in a later step does not lose the dependency build.
-    - name: Save the vcpkg binary cache
-      if: steps.vcpkg_cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-      with:
-        path: .vcpkg-binary-cache
-        key: vcpkg-bin4-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
-
     - name: Generate pinned protobuf sources
       run: |
         set -euo pipefail
@@ -727,6 +713,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: write
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
@@ -763,7 +750,6 @@ jobs:
         git clone https://github.com/Microsoft/vcpkg.git "$HOME/.vcpkg"
         git -C "$HOME/.vcpkg" checkout --detach "$(cat "$GITHUB_WORKSPACE/.vcpkg-commit")"
         "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
-        echo "sha=$(git -C "$HOME/.vcpkg" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         echo "VCPKG_ROOT=$HOME/.vcpkg" >> "$GITHUB_ENV"
 
     # libnevr-runtime.so links the core install method (installer/, ADR 0024 section 3) and the runner has no pinned Rust, so the job
@@ -782,24 +768,31 @@ jobs:
         echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
         echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
 
-    - name: Restore the vcpkg binary cache
-      id: vcpkg_cache
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-      with:
-        path: .vcpkg-binary-cache
-        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ steps.ndk.outputs.revision }}-${{ steps.vcpkg.outputs.sha }}
-        restore-keys: |
-          vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ steps.ndk.outputs.revision }}-
+    # The Quest build's vcpkg dependencies come from the same GitHub Packages NuGet feed as build.yml's (the comment in
+    # the build job says why). mono runs nuget.exe; ubuntu-latest does not preinstall it.
+    - name: Install mono for vcpkg's NuGet client
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y mono-complete
+
+    - name: Add the GitHub Packages NuGet source for the vcpkg binary cache
+      env:
+        NUGET_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        nuget=$("$VCPKG_ROOT/vcpkg" fetch nuget | tail -n 1)
+        mono "$nuget" sources add -Source "https://nuget.pkg.github.com/EchoTools/index.json" -StorePasswordInClearText -Name GitHubPackages -UserName EchoTools -Password "$NUGET_TOKEN"
+        mono "$nuget" setapikey "$NUGET_TOKEN" -Source "https://nuget.pkg.github.com/EchoTools/index.json"
 
     # The version the library carries is the tag's, through the same GITHUB_REF_* variables the PC build
     # reads (a release event or a dispatch started on the tag ref). The asset name takes it from the ref.
     - name: Build and test the Quest library
       env:
         CMAKE_BUILD_PARALLEL_LEVEL: 4
+        VCPKG_BINARY_SOURCES: "clear;nuget,https://nuget.pkg.github.com/EchoTools/index.json,readwrite"
       run: |
         set -euo pipefail
-        mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
-        export VCPKG_BINARY_SOURCES="clear;files,$GITHUB_WORKSPACE/.vcpkg-binary-cache,readwrite"
         # A tag run links the core into libnevr-runtime.so, and must: ON makes a missing cargo a configure error, where the default
         # (AUTO) builds a runtime that never updates itself. The tree is fresh, so this configure sets the cache that the
         # configure-android recipe inside test-android then keeps.
@@ -850,13 +843,6 @@ jobs:
         path: quest-asset/
         if-no-files-found: error
         retention-days: 7
-
-    - name: Save the vcpkg binary cache
-      if: steps.vcpkg_cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-      with:
-        path: .vcpkg-binary-cache
-        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ steps.ndk.outputs.revision }}-${{ steps.vcpkg.outputs.sha }}
 
   # Seal the release: the zip with its SHA256SUMS regenerated from the files as they are (the unzipped zip is
   # checked with sha256sum -c). The release is that zip and the Quest library: no top-level SHA256SUMS and no
