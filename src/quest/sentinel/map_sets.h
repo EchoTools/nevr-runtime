@@ -28,7 +28,7 @@ using nevr_resource_sets::Outcome;
 using nevr_resource_sets::StockView;
 
 // The whole file open read-only as `held_fd`, checked as RegisterMapFile says. On ok() this module owns the descriptor for the
-// process; on a refusal the caller keeps it. After the mount: kTooLate. One `map_set` record either way. Runs off the game's thread
+// process; on a refusal the caller keeps it. After the mount the set is held for MountLater; after Abandon: kTooLate. One `map_set` record either way. Runs off the game's thread
 // when `request.rehash` is set: the re-hash reads the whole file, with no lock held.
 Outcome RegisterFileResourceSet(const MapFileRequest& request, std::int64_t held_fd);
 
@@ -44,9 +44,15 @@ using PublishFn = void (*)(const nevr_shadow::Shadow* shadow);
 
 // Mounts every registered set against `stock` (stock.records must be the game's live count: refusing stock keys needs the manifest
 // built), closes the refused sets' descriptors, calls the observer, then hands the shadow to `publish` when anything mounted. The
-// run's one mount: a second call, or one after Abandon, mounts nothing and returns an empty report (a set registered after the mount
-// is kTooLate; core/resource_set_registry.h).
+// run's first mount: a second call, or one after Abandon, mounts nothing and returns an empty report. A set registered after it waits
+// for MountLater (core/resource_set_registry.h).
 MountReport Mount(const StockView& stock, PublishFn publish);
+
+// A later mount of the run (a map fetched after the first mount, ADR 0048 decision 16): mounts the sets registered since the last
+// mount against `stock`, calls the observer (always, once per call, with an empty report when nothing was pending), and hands
+// `publish` ONE new shadow of every mounted set, earlier and new, when this call mounted a set. The resolver still asks one shadow.
+// Empty before the first Mount and after Abandon (and then the observer is not called).
+MountReport MountLater(const StockView& stock, PublishFn publish);
 
 // Ends the run's registration with nothing served (the mount never came): every descriptor is closed, later registrations are
 // kTooLate, and the observer sees an empty report.

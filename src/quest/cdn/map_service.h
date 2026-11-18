@@ -1,7 +1,8 @@
 /* The custom-map channel on the Quest (docs/adr/0048-custom-maps-channel.md; ADR 0045 decision 7): the core's start (core/map_channel.h)
  * over the POSIX cache under <internalDataPath>/nevr/cache/maps/, mounting each cached group's maps at boot with no network, then one
  * detached thread that waits for the game's manifest (the resource request hook sees the first request), mounts the sets against it,
- * and fetches the planned groups in the background. What arrives mounts at the next launch.
+ * and fetches the planned groups in the background. What the fetch stored mounts in this run, on the same thread, as a later mount
+ * (MountLaterNow); a map is never withdrawn once mounted.
  *
  * The map scripts (route B) and aliases are granted with their set, all or nothing (map_mount.h). Recipes rebuild through the Deriver
  * the caller gives (the stock source over the game's data root and the APK, map_start.cpp); with none, a recipe map is refused
@@ -40,6 +41,12 @@ std::string NowUtc();
 bool MountWhenManifestReady(std::uint64_t (*records)(), bool (*has)(std::uint64_t type, std::uint64_t name),
                             void (*publish)(const nevr_shadow::Shadow*), std::uint32_t wait_ms,
                             const std::function<bool()>& keep_going);
+
+// A later mount of the run, on the calling thread (ADR 0048 decision 16): mounts the map sets registered since the last mount against
+// `has` and publishes the new shadow, which holds every mounted set. Nothing waits: the manifest was built when the first mount ran.
+// False (and nothing mounted) when `records` reports no manifest. True when it mounted a set.
+bool MountLaterNow(std::uint64_t (*records)(), bool (*has)(std::uint64_t type, std::uint64_t name),
+                   void (*publish)(const nevr_shadow::Shadow*));
 
 // The boot mount on the calling thread, then the thread that mounts and fetches. `env` (the POSIX env over the app's transport) and
 // `deriver` (null: no recipe rebuild) outlive the process. False when the channel does not run (its refusal or not_configured is

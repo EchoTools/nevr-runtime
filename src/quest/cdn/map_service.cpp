@@ -84,6 +84,22 @@ std::string NowUtc() {
   return text;
 }
 
+namespace {
+
+// The game's stock lookup as a StockView; `context` must outlive the call it is used in.
+struct HasContext {
+  bool (*has)(std::uint64_t type, std::uint64_t name);
+};
+nevr_resource_sets::StockView StockOf(HasContext* context, std::uint64_t records) {
+  nevr_resource_sets::StockView stock;
+  stock.has = [](void* ctx, std::uint64_t type, std::uint64_t name) { return static_cast<HasContext*>(ctx)->has(type, name); };
+  stock.ctx = context;
+  stock.records = records;
+  return stock;
+}
+
+}  // namespace
+
 bool MountWhenManifestReady(std::uint64_t (*records)(), bool (*has)(std::uint64_t type, std::uint64_t name),
                             void (*publish)(const nevr_shadow::Shadow*), std::uint32_t wait_ms,
                             const std::function<bool()>& keep_going) {
@@ -100,15 +116,16 @@ bool MountWhenManifestReady(std::uint64_t (*records)(), bool (*has)(std::uint64_
     std::this_thread::sleep_for(std::chrono::milliseconds(kPollMs));
     waited += kPollMs;
   }
-  struct HasContext {
-    bool (*has)(std::uint64_t type, std::uint64_t name);
-  };
   HasContext context{has};
-  nevr_resource_sets::StockView stock;
-  stock.has = [](void* ctx, std::uint64_t type, std::uint64_t name) { return static_cast<HasContext*>(ctx)->has(type, name); };
-  stock.ctx = &context;
-  stock.records = records();
-  return map_sets::Mount(stock, publish).sets != 0;
+  return map_sets::Mount(StockOf(&context, records()), publish).sets != 0;
+}
+
+bool MountLaterNow(std::uint64_t (*records)(), bool (*has)(std::uint64_t type, std::uint64_t name),
+                   void (*publish)(const nevr_shadow::Shadow*)) {
+  const std::uint64_t count = records();
+  if (count == 0) return false;
+  HasContext context{has};
+  return map_sets::MountLater(StockOf(&context, count), publish).sets != 0;
 }
 
 bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_maps::Deriver* deriver) noexcept {
@@ -163,8 +180,22 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
     };
     nevr_map_channel::ServeSessionRequests(*state->requests, fetch, list, &nevr_map_session_pin::SetChannelView, keep_going);
     const nevr_map_channel::Seams seams = nevr_map_channel::RecordedGroupSeams(*state->env, state->channel->config().dir);
-    state->channel->FetchPass(*state->env, state->fs, deriver, nevr_map_channel::FetchGroups(Ask(seams.recorded_groups)), NowUtc(),
-                              keep_going);
+    const std::vector<std::string> groups = nevr_map_channel::FetchGroups(Ask(seams.recorded_groups));
+    const std::vector<nevr_maps::FetchReport> reports = state->channel->FetchPass(*state->env, state->fs, deriver, groups, NowUtc(), keep_going);
+    // What the pass stored mounts in this run (ADR 0048 decision 16), on this thread: the cache mount grants each map's set, the
+    // registry mounts it beside the earlier ones and the resolver is given the one new shadow.
+    std::vector<std::string> stored;
+    for (const nevr_maps::FetchReport& report : reports) {
+      if (report.outcome != nevr_maps::FetchOutcome::kFailed && report.maps_updated != 0) stored.push_back(report.group);
+    }
+    if (stored.empty()) return;
+    const nevr_maps::MountReport mounted = state->channel->MountGroups(stored, NowUtc());
+    g_granted_owners().clear();  // the observer decides the grants of this mount only
+    for (const std::string& id : mounted.mounted) {
+      g_granted_owners().push_back(std::string(nevr_resource_sets::kMapOwnerPrefix) + id);
+    }
+    nevr_config_alias::InstallIfStaged();
+    MountLaterNow(&resource_request::GameManifestRecords, &resource_request::GameManifestHolds, &resource_request::PublishMapSets);
   };
   state->worker = std::make_unique<nevr_map_channel::FetchWorker>(std::move(pass), [state] { return state->env->NowMs(); });
   // The wake is set before the worker starts: a request queued from here on is taken by the first pass, or its wake reaches a started worker.

@@ -195,15 +195,15 @@ constexpr std::uint64_t kLevel = 0x7691d78d414c5701ULL;  // mpl_arena_a_lowspec
 constexpr std::uint64_t kComponent = 0x1111222233334444ULL, kPart = 0x55;
 
 // The valid-set fixture (synthetic): an Android level root, its archive listing one record, and that record.
-std::string ValidSet() {
+std::string ValidSet(std::uint64_t level = kLevel, std::uint64_t component = kComponent) {
   std::string archive(4 + 4 + 16, '\0');
   PutLe(&archive, 0, 4, 0);  // no dependencies
   PutLe(&archive, 4, 4, 1);
-  PutLe(&archive, 8, 8, kComponent);
+  PutLe(&archive, 8, 8, component);
   PutLe(&archive, 16, 8, kPart);
-  return BuildSet({{{rs::kAndroidTypes.archive, kLevel}, archive},
-                   {{kComponent, kPart}, std::string(300, 'c')},
-                   {{rs::kAndroidTypes.level_root, kLevel}, std::string(64, 'r')}});
+  return BuildSet({{{rs::kAndroidTypes.archive, level}, archive},
+                   {{component, kPart}, std::string(300, 'c')},
+                   {{rs::kAndroidTypes.level_root, level}, std::string(64, 'r')}});
 }
 
 void AnAndroidTypedMapSetMountsAndItsRecordsAreServed() {
@@ -266,10 +266,60 @@ void AMountWithNothingHeldCallsTheObserverOncePublishesNothingAndClosesRegistrat
   QCHECK(published == 0);
   QCHECK(ms::Mount(stock, &Publish).sets == 0);
   QCHECK(observed == 1);
-  const int fd = ::open(TempFile("late", "abc").c_str(), O_RDONLY);
-  QCHECK(ms::RegisterFileResourceSet(Request(), fd).refusal == rs::Refusal::kTooLate);
+  // A map's set registered after the first mount is held for the later mount, not refused.
+  const int fd = ::open(TempFile("late", ValidSet()).c_str(), O_RDONLY);
+  QCHECK(ms::RegisterFileResourceSet(Request(), fd).ok());
   QCHECK(StillOpen(fd));
-  ::close(fd);
+}
+
+constexpr std::uint64_t kLevel2 = 0x7691d78d414c5702ULL, kComponent2 = 0x2222333344445555ULL;
+
+void ALaterMountPublishesOneShadowOfEveryMountedSetAndTellsTheObserver() {
+  ms::ResetForTest();
+  observed = 0;
+  published = 0;
+  g_published = nullptr;
+  ms::SetMountObserver(&Observer);
+  rs::StockView stock;
+  stock.has = &NoStock;
+  stock.records = 1;
+  const int first = ::open(TempFile("first", ValidSet()).c_str(), O_RDONLY);
+  QCHECK(ms::RegisterFileResourceSet(Request(), first).ok());
+  QCHECK(ms::Mount(stock, &Publish).sets == 1);
+  const nevr_shadow::Shadow* earlier = g_published;
+  QCHECK(earlier != nullptr && published == 1 && observed == 1);
+  const int second = ::open(TempFile("second", ValidSet(kLevel2, kComponent2)).c_str(), O_RDONLY);
+  QCHECK(ms::RegisterFileResourceSet(Request("map:other", "map:other@1"), second).ok());
+  QCHECK(published == 1);  // registered, not mounted: nothing is served from it yet
+  const rs::MountReport report = ms::MountLater(stock, &Publish);
+  QCHECK(report.sets == 1 && report.earlier_sets == 1 && report.refused == 0);
+  QCHECK(observed == 2 && observedSets == 1);
+  QCHECK(published == 2 && g_published != nullptr && g_published != earlier);
+  nevr_shadow::Found found;
+  QCHECK(g_published->Find(rs::kAndroidTypes.level_root, kLevel, &found));  // the earlier set is in the one new shadow
+  QCHECK(g_published->Find(rs::kAndroidTypes.level_root, kLevel2, &found) && found.handle == second);
+  QCHECK(ms::MountedLevelNames().size() == 2);
+  QCHECK(Field(Last("map_set_mount"), "later") == "true");
+  QCHECK(Field(Last("map_set_mount"), "result") == "mounted");
+  // Nothing pending: the observer is told, and no new shadow is published.
+  QCHECK(ms::MountLater(stock, &Publish).sets == 0);
+  QCHECK(observed == 3 && published == 2);
+}
+
+void ALaterMountBeforeTheFirstOrAfterAbandonIsEmptyAndSilent() {
+  ms::ResetForTest();
+  observed = 0;
+  published = 0;
+  ms::SetMountObserver(&Observer);
+  rs::StockView stock;
+  stock.has = &NoStock;
+  stock.records = 1;
+  QCHECK(ms::MountLater(stock, &Publish).sets == 0);
+  QCHECK(observed == 0 && published == 0);
+  ms::Abandon();
+  QCHECK(observed == 1);
+  QCHECK(ms::MountLater(stock, &Publish).sets == 0);
+  QCHECK(observed == 1 && published == 0);
 }
 
 void AbandonCallsTheObserverWithAnEmptyReportAndLaterRegistrationsAreTooLate() {
@@ -299,6 +349,8 @@ int main() {
   TheArgumentRefusalsAreThePcsAndTheCallerKeepsTheDescriptor();
   AnEmptyFileAndADirectoryAreFormat();
   AMountWithNothingHeldCallsTheObserverOncePublishesNothingAndClosesRegistration();
+  ALaterMountPublishesOneShadowOfEveryMountedSetAndTellsTheObserver();
+  ALaterMountBeforeTheFirstOrAfterAbandonIsEmptyAndSilent();
   AbandonCallsTheObserverWithAnEmptyReportAndLaterRegistrationsAreTooLate();
   DropMapIsForMapOwnersBeforeTheMountOnly();
   AWithdrawnMapClosesItsDescriptorAndItsKeysAreFree();

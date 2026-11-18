@@ -115,7 +115,7 @@ Outcome RegisterFileResourceSet(const MapFileRequest& request, std::int64_t held
       [] {
         State& st = Shared();
         std::lock_guard<std::mutex> lock(st.mutex);
-        return st.registry.mounted();
+        return st.registry.abandoned();  // a map's set is still taken after the first mount (MountLater, ADR 0048 decision 16)
       },
       [&](const void* view, std::uint64_t size) {
         State& st = Shared();
@@ -176,6 +176,43 @@ MountReport Mount(const StockView& stock, PublishFn publish) {
                        {"shadow", nevr_shadow::StatusName(report.shadow_status)}});
   g_observer.Notify(report);
   if (shadow != nullptr && publish != nullptr) publish(shadow);
+  return report;
+}
+
+MountReport MountLater(const StockView& stock, PublishFn publish) {
+  MountReport report;
+  const nevr_shadow::Shadow* shadow = nullptr;
+  {
+    State& st = Shared();
+    std::lock_guard<std::mutex> lock(st.mutex);
+    if (!st.registry.mounted() || st.registry.abandoned()) return report;  // the first mount takes every set registered by then
+    report = st.registry.MountLater(stock);  // changes nothing when no set is pending
+    shadow = st.registry.shadow();
+  }
+  CloseAll(report.handles_to_close);
+  for (const MountReport::Refused& r : report.refusals) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "map_set_mount",
+                        {{"result", "refused"},
+                         {"later", "true"},
+                         {"owner", r.plugin.c_str()},
+                         {"label", r.label.c_str()},
+                         {"reason", nevr_resource_sets::RefusalName(r.outcome.refusal)},
+                         {"detail", r.outcome.detail.c_str()},
+                         {"msg", "its levels are neither served nor listed as installed"}});
+  }
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "map_set_mount",
+                      {{"result", report.sets != 0 ? "mounted" : "none"},
+                       {"later", "true"},
+                       {"earlier_sets", static_cast<long long>(report.earlier_sets)},
+                       {"sets", static_cast<long long>(report.sets)},
+                       {"refused", static_cast<long long>(report.refused)},
+                       {"records", static_cast<long long>(report.records)},
+                       {"levels", static_cast<long long>(report.levels)},
+                       {"shadow", nevr_shadow::StatusName(report.shadow_status)}});
+  g_observer.NotifyLater(report);
+  // The new shadow holds every mounted set, so the resolver still asks one shadow; it is published after the observer, as the first
+  // mount's is, so a set the observer withdraws is never served.
+  if (report.sets != 0 && shadow != nullptr && publish != nullptr) publish(shadow);
   return report;
 }
 
