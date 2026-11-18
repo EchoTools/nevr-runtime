@@ -12,6 +12,7 @@
 #include "runtime/server/ended_session_watchdog.h"
 #include "runtime/server/main_thread_handoff.h"
 #include "runtime/server/server_context.h"
+#include "runtime/server/slot_index.h"
 #include "runtime/server/telemetry_streamer.h"
 #include "runtime/server/websocket_client.h"
 
@@ -121,10 +122,3 @@ void Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
 // Callback registration helpers
 uint16_t ListenForBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId, BOOL isMsgReliable, VOID* func);
-
-// Slot index extraction from message payloads
-struct SlotInfo {
-  uint16_t slot;
-  uint16_t genId;
-};
-SlotInfo ExtractSlotIndex(const void* msg, uint64_t msgSize);

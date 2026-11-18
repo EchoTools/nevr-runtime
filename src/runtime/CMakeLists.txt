@@ -418,6 +418,9 @@ set(PATCHES_HEADERS
     "hook/symbol_corpus.h"
     "server/gameserver.h"
     "server/gameserver_internal.h"
+    "server/guid_text.h"
+    "server/session_envelopes.h"
+    "server/slot_index.h"
     "server/registration_envelope.h"
     "server/server_context.h"
     "server/websocket_client.h"
@@ -2258,6 +2261,30 @@ if(BUILD_TESTING)
     target_link_libraries(test_symbol_hash PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_symbol_hash DISCOVERY_MODE PRE_TEST)
 
+    # The PC half of the published plugin SDK (sdk/include/nevr/pc/: safe_memory.h, hook_manager.h, nevr_common.h), on pages and
+    # files the test makes, under real MinHook. No game image.
+    add_executable(test_sdk_pc_headers tests/test_sdk_pc_headers.cpp)
+    set_source_files_properties(tests/test_sdk_pc_headers.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_sdk_pc_headers PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_sdk_pc_headers PRIVATE nevr::plugin_sdk GTest::gtest GTest::gtest_main minhook)
+    gtest_discover_tests(test_sdk_pc_headers DISCOVERY_MODE PRE_TEST)
+
+    # The game-log symbol resolver (log/symcache.cpp) against a table the test defines in place of the generated
+    # log/symcache_data.cpp.
+    add_executable(test_symcache tests/test_symcache.cpp log/symcache.cpp)
+    set_source_files_properties(tests/test_symcache.cpp log/symcache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_symcache PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_symcache PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_symcache DISCOVERY_MODE PRE_TEST)
+
+    # The envelopes GameServerLib sends for a session lock, unlock, accept and removal (server/session_envelopes.h), the
+    # GUID text they carry (server/guid_text.h) and the slot a broadcaster message names (server/slot_index.h). Header-only.
+    add_executable(test_server_session_envelopes tests/test_server_session_envelopes.cpp)
+    set_source_files_properties(tests/test_server_session_envelopes.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_server_session_envelopes PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_session_envelopes PRIVATE GTest::gtest GTest::gtest_main nevr_api)
+    gtest_discover_tests(test_server_session_envelopes DISCOVERY_MODE PRE_TEST)
+
     # P27 (#1774): the -noovr argument-lookup waiver decision (patch/cmdline_waiver.h; no Windows call).
     add_executable(test_cmdline_waiver tests/test_cmdline_waiver.cpp)
     set_source_files_properties(tests/test_cmdline_waiver.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -2596,6 +2623,29 @@ if(BUILD_TESTING)
     target_include_directories(test_combat_bullet_spawn PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_combat_bullet_spawn PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_combat_bullet_spawn DISCOVERY_MODE PRE_TEST)
+
+    # The Detours and __try shims of the EchoCombat ports (runtime/combat/cat_compat.cpp): the transaction, the fault handler and
+    # the settings reads, against the real HookGuard, write gate and MinHook, on hand-assembled targets.
+    add_executable(test_combat_cat_compat tests/test_combat_cat_compat.cpp combat/cat_compat.cpp combat/write_gate.cpp
+      hook/hook_guard.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_combat_cat_compat.cpp combat/cat_compat.cpp combat/write_gate.cpp
+      hook/hook_guard.cpp log/boot_log_tee.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_combat_cat_compat PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_combat_cat_compat PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_combat_cat_compat PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core
+      nlohmann_json::nlohmann_json nevr::plugin_sdk)
+    gtest_discover_tests(test_combat_cat_compat DISCOVERY_MODE PRE_TEST)
+
+    # FillRegistrationMetadata (server/registration_metadata.cpp) over an install this test lays out, with config.yaml, the combat
+    # module's features and the plugin level registrations stood in for.
+    add_executable(test_registration_metadata tests/test_registration_metadata.cpp server/registration_metadata.cpp
+      server/installed_levels.cpp)
+    set_source_files_properties(tests/test_registration_metadata.cpp server/registration_metadata.cpp
+      server/installed_levels.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_registration_metadata PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_registration_metadata PRIVATE GTest::gtest GTest::gtest_main nevr_core zstd::libzstd
+      nlohmann_json::nlohmann_json nevr_api nevr::plugin_sdk)
+    gtest_discover_tests(test_registration_metadata DISCOVERY_MODE PRE_TEST)
 
     # The combat module's group defaults and the balance transform's merge (runtime/combat): pure headers.
     add_executable(test_combat_settings tests/test_combat_settings.cpp)

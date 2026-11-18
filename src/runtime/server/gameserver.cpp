@@ -23,6 +23,7 @@
 #include "runtime/server/gameserver_internal.h"
 #include "runtime/server/join_hold.h"
 #include "runtime/server/session_demand.h"
+#include "runtime/server/session_envelopes.h"
 #include "runtime/server/protobuf_transport.h"
 #include "runtime/server/registration_envelope.h"
 #include "runtime/server/serialized_mint.h"
@@ -156,19 +157,6 @@ bool SendProtobufEnvelope(GameServerLib* self, const gameservice::v1::Envelope& 
         "[NEVR.GAMESERVER] Protobuf accepted into disconnected queue; ServerDB delivery is unconfirmed");
   }
   return nevr_game_server::IsProtobufSendAccepted(result);
-}
-
-// Extract slot index from message payload
-SlotInfo ExtractSlotIndex(const void* msg, uint64_t msgSize) {
-  SlotInfo info = {0, 0};
-  if (!msg || msgSize < sizeof(uint32_t)) return info;
-
-  uint32_t packed = 0;
-  std::memcpy(&packed, msg, sizeof(uint32_t));
-
-  info.slot = static_cast<uint16_t>(packed & SLOT_INDEX_MASK);
-  info.genId = static_cast<uint16_t>((packed >> SLOT_GEN_SHIFT) & SLOT_INDEX_MASK);
-  return info;
 }
 
 // --- GameServerLib Implementation ---
@@ -526,10 +514,8 @@ void GameServerLib::EndServerSession(nevr_server_timestep::SessionEndCause cause
 
 VOID GameServerLib::LockPlayerSessions() {
   if (m_context->IsSessionActive()) {
-    gameservice::v1::Envelope envelope;
-    auto* event = envelope.mutable_lobby_session_event();
-    event->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
-    event->set_code(gameservice::v1::LobbySessionEventMessage::CODE_LOCKED);
+    const gameservice::v1::Envelope envelope =
+        nevr_game_server::BuildSessionLockEnvelope(m_context->GetSessionState().lobbySessionId, true);
     if (!SendProtobufEnvelope(this, envelope)) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] protobuf serialize failed for LockPlayerSessions session_id=%s",
           m_context->GetSessionState().lobbySessionId.c_str());
@@ -542,10 +528,8 @@ VOID GameServerLib::LockPlayerSessions() {
 
 VOID GameServerLib::UnlockPlayerSessions() {
   if (m_context->IsSessionActive()) {
-    gameservice::v1::Envelope envelope;
-    auto* event = envelope.mutable_lobby_session_event();
-    event->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
-    event->set_code(gameservice::v1::LobbySessionEventMessage::CODE_UNLOCKED);
+    const gameservice::v1::Envelope envelope =
+        nevr_game_server::BuildSessionLockEnvelope(m_context->GetSessionState().lobbySessionId, false);
     if (!SendProtobufEnvelope(this, envelope)) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] protobuf serialize failed for UnlockPlayerSessions session_id=%s",
           m_context->GetSessionState().lobbySessionId.c_str());
@@ -558,12 +542,8 @@ VOID GameServerLib::UnlockPlayerSessions() {
 
 VOID GameServerLib::AcceptPlayerSessions(EchoVR::Array<GUID>* playerUuids) {
   if (m_context->IsSessionActive()) {
-    gameservice::v1::Envelope envelope;
-    auto* connected = envelope.mutable_lobby_entrant_connected();
-    connected->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
-    for (uint32_t i = 0; i < playerUuids->count; i++) {
-      connected->add_entrant_ids(GuidToUuidString(playerUuids->items[i]));
-    }
+    const gameservice::v1::Envelope envelope = nevr_game_server::BuildEntrantsConnectedEnvelope(
+        m_context->GetSessionState().lobbySessionId, playerUuids->items, static_cast<std::size_t>(playerUuids->count));
     if (!SendProtobufEnvelope(this, envelope)) {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.GAMESERVER] protobuf serialize failed for AcceptPlayerSessions session_id=%s count=%llu",
@@ -577,11 +557,8 @@ VOID GameServerLib::AcceptPlayerSessions(EchoVR::Array<GUID>* playerUuids) {
 
 VOID GameServerLib::RemovePlayerSession(GUID* playerUuid) {
   if (m_context->IsSessionActive()) {
-    gameservice::v1::Envelope envelope;
-    auto* removed = envelope.mutable_lobby_entrant_removed();
-    removed->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
-    removed->set_entrant_id(GuidToUuidString(*playerUuid));
-    removed->set_code(gameservice::v1::LobbyEntrantRemovedMessage::CODE_DISCONNECTED);
+    const gameservice::v1::Envelope envelope =
+        nevr_game_server::BuildEntrantRemovedEnvelope(m_context->GetSessionState().lobbySessionId, *playerUuid);
     if (!SendProtobufEnvelope(this, envelope)) {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.GAMESERVER] protobuf serialize failed for RemovePlayerSession entrant_id=%s",

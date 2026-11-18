@@ -1,5 +1,6 @@
 #include "runtime/server/registration_metadata.h"
 
+#include <winsock2.h>
 #include <windows.h>
 
 #include <cstddef>
@@ -41,8 +42,21 @@ std::string ConfigCsv(const char* flatKey) {
 // when every step has finished, so a failure leaves the caller's fields empty and the registration still
 // goes out with what the caller set.
 void FillRegistrationMetadata(RegistrationParams& params) {
+  std::filesystem::path exe;
   try {
-    const std::filesystem::path exe = GameExePath();
+    exe = GameExePath();
+  } catch (const std::exception& error) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.GAMESERVER] registration metadata failed (%s); registering without installed levels, regions, guilds or "
+        "features",
+        error.what());
+    return;
+  }
+  FillRegistrationMetadataForExe(exe, params);
+}
+
+void FillRegistrationMetadataForExe(const std::filesystem::path& exe, RegistrationParams& params) {
+  try {
     if (exe.empty()) {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.GAMESERVER] level manifests: the game's exe path is unavailable; no installed levels reported");
