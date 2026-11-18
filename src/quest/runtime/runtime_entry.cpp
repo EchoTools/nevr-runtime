@@ -33,6 +33,7 @@
 #include "core/update/core_ffi.h"
 #include "quest/runtime/update_wiring.h"
 #include "quest/redirect/hook_adapter.h"
+#include "quest/runtime/host_log_forward.h"
 #include "quest/sentinel/activation.h"
 #include "quest/sentinel/build_variant.h"
 #include "quest/sentinel/hook_log.h"
@@ -44,86 +45,21 @@ namespace {
 // The tag of the records this file writes: the runtime's own bootstrap (docs/standards/logging.md, NEVR.BOOT).
 constexpr char kBootTag[] = "NEVR.BOOT";
 
-// The most fields one forwarded record carries, which sizes the stack arrays of ForwardToHost; a longer list is cut and the record
-// says so (a `truncated` field).
-constexpr std::size_t kMaxForwardedFields = 48;
-// Digits of a long long, a sign and the terminator, with room to spare: an integer field's text.
-constexpr std::size_t kIntegerTextBytes = 24;
-// The keys the shim's RuntimeLog (sentinel/entry.cpp) turns back into the record's tag and message, and the field that marks a cut.
-constexpr char kTagKey[] = "tag";
-constexpr char kMessageKey[] = "message";
-constexpr char kTruncatedKey[] = "truncated";
-constexpr char kTruncatedValue[] = "true";
-
 // The shim's log (NevrQuestHostContext::log), set once by Initialize before the first record and read from any thread. Null: the
 // shim has none, or Initialize has not run.
 std::atomic<NevrQuestLogFn> g_hostLog{nullptr};
 
-// The level number of NevrQuestLogFn (core/quest_runtime_abi.h) for a sentinel level.
-std::uint32_t HostLevel(sentinel::LogLevel level) noexcept {
-  namespace rl = nevr_quest::runtime_load;
-  switch (level) {
-    case sentinel::LogLevel::kDebug: return rl::kLogLevelDebug;
-    case sentinel::LogLevel::kWarn: return rl::kLogLevelWarning;
-    case sentinel::LogLevel::kError: return rl::kLogLevelError;
-    case sentinel::LogLevel::kInfo: break;
-  }
-  return rl::kLogLevelInfo;
-}
-
-// The sink of this copy's records (sentinel::SetHostRecordSink): one record to the shim's log. The first field keyed "tag" is the
-// call's tag and the first keyed "message" its message, which is how the shim's RuntimeLog puts them back; every other field follows
-// in order. The ABI carries text only, so an integer field arrives as its decimal text. Returns true only when the shim's log was
-// called; false leaves the record to the copy's own writer, which here is logcat.
+// The sink of this copy's records (sentinel::SetHostRecordSink): one record to the shim's log, through the forwarding in
+// runtime/host_log_forward.h. Returns true only when the shim's log was called; false leaves the record to the copy's own writer,
+// which here is logcat.
 bool ForwardToHost(sentinel::LogLevel level, const char* event, const sentinel::LogField* fields, std::size_t count) {
-  const NevrQuestLogFn hostLog = g_hostLog.load(std::memory_order_acquire);
-  if (hostLog == nullptr) return false;
-  NevrQuestLogField forwarded[kMaxForwardedFields + 1];  // one more than the cap: the cut marker
-  char integers[kMaxForwardedFields][kIntegerTextBytes];
-  const char* tag = nullptr;
-  const char* message = nullptr;
-  std::uint32_t kept = 0;
-  bool truncated = false;
-  for (std::size_t i = 0; i < count; ++i) {
-    if (i >= kMaxForwardedFields) {
-      truncated = true;
-      break;
-    }
-    const sentinel::LogField& field = fields[i];
-    if (field.key == nullptr) continue;
-    const char* value = field.text;
-    if (value == nullptr) {
-      std::snprintf(integers[i], sizeof(integers[i]), "%lld", field.number);
-      value = integers[i];
-    }
-    if (tag == nullptr && std::strcmp(field.key, kTagKey) == 0) {
-      tag = value;
-    } else if (message == nullptr && std::strcmp(field.key, kMessageKey) == 0) {
-      message = value;
-    } else {
-      forwarded[kept++] = NevrQuestLogField{field.key, value};
-    }
-  }
-  if (truncated) forwarded[kept++] = NevrQuestLogField{kTruncatedKey, kTruncatedValue};
-  hostLog(HostLevel(level), tag, event, message, forwarded, kept);
-  return true;
+  return nevr_quest::host_log_forward::ForwardRecord(g_hostLog.load(std::memory_order_acquire), level, event, fields, count);
 }
 
 std::int32_t Initialize(const NevrQuestHostContext* host) noexcept;
 
 // An address inside this library, for the read of the running runtime (update_wiring.h, ReadRunningRuntime).
 constexpr char kInThisLibrary = 0;
-
-// The sentinel level of an update engine level (core/update/engine_check.h: 0 debug, 1 info, 2 warning, 3 error).
-sentinel::LogLevel UpdateLevel(int level) noexcept {
-  switch (level) {
-    case nevr_update::kDebug: return sentinel::LogLevel::kDebug;
-    case nevr_update::kWarning: return sentinel::LogLevel::kWarn;
-    case nevr_update::kError: return sentinel::LogLevel::kError;
-    default: break;
-  }
-  return sentinel::LogLevel::kInfo;
-}
 
 // Starts the update worker once the constructor sequence has run, so the frame dispatcher exists (update_wiring.h). The inputs are the
 // runtime's own: the build, the config's `update:` section, the host's capability bit and update root, and the core install method
@@ -149,7 +85,8 @@ void StartUpdateWorker(const NevrQuestHostContext* host) noexcept {
     return nevr_quest::update_wiring::ReadRunningRuntime(&kInThisLibrary, nevr_build::kVersion, version, sha256, error);
   };
   in.log = [](int level, const std::string& line) {
-    sentinel::LogFields(UpdateLevel(level), "update", {{"tag", "NEVR.UPDATE"}, {"message", line.c_str()}});
+    sentinel::LogFields(nevr_quest::host_log_forward::UpdateLevel(level), "update",
+                        {{"tag", "NEVR.UPDATE"}, {"message", line.c_str()}});
   };
   in.now_ms = [] {
     timespec now{};

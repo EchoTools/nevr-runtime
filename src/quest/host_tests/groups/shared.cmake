@@ -176,6 +176,10 @@ nevr_ht_test(update_wiring_test GROUP shared HOST DL PTHREAD
   SRC src/quest/tests/update_wiring_test.cpp src/quest/runtime/update_wiring.cpp src/core/update/engine_check.cpp
       src/core/update/policy.cpp src/core/update/worker.cpp src/core/update/names.cpp src/core/update/fs_posix.cpp
       src/quest/data/sha256.cpp)
+# How the Quest runtime library hands a record to the shim's log (runtime/host_log_forward.h): the level mappings, the lifted tag and
+# message, integer fields as text, a keyless field, and the cap.
+nevr_ht_test(host_log_forward_test GROUP shared
+  SRC src/quest/tests/host_log_forward_test.cpp)
 # The pending decision (ADR 0024, section 6, R2) over a fake UpdateFs: no file system, the same cases as the PC build.
 nevr_ht_test(engine_pending_test GROUP shared HOST GTEST PTHREAD
   SRC src/runtime/tests/engine_pending_test.cpp src/core/update/engine_start.cpp src/core/update/names.cpp)
