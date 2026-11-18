@@ -1,4 +1,5 @@
-// #2242 (H-WALL-a): the UMBRAL VEIL wall's decision and renew rule. See wall_script.h for the sites that are not installed.
+// #2242 (H-WALL-a, H-WALL-b): the UMBRAL VEIL wall's decisions, POINT's state, the mute rule, the FX queue writer and the renew
+// rule. See wall_script.h for the sites that are not installed.
 
 #include <winsock2.h>
 
@@ -9,6 +10,7 @@
 #include <cstring>
 
 #include "core/logging.h"
+#include "runtime/patch/ecfx_rules.h"
 
 namespace nevr_combat::wall_script {
 namespace {
@@ -21,6 +23,12 @@ constexpr std::array<std::uint8_t, kGlobalLenSize> MovEaxRet(std::uint32_t imm) 
 }
 constexpr std::array<std::uint8_t, kGlobalLenSize> kGlobalLenStockBytes = MovEaxRet(kGlobalLenStock);
 constexpr std::array<std::uint8_t, kGlobalLenSize> kGlobalLenPatchedBytes = MovEaxRet(kGlobalLenWithDecision);
+
+// The FX queue (ecfx_rules.h): a slot is { node, word }, a free slot has node 0, the word is entry | kind, and the kind is the
+// word's low two bits, so an entry is 16-aligned.
+constexpr std::uint64_t kFreeNode = 0;
+constexpr std::uint64_t kEntryAlignMask = 0xF;
+constexpr std::size_t kQueueWordsPerSlot = 2;
 
 // The two bytes a log line names: lowercase hex, two per byte, as logging.md Rule 6 writes them.
 void FormatBytes(const std::uint8_t* bytes, std::size_t n, char* out) {
@@ -43,7 +51,7 @@ const char* ConsequenceOf(nevr_checked_patch::Result result) {
 
 }  // namespace
 
-bool TakeVeilToken(std::uint8_t* token, std::uint64_t now) {
+bool TakeToken(std::uint8_t* token, std::uint64_t now) {
   auto* count = reinterpret_cast<std::int32_t*>(token + kTokenCount);
   const auto* expiry = reinterpret_cast<const std::uint64_t*>(token + kTokenExpiry);
   std::int32_t seen = __atomic_load_n(count, __ATOMIC_SEQ_CST);
@@ -59,6 +67,7 @@ Decision CellDecision(std::uint32_t cell) {
   const std::uint32_t byte = cell & kDecisionMask;
   if (byte == static_cast<std::uint32_t>(Decision::kVeil)) return Decision::kVeil;
   if (byte == static_cast<std::uint32_t>(Decision::kBarrier)) return Decision::kBarrier;
+  if (byte == static_cast<std::uint32_t>(Decision::kPoint)) return Decision::kPoint;
   return Decision::kUndecided;
 }
 
@@ -72,7 +81,8 @@ Verdict Decide(std::uint8_t* token, std::uint32_t& cell, std::uint64_t now, bool
   const Decision kept = CellDecision(cell);
   if (kept == Decision::kVeil) return Verdict::kVeil;
   if (kept == Decision::kBarrier) return Verdict::kBarrier;
-  if (TakeVeilToken(token, now)) {
+  if (kept == Decision::kPoint) return Verdict::kPoint;
+  if (TakeToken(token, now)) {
     cell = WithDecision(cell, Decision::kVeil);
     return Verdict::kVeil;
   }
@@ -80,6 +90,45 @@ Verdict Decide(std::uint8_t* token, std::uint32_t& cell, std::uint64_t now, bool
   cell = WithDecision(cell, Decision::kBarrier);
   __atomic_fetch_add(reinterpret_cast<std::int32_t*>(token + kTokenBarriers), 1, __ATOMIC_SEQ_CST);
   return Verdict::kBarrier;
+}
+
+Verdict DecideWithPoint(std::uint8_t* pointToken, std::uint8_t* veilToken, std::uint32_t& cell, std::uint64_t now,
+                        bool decideForGood) {
+  // An undecided wall tries the point token first; a decided one keeps its decision and takes nothing (Decide returns it).
+  if (CellDecision(cell) == Decision::kUndecided && TakeToken(pointToken, now)) {
+    cell = WithDecision(cell, Decision::kPoint);
+    return Verdict::kPoint;
+  }
+  return Decide(veilToken, cell, now, decideForGood);
+}
+
+bool MutesSound(Decision decision) { return decision == Decision::kVeil || decision == Decision::kPoint; }
+
+std::uint32_t PointStartStamp(std::uint64_t now) { return static_cast<std::uint32_t>(now) | kPointStampBit; }
+
+bool PointIsCharging(std::uint32_t state) { return state != kPointNotStarted && state != kPointGoneOff; }
+
+std::uint32_t PointElapsed(std::uint32_t state, std::uint64_t now) {
+  return (static_cast<std::uint32_t>(now) | kPointStampBit) - state;
+}
+
+bool PointChargeDone(std::uint32_t state, std::uint64_t now, std::uint32_t delay) {
+  return PointIsCharging(state) && PointElapsed(state, now) >= delay;
+}
+
+EnqueueResult EnqueueWallFx(std::uint64_t* queue, std::uint64_t ctx, std::uint64_t entry, int kind) {
+  if (ctx == kFreeNode) return EnqueueResult::kNoNode;
+  if (kind < nevr_ecfx::kCharge || kind > nevr_ecfx::kSound) return EnqueueResult::kBadKind;
+  if (entry == 0) return EnqueueResult::kNoEntry;
+  if ((entry & kEntryAlignMask) != 0) return EnqueueResult::kMisaligned;
+  for (int i = 0; i < nevr_ecfx::kSlots; ++i) {
+    std::uint64_t* node = queue + kQueueWordsPerSlot * static_cast<std::size_t>(i);
+    std::uint64_t expected = kFreeNode;
+    if (!__atomic_compare_exchange_n(node, &expected, ctx, /*weak=*/false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) continue;
+    __atomic_store_n(node + 1, entry | static_cast<std::uint64_t>(kind), __ATOMIC_RELEASE);
+    return EnqueueResult::kQueued;
+  }
+  return EnqueueResult::kFull;
 }
 
 bool NewLife(std::uint32_t& cell, std::uint64_t now, std::uint32_t afterUnits) {
@@ -94,6 +143,12 @@ bool RenewOnEntry(std::uint32_t& cell, bool aborting, std::uint64_t now, std::ui
   if (!NewLife(cell, now, afterUnits)) return false;
   cell = WithDecision(cell, Decision::kUndecided);
   return true;
+}
+
+void Register() {
+  Log(EchoVR::LogLevel::Warning,
+      "[NEVR.COMBAT] point wall not installed hooks=0 reason=code_caves_needed consequence=no wall takes a point token or goes "
+      "off as POINT in this build: its sites are NOT DONE (KNOWN-WRONG #2760)");
 }
 
 nevr_checked_patch::Site GlobalLenSite() {

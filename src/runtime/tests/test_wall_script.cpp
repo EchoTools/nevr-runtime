@@ -1,4 +1,5 @@
-// #2242 (H-WALL-a): the barrier wall's veil decision and renew rule (runtime/combat/wall_script.h). The decision is pure, so
+// #2242 (H-WALL-a, H-WALL-b): the barrier wall's veil and point decisions, its renew rule and the checked global-length patch
+// (runtime/combat/wall_script.h). The decisions are pure, so
 // the tests drive it on buffers: the veil token block (count, expiry, shown, barriers), the wall's cell (one dword: the
 // decision in its low byte, the renew clock above it) and the checked global-length patch at 0x5CC0. The patch runs on a
 // fake script image that holds the stock bytes; nothing is executed and no game image is read.
@@ -18,6 +19,7 @@
 
 #include "core/logging.h"
 #include "runtime/combat/wall_script.h"
+#include "runtime/patch/ecfx_rules.h"
 
 namespace wall = nevr_combat::wall_script;
 namespace checked = nevr_checked_patch;
@@ -124,7 +126,7 @@ TEST(WallScriptCell, TheDecisionIsTheLowByte) {
 
 TEST(WallScriptCell, AByteThatIsNoDecisionReadsAsUndecided) {
   // Only the low byte is the decision: a clock in the upper bits does not change it, and any other low byte is undecided.
-  EXPECT_EQ(wall::CellDecision(0x12345603u), wall::Decision::kUndecided);
+  EXPECT_EQ(wall::CellDecision(0x12345604u), wall::Decision::kUndecided);
   EXPECT_EQ(wall::CellDecision(0x00000201u), wall::Decision::kVeil);
 }
 
@@ -336,12 +338,17 @@ TEST(WallScriptRecord, AMismatchRecordHasNoWriteError) {
 namespace {
 
 std::vector<std::string> g_logged;
-void CaptureLog(EchoVR::LogLevel, const CHAR* message) { g_logged.emplace_back(message); }
+std::vector<EchoVR::LogLevel> g_levels;
+void CaptureLog(EchoVR::LogLevel level, const CHAR* message) {
+  g_logged.emplace_back(message);
+  g_levels.push_back(level);
+}
 
 // Captures every Log() line of the test, and detaches the sink when the test ends.
 struct CaptureScope {
   CaptureScope() {
     g_logged.clear();
+    g_levels.clear();
     SetBootLogSink(&CaptureLog);
   }
   ~CaptureScope() { SetBootLogSink(nullptr); }
@@ -384,4 +391,275 @@ TEST(WallScriptLog, AFailedWriteNamesTheWriterErrorInTheLine) {
   ASSERT_EQ(g_logged.size(), 1u);
   EXPECT_NE(g_logged[0].find(" result=write_failed write_error=5 "), std::string::npos) << g_logged[0];
   EXPECT_NE(g_logged[0].find("consequence="), std::string::npos) << g_logged[0];
+}
+
+// --- H-WALL-b (#2242): the point token, the mute, POINT's state, the FX queue writer and the registration record -----------
+// Values pinned from the records (veil_fx.py, ec_rules.h, dronefix.cpp): each is a test, not a run.
+
+namespace ecfx = nevr_ecfx;
+
+namespace {
+
+constexpr std::uint32_t kExpectedPointTokenRva = 0x2104CE0;     // the EC page's point token block (ec_rules.h kPointTok)
+constexpr std::uint32_t kExpectedFxQueueRva = 0x2104DA0;        // FX_QUEUE_RVA (veil_fx.py:656; dronefix.cpp:443)
+constexpr std::uint32_t kExpectedFxDeferRva = 0x2104E20;        // FX_DEFER_RVA (veil_fx.py:658; dronefix.cpp:444)
+constexpr std::uint32_t kExpectedPointFiredRva = 0x2104D44;     // POINT_FIRED_RVA (veil_fx.py:561)
+constexpr std::uint32_t kExpectedPointStateOffset = 0x15C;      // POINT_STATE = GLOBAL_LEN + 4 (veil_fx.py:576)
+constexpr std::uint64_t kEntryA = 0x180001000ULL;               // a 16-aligned entry: the drain takes the kind from its low bits
+constexpr std::uint64_t kEntryB = 0x180002230ULL;               // another 16-aligned entry
+constexpr std::uint64_t kMisalignedEntry = 0x180001008ULL;      // low nibble 8: the kind would read as another kind
+constexpr std::uint64_t kCtxA = 0x700000001000ULL;              // a wall's node: any non-zero value
+constexpr std::uint64_t kCtxB = 0x700000002000ULL;
+constexpr std::uint32_t kPointDelay = 1000000;                  // 0.1 s in 100 ns ticks; a multiple of 4 (see the charge test)
+constexpr std::uint64_t kWrapNow = 0x100000100ULL;              // low dword 0x100, after the wrap of the low dword
+constexpr std::uint32_t kWrapStart = 0xFFFFFF00U;               // the charge-up started just before the wrap
+constexpr std::uint32_t kWrapElapsed = 0x200;                   // kWrapNow - kWrapStart, in 100 ns ticks
+constexpr int kKindCount = 4;                                   // charge, burst, boom, sound
+constexpr std::uint64_t kSlotCount = ecfx::kSlots;
+
+// A fake FX queue: the six { node, word } slots of the EC page, all free.
+struct FakeQueue {
+  std::uint64_t words[2 * ecfx::kSlots] = {};
+  bool AllFree() const {
+    for (std::uint64_t w : words) {
+      if (w != 0) return false;
+    }
+    return true;
+  }
+};
+
+// One entry the drain ran.
+struct Ran {
+  std::uint64_t ctx;
+  std::uint64_t fn;
+  int kind;
+};
+
+// The wall a sound's node belongs to: the drain reads it from the node (nevr_ecfx::Env::wallOf). The test's node is its own wall.
+std::uint64_t WallOfNode(std::uint64_t ctx) { return ctx; }
+
+// Runs one shipping drain over `queue` and returns the entries it ran.
+std::vector<Ran> Drain(std::uint64_t* queue) {
+  ecfx::Drain drain;
+  ecfx::Env env;
+  env.wallOf = &WallOfNode;
+  ecfx::Counts counts;
+  std::vector<Ran> ran;
+  drain.Plan(queue, env, /*nowMs=*/100, [&ran](const ecfx::Run& r) { ran.push_back(Ran{r.ctx, r.fn, r.kind}); }, &counts);
+  return ran;
+}
+
+}  // namespace
+
+TEST(WallScriptPins, PointTokenAndFxQueueAreTheRecordsOffsets) {
+  EXPECT_EQ(wall::kPointTokenRva, kExpectedPointTokenRva);
+  EXPECT_EQ(wall::kFxQueueRva, kExpectedFxQueueRva);
+  EXPECT_EQ(wall::kFxDeferRva, kExpectedFxDeferRva);
+  EXPECT_EQ(wall::kPointFiredRva, kExpectedPointFiredRva);
+  EXPECT_EQ(wall::kPointStateOffset, kExpectedPointStateOffset);
+  EXPECT_EQ(kSlotCount, 6u);
+}
+
+TEST(WallScriptCell, PointIsItsOwnDecisionAndKeepsTheClock) {
+  constexpr std::uint32_t kClock = 7;
+  const std::uint32_t cell = wall::WithDecision(kClock << 8, wall::Decision::kPoint);
+  EXPECT_EQ(wall::CellDecision(cell), wall::Decision::kPoint);
+  EXPECT_EQ(wall::CellClock(cell), kClock);
+}
+
+// --- the point token: a point wall takes it first; +10 of POINT's own block --------------------------------------------
+
+TEST(WallScriptPoint, AHeldPointTokenIsTakenFirstAndCountsPlusTenOfItsBlock) {
+  FakeToken point = HeldToken(1, kNow + 1000);
+  FakeToken veil = HeldToken(1, kNow + 1000);
+  std::uint32_t cell = 0;
+  EXPECT_EQ(wall::DecideWithPoint(point.bytes, veil.bytes, cell, kNow, /*decideForGood=*/false), wall::Verdict::kPoint);
+  EXPECT_EQ(wall::CellDecision(cell), wall::Decision::kPoint);
+  EXPECT_EQ(point.Count(), 0);
+  EXPECT_EQ(point.Shown(), 1);  // +10 of POINT's block: a wall that went off as POINT
+  EXPECT_EQ(veil.Count(), 1);   // the veil's token is not touched
+  EXPECT_EQ(veil.Shown(), 0);
+}
+
+TEST(WallScriptPoint, WithNoPointTokenTheVeilTokenIsTaken) {
+  FakeToken point = HeldToken(0, kNow + 1000);
+  FakeToken veil = HeldToken(1, kNow + 1000);
+  std::uint32_t cell = 0;
+  EXPECT_EQ(wall::DecideWithPoint(point.bytes, veil.bytes, cell, kNow, /*decideForGood=*/false), wall::Verdict::kVeil);
+  EXPECT_EQ(wall::CellDecision(cell), wall::Decision::kVeil);
+  EXPECT_EQ(veil.Count(), 0);
+  EXPECT_EQ(veil.Shown(), 1);
+  EXPECT_EQ(point.Shown(), 0);
+}
+
+TEST(WallScriptPoint, ADecidedWallKeepsItsVeilAndTakesNoPointToken) {
+  // A decided wall takes nothing: a held point token stays held for the next undecided wall.
+  FakeToken point = HeldToken(1, kNow + 1000);
+  FakeToken veil = HeldToken(1, kNow + 1000);
+  std::uint32_t cell = wall::WithDecision(0, wall::Decision::kVeil);
+  EXPECT_EQ(wall::DecideWithPoint(point.bytes, veil.bytes, cell, kNow, /*decideForGood=*/true), wall::Verdict::kVeil);
+  EXPECT_EQ(wall::CellDecision(cell), wall::Decision::kVeil);
+  EXPECT_EQ(point.Count(), 1);
+  EXPECT_EQ(point.Shown(), 0);
+  EXPECT_EQ(veil.Count(), 1);
+}
+
+TEST(WallScriptPoint, AnExpiredPointTokenIsNotTakenAndTheBarrierCountIsTheVeilsPlusFourteen) {
+  FakeToken point = HeldToken(1, kNow - 1);  // expired one tick ago
+  FakeToken veil = HeldToken(0, kNow + 1000);
+  std::uint32_t cell = 0;
+  EXPECT_EQ(wall::DecideWithPoint(point.bytes, veil.bytes, cell, kNow, /*decideForGood=*/true), wall::Verdict::kBarrier);
+  EXPECT_EQ(point.Count(), 1);
+  EXPECT_EQ(point.Shown(), 0);
+  EXPECT_EQ(point.Barriers(), 0);
+  EXPECT_EQ(veil.Barriers(), 1);  // +14 is the veil block's, for a barrier, as in Decide
+}
+
+TEST(WallScriptPoint, ALookWithNoTokenLeavesThePointWallUndecided) {
+  FakeToken point = HeldToken(0, kNow + 1000);
+  FakeToken veil = HeldToken(0, kNow + 1000);
+  std::uint32_t cell = 0;
+  EXPECT_EQ(wall::DecideWithPoint(point.bytes, veil.bytes, cell, kNow, /*decideForGood=*/false), wall::Verdict::kUndecided);
+  EXPECT_EQ(wall::CellDecision(cell), wall::Decision::kUndecided);
+  EXPECT_EQ(point.Shown(), 0);
+  EXPECT_EQ(veil.Barriers(), 0);
+}
+
+TEST(WallScriptPoint, ADecidedWallKeepsItsDecisionAndTakesNoToken) {
+  FakeToken point = HeldToken(1, kNow + 1000);
+  FakeToken veil = HeldToken(1, kNow + 1000);
+  std::uint32_t cell = wall::WithDecision(0, wall::Decision::kVeil);
+  EXPECT_EQ(wall::DecideWithPoint(point.bytes, veil.bytes, cell, kNow, /*decideForGood=*/false), wall::Verdict::kVeil);
+  EXPECT_EQ(point.Count(), 1);  // a veil wall does not take a point token
+  EXPECT_EQ(veil.Count(), 1);
+  cell = wall::WithDecision(0, wall::Decision::kPoint);
+  EXPECT_EQ(wall::DecideWithPoint(point.bytes, veil.bytes, cell, kNow, /*decideForGood=*/false), wall::Verdict::kPoint);
+  EXPECT_EQ(point.Count(), 1);  // a point wall takes at most one token
+  EXPECT_EQ(veil.Count(), 1);
+}
+
+// --- the mute: a veil or point wall's own sounds are silent, a barrier's or undecided wall's pass through (veil_fx.py:614-622) ---
+
+TEST(WallScriptMute, AVeilAndAPointWallsOwnSoundIsMutedAndABarrierOrUndecidedOneIsNot) {
+  EXPECT_TRUE(wall::MutesSound(wall::Decision::kVeil));
+  EXPECT_TRUE(wall::MutesSound(wall::Decision::kPoint));
+  EXPECT_FALSE(wall::MutesSound(wall::Decision::kBarrier));
+  EXPECT_FALSE(wall::MutesSound(wall::Decision::kUndecided));
+}
+
+// --- POINT's state dword at +15Ch: 0 not started, 1 gone off, else the charge-up's start stamp ------------------------
+
+TEST(WallScriptPointState, AStartStampIsNeverTheNotStartedOrGoneOffState) {
+  for (std::uint64_t now : {0ULL, 1ULL, 2ULL, 3ULL, kNow, ~0ULL}) {
+    const std::uint32_t stamp = wall::PointStartStamp(now);
+    EXPECT_NE(stamp, wall::kPointNotStarted) << now;
+    EXPECT_NE(stamp, wall::kPointGoneOff) << now;
+  }
+}
+
+TEST(WallScriptPointState, AChargeStartedAtALowDwordOfZeroIsStillCharging) {
+  // veil_fx.py stamps `now | 1`, which at a low dword of 0 or 1 reads as gone off (1). The port's stamp never does.
+  const std::uint32_t state = wall::PointStartStamp(0);
+  EXPECT_TRUE(wall::PointIsCharging(state));
+  EXPECT_NE(state, wall::kPointGoneOff);
+}
+
+TEST(WallScriptPointState, NotStartedAndGoneOffAreNotCharging) {
+  EXPECT_FALSE(wall::PointIsCharging(wall::kPointNotStarted));
+  EXPECT_FALSE(wall::PointIsCharging(wall::kPointGoneOff));
+  EXPECT_TRUE(wall::PointIsCharging(wall::PointStartStamp(kNow)));
+  EXPECT_FALSE(wall::PointChargeDone(wall::kPointGoneOff, kNow + kPointDelay, kPointDelay));
+}
+
+TEST(WallScriptPointState, TheChargeIsDoneAtItsDelayAndNotBefore) {
+  // kNow's low 20 bits are 0, so the stamp is exact; kPointDelay is a multiple of 4, so bit 1 of each later time is clear.
+  const std::uint32_t state = wall::PointStartStamp(kNow);
+  EXPECT_FALSE(wall::PointChargeDone(state, kNow + kPointDelay - 1, kPointDelay));
+  EXPECT_TRUE(wall::PointChargeDone(state, kNow + kPointDelay, kPointDelay));
+}
+
+TEST(WallScriptPointState, TheElapsedTimeIsKeptAcrossTheWrapOfTheLowDword) {
+  const std::uint32_t state = wall::PointStartStamp(kWrapStart);
+  EXPECT_EQ(wall::PointElapsed(state, kWrapNow), kWrapElapsed);
+  EXPECT_TRUE(wall::PointChargeDone(state, kWrapNow, kWrapElapsed));
+  EXPECT_FALSE(wall::PointChargeDone(state, kWrapNow, kWrapElapsed + 1));
+}
+
+// --- the FX queue: the wall writes an entry, the shipping drain (nevr_ecfx::Drain) runs it -------------------------------
+
+TEST(WallScriptFx, AQueuedEffectIsRunOnceByTheShippingDrainAndItsSlotIsFreed) {
+  FakeQueue queue;
+  ASSERT_EQ(wall::EnqueueWallFx(queue.words, kCtxA, kEntryA, ecfx::kBurst), wall::EnqueueResult::kQueued);
+  EXPECT_EQ(queue.words[0], kCtxA);
+  EXPECT_EQ(queue.words[1], kEntryA | static_cast<std::uint64_t>(ecfx::kBurst));
+  const std::vector<Ran> ran = Drain(queue.words);
+  ASSERT_EQ(ran.size(), 1u);
+  EXPECT_EQ(ran[0].ctx, kCtxA);
+  EXPECT_EQ(ran[0].fn, kEntryA);
+  EXPECT_EQ(ran[0].kind, ecfx::kBurst);
+  EXPECT_TRUE(queue.AllFree());
+}
+
+TEST(WallScriptFx, EveryKindIsStoredInTheLowTwoBitsAndRunAsItsKind) {
+  for (int kind = 0; kind < kKindCount; ++kind) {
+    FakeQueue queue;
+    ASSERT_EQ(wall::EnqueueWallFx(queue.words, kCtxB, kEntryB, kind), wall::EnqueueResult::kQueued) << kind;
+    EXPECT_EQ(queue.words[1], kEntryB | static_cast<std::uint64_t>(kind)) << kind;
+    const std::vector<Ran> ran = Drain(queue.words);
+    if (kind == ecfx::kBoom) {
+      // The drain frees a boom unrun (the stun boom is left to the server, nevr_ecfx::Drain::Plan): its slot is still freed.
+      EXPECT_TRUE(ran.empty());
+      EXPECT_TRUE(queue.AllFree());
+      continue;
+    }
+    ASSERT_EQ(ran.size(), 1u) << kind;
+    EXPECT_EQ(ran[0].kind, kind);
+    EXPECT_EQ(ran[0].fn, kEntryB);
+  }
+}
+
+TEST(WallScriptFx, AMisalignedEntryIsRefusedAndNothingIsQueued) {
+  FakeQueue queue;
+  EXPECT_EQ(wall::EnqueueWallFx(queue.words, kCtxA, kMisalignedEntry, ecfx::kBurst), wall::EnqueueResult::kMisaligned);
+  EXPECT_TRUE(queue.AllFree());
+  EXPECT_TRUE(Drain(queue.words).empty());
+}
+
+TEST(WallScriptFx, AZeroEntryAndAZeroNodeAreRefusedAndNothingIsQueued) {
+  FakeQueue queue;
+  EXPECT_EQ(wall::EnqueueWallFx(queue.words, kCtxA, 0, ecfx::kCharge), wall::EnqueueResult::kNoEntry);
+  EXPECT_EQ(wall::EnqueueWallFx(queue.words, 0, kEntryA, ecfx::kCharge), wall::EnqueueResult::kNoNode);
+  EXPECT_TRUE(queue.AllFree());
+}
+
+TEST(WallScriptFx, AKindOutsideTheFourIsRefused) {
+  FakeQueue queue;
+  EXPECT_EQ(wall::EnqueueWallFx(queue.words, kCtxA, kEntryA, kKindCount), wall::EnqueueResult::kBadKind);
+  EXPECT_EQ(wall::EnqueueWallFx(queue.words, kCtxA, kEntryA, -1), wall::EnqueueResult::kBadKind);
+  EXPECT_TRUE(queue.AllFree());
+}
+
+TEST(WallScriptFx, ASeventhEffectFindsTheQueueFullAndIsDropped) {
+  FakeQueue queue;
+  for (int i = 0; i < ecfx::kSlots; ++i) {
+    ASSERT_EQ(wall::EnqueueWallFx(queue.words, kCtxA + static_cast<std::uint64_t>(i), kEntryA, ecfx::kBoom),
+              wall::EnqueueResult::kQueued)
+        << i;
+  }
+  std::uint64_t before[2 * ecfx::kSlots];
+  std::memcpy(before, queue.words, sizeof before);
+  EXPECT_EQ(wall::EnqueueWallFx(queue.words, kCtxB, kEntryB, ecfx::kSound), wall::EnqueueResult::kFull);
+  for (int i = 0; i < 2 * ecfx::kSlots; ++i) EXPECT_EQ(queue.words[i], before[i]) << i;
+}
+
+// --- the registration record: W-REG's entry installs nothing and says so, once, at Warning -----------------------------
+
+TEST(WallScriptRegister, RegisterInstallsNothingAndWritesOneWarningThatSaysSo) {
+  CaptureScope capture;
+  wall::Register();
+  ASSERT_EQ(g_logged.size(), 1u);
+  EXPECT_NE(g_logged[0].find("[NEVR.COMBAT] point wall not installed hooks=0"), std::string::npos) << g_logged[0];
+  EXPECT_NE(g_logged[0].find("consequence="), std::string::npos) << g_logged[0];
+  ASSERT_EQ(g_levels.size(), 1u);
+  EXPECT_EQ(g_levels[0], EchoVR::LogLevel::Warning);
 }
