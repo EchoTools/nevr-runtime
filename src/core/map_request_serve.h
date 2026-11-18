@@ -46,4 +46,15 @@ inline void ServeSessionRequests(nevr_maps::MapRequests& requests, const GroupFe
   }
 }
 
+// The groups a background pass stored, which mount in this run after the pass (ADR 0048 decision 16): a group whose fetch did not fail
+// and that updated at least one map. The PC worker and the Quest worker both mount exactly these, so the decision is here and the host
+// test pins it.
+inline std::vector<std::string> StoredGroupsToMount(const std::vector<nevr_maps::FetchReport>& reports) {
+  std::vector<std::string> stored;
+  for (const nevr_maps::FetchReport& report : reports) {
+    if (report.outcome != nevr_maps::FetchOutcome::kFailed && report.maps_updated != 0) stored.push_back(report.group);
+  }
+  return stored;
+}
+
 }  // namespace nevr_map_channel

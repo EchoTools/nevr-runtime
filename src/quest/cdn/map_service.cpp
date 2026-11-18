@@ -202,10 +202,7 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
     const std::vector<nevr_maps::FetchReport> reports = state->channel->FetchPass(*state->env, state->fs, deriver, groups, NowUtc(), keep_going);
     // What the pass stored mounts in this run (ADR 0048 decision 16), on this thread: the cache mount grants each map's set, the
     // registry mounts it beside the earlier ones and the resolver is given the one new shadow.
-    std::vector<std::string> stored;
-    for (const nevr_maps::FetchReport& report : reports) {
-      if (report.outcome != nevr_maps::FetchOutcome::kFailed && report.maps_updated != 0) stored.push_back(report.group);
-    }
+    const std::vector<std::string> stored = nevr_map_channel::StoredGroupsToMount(reports);
     if (stored.empty()) return;
     MountGranted(state, stored, {});
   };

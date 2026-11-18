@@ -131,6 +131,33 @@ void AFailedRequestFetchMountsNothing() {
   QCHECK(mounts.empty());
 }
 
+// The background pass mounts the groups it stored (StoredGroupsToMount, the decision both workers call after a pass): a group whose fetch
+// did not fail and that updated a map. A failed fetch and a fetch that stored nothing are not mounted.
+void APassMountsOnlyTheGroupsItStored() {
+  constexpr const char* kStored = "11111111-2222-3333-4444-555555555555";
+  constexpr const char* kStoredLater = "66666666-7777-8888-9999-aaaaaaaaaaaa";
+  constexpr const char* kCachedOnly = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+  constexpr const char* kFailedGroup = "01234567-89ab-cdef-0123-456789abcdef";
+  nevr_maps::FetchReport stored;
+  stored.group = kStored;
+  stored.outcome = nevr_maps::FetchOutcome::kFetched;
+  stored.maps_updated = 2;
+  nevr_maps::FetchReport cached;
+  cached.group = kCachedOnly;
+  cached.outcome = nevr_maps::FetchOutcome::kCached;
+  nevr_maps::FetchReport failed;
+  failed.group = kFailedGroup;
+  failed.outcome = nevr_maps::FetchOutcome::kFailed;
+  failed.maps_updated = 3;  // a failed fetch that says it stored maps still mounts nothing
+  nevr_maps::FetchReport later;
+  later.group = kStoredLater;
+  later.outcome = nevr_maps::FetchOutcome::kFetched;
+  later.maps_updated = 1;
+  const std::vector<std::string> mount = nevr_map_channel::StoredGroupsToMount({stored, cached, failed, later});
+  QCHECK((mount == std::vector<std::string>{std::string(kStored), std::string(kStoredLater)}));
+  QCHECK(nevr_map_channel::StoredGroupsToMount({}).empty());
+}
+
 }  // namespace
 
 int main() {
@@ -139,6 +166,7 @@ int main() {
   AGroupRequestIsFetchedOnDemandThenListed();
   AMapRequestFetchesOnlyTheMapItAsksFor();
   AStoppingPassServesNoRequest();
+  APassMountsOnlyTheGroupsItStored();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "map_request_drain_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

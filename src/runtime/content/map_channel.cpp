@@ -453,8 +453,13 @@ void StartFetchUnguarded() {
         try {
           DrainRequests(st, keep_going);
           const Seams seams = RecordedGroupSeams(*st->env, st->channel->config().dir);
-          st->channel->FetchPass(*st->env, *st->fs, st->deriver.get(), FetchGroups(Ask(seams.recorded_groups)), NowUtc(),
-                                 keep_going);
+          const std::vector<nevr_maps::FetchReport> reports =
+              st->channel->FetchPass(*st->env, *st->fs, st->deriver.get(), FetchGroups(Ask(seams.recorded_groups)), NowUtc(), keep_going);
+          // What the pass stored mounts in this run (ADR 0048 decision 16), as the Quest's post-pass does (quest/cdn/map_service.cpp). The
+          // grant is registered here on the worker, and the registry mounts the sets on the game's next frame (MountLaterSets); nothing
+          // mounts under the loader lock. The decision of which groups is the core's (StoredGroupsToMount).
+          const std::vector<std::string> stored = nevr_map_channel::StoredGroupsToMount(reports);
+          if (!stored.empty()) InstallGrantedMap(st, st->channel->MountGroups(stored, NowUtc()));
         } catch (const std::exception& e) {
           Log(EchoVR::LogLevel::Warning,
               "[NEVR.MAPS] map_done reason=exception what=\"%s\" (the cache keeps what it had; the next pass starts over)", e.what());
