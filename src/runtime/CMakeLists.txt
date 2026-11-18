@@ -1738,6 +1738,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_yaml_config PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk)
     gtest_discover_tests(test_yaml_config DISCOVERY_MODE PRE_TEST)
 
+    # The equipment station's icon-key tables (runtime/combat/station_icon_keys.h): header-only data VeilNet binary-searches.
+    add_executable(test_station_icon_keys tests/test_station_icon_keys.cpp)
+    set_source_files_properties(tests/test_station_icon_keys.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_station_icon_keys PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_station_icon_keys PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_station_icon_keys DISCOVERY_MODE PRE_TEST)
+
     # Stable C-string storage and direct config-accessor failure-boundary tests.
     add_executable(test_service_config
       tests/test_service_config.cpp
