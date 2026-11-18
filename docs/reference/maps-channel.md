@@ -241,6 +241,26 @@ All records carry the tag `[NEVR.MAPS]`. The full table, with each event's field
 
 Map file contents are never logged. A script's bytes are never logged. A path or an owner is a quoted field.
 
+## Owner probes
+
+Three checks of the channel can only be answered by the running game. They are probes: code in `src/runtime/probe/` that is compiled
+only by the `mingw-map-probes` preset (CMake option `NEVR_MAP_PROBES`, which needs the plugin-developers' build), so no release
+`BugSplat64.dll` or `nevr-runtime.dll` carries one (`tools/verify_scenario_control_absent.py` looks for the `[NEVR.PROBE]` tag).
+Each stays off until `maps_probe.yaml` in the nEVR folder turns it on; the file is read once, at the game's first frame, and the
+probes run only on the supported `echovr.exe` build. Run them with the channel not configured (`map_start reason=not_configured`):
+the channel's session pin writes the same owner-JSON key as P-SKEW's server.
+
+| Probe | Key | What it answers |
+| --- | --- | --- |
+| P-RULES | `rules` | The main level, the net game state and the three zone point values the game caches from `mp_arena_rules`, logged when one changes. It reads memory only. |
+| P-SKEW | `skew`, `skew_expect` | A probe server pins every session to the symbol of `probe@2` through the owner-JSON setter. A client logs the level and pin it sees, the `loading level` transition and the level's first Enable. With `skew_expect: probe@<n>` or `missing` a client leaves, through the return-to-lobby path with the lobby-failure notice, when the pin is not the expected version. |
+| P-SUBLEVEL | `sublevel` | The game's two level tables (source A) against log-only detours on `CGameLevelResource::Enable` and `Disable` (source B): each successful call must show as an add or del in the enabled table on the next frame. |
+
+`tools/cmd/maps-probe` packages a probe build (`package`), installs it over an existing nEVR install with a backup of the three
+files it replaces (`install`) and puts them back from that backup (`restore`). The Quest has no probe: every probe reads or hooks a
+PC `echovr.exe` address and runs from the PC runtime's frame; the Quest's session pin and level hooks live in `src/quest/cdn/` and
+`src/quest/sentinel/` and have no measurement build.
+
 ## Known gaps, in one list
 
 Every `KNOWN-WRONG #TBD` on this page marks a part the code states is not wired yet:

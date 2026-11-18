@@ -121,6 +121,14 @@
             "cacheVariables": {
                 "NEVR_MEASURE_SCRIPT_HOOKS": "ON"
             }
+        },
+        {
+            "name": "mingw-map-probes",
+            "displayName": "MinGW plugin-dev build with the custom-map probes (never ship)",
+            "inherits": "mingw-plugin-dev",
+            "cacheVariables": {
+                "NEVR_MAP_PROBES": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -173,6 +181,11 @@
             "name": "mingw-measure",
             "displayName": "Build MinGW script-hook measurement (never ship)",
             "configurePreset": "mingw-measure"
+        },
+        {
+            "name": "mingw-map-probes",
+            "displayName": "Build MinGW custom-map probes (never ship)",
+            "configurePreset": "mingw-map-probes"
         }
     ]
 }

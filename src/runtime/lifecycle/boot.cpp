@@ -20,6 +20,9 @@
 #include "runtime/lifecycle/update_worker.h"
 #include "runtime/patch/mode_patches.h"
 #include "runtime/patch/peer_timeout_log.h"
+#ifdef NEVR_MAP_PROBES
+#include "runtime/probe/probe_game.h"
+#endif
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/ability_probe.h"
 #include "runtime/scenario/scenario_control.h"
@@ -973,6 +976,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // build, -no-update, update.enabled: false and a host that cannot swap each end in one `update disabled` line), then checks on its own
   // thread and confirms a swapped release once the per-frame dispatcher has run for 10 s (frame/tick.cpp).
   nevr_update::StartProcessWorker(nevr_runtime_entry::HostCanSwap(), g_noUpdate != FALSE, g_isServer != FALSE);
+
+#ifdef NEVR_MAP_PROBES
+  nevr_map_probe::Register();  // probe builds only (NEVR_MAP_PROBES): the probes run from the game-thread frame
+#endif
 
 #ifdef NEVR_SCENARIO_CONTROL
   nevr_scenario_control::Start();  // test builds only (mingw-scenario preset)

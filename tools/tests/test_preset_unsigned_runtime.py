@@ -14,6 +14,7 @@ import unittest
 REPO = pathlib.Path(__file__).resolve().parents[2]
 DEV_BUILD = "NEVR_ALLOW_UNSIGNED_PLUGINS"
 SCENARIO = "NEVR_SCENARIO_CONTROL"
+MAP_PROBES = "NEVR_MAP_PROBES"
 
 # Presets whose DLLs are packaged or stand in for what is packaged; none of them may be the dev build.
 SHIPPING = ("release", "debug", "mingw-release", "mingw-debug", "mingw-dev", "linux-wine-release", "linux-wine-debug")
@@ -54,6 +55,16 @@ class ScenarioBuildIsTheDevBuild(unittest.TestCase):
                     f"{name} builds an unsigned nevr-runtime.dll beside the host; without {DEV_BUILD}=ON the host "
                     "refuses it as unsigned and ends the game with exit code 78 before the runtime logs a line",
                 )
+
+    def test_every_map_probe_preset_is_the_dev_build(self):
+        # The probe runtime is unsigned and the probe package ships the dev host; CMake refuses NEVR_MAP_PROBES without the dev build.
+        by_name = presets()
+        probes = [name for name in by_name if is_on(cache_variables(name, by_name).get(MAP_PROBES, "OFF"))]
+        self.assertIn("mingw-map-probes", probes, "no preset builds the custom-map probes any more")
+        for name in probes:
+            with self.subTest(preset=name):
+                self.assertTrue(is_on(cache_variables(name, by_name).get(DEV_BUILD, "OFF")), f"{name} builds the probes without {DEV_BUILD}=ON")
+                self.assertNotIn(name, SHIPPING)
 
     def test_a_shipping_preset_is_never_the_dev_build(self):
         by_name = presets()

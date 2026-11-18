@@ -479,6 +479,7 @@ The runtime replaces the original BugSplat64 crash reporter DLL — the game sta
 | `src/runtime/log/` | boot_log_tee, builtin_filter | log capture and filtering |
 | `src/runtime/link/` | dbghelp_stubs.cpp, bcrypt_minimal.def | not code we run — code the *linker* needs |
 | `src/runtime/scenario/` | scenario_control (test builds only), scenario_protocol | lets a test drive the running game; compiled in only by the `mingw-scenario` preset, never shipped |
+| `src/runtime/probe/` | probe_logic, probe_module, probe_rules, probe_skew, probe_sublevel, probe_level_events | measures what only the running game can answer (the custom-map channel); compiled in only by the `mingw-map-probes` preset (`NEVR_MAP_PROBES`), never shipped |
 
 **Includes are path-qualified from `src/`** (`#include "runtime/hook/addresses.h"`).
 `src/runtime/CMakeLists.txt` deliberately does NOT put its own directory on the

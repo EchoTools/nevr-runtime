@@ -658,6 +658,24 @@ if(NEVR_SCENARIO_CONTROL)
   message(STATUS "NEVR_SCENARIO_CONTROL=ON: nevr-runtime.dll carries the scenario control endpoint (test build)")
 endif()
 
+# The custom-map probes (src/runtime/probe/, docs/reference/maps-channel.md "Owner probes"): measurement code for the checks only the
+# game can answer (P-RULES, P-SKEW, P-SUBLEVEL). They hook the game's level enable/disable and write the owner JSON's map pin, so
+# they are OFF by default, need NEVR_ALLOW_UNSIGNED_PLUGINS (a probe runtime is a plugin-developer build, so the release packaging
+# refuses it and the host that loads it is the dev host), and `just verify` checks the release DLL carries none of their strings.
+# Configure a probe build with --preset mingw-plugin-dev -DNEVR_MAP_PROBES=ON.
+option(NEVR_MAP_PROBES "Compile the custom-map probes into nevr-runtime.dll (probe builds only, never ship)" OFF)
+if(NEVR_MAP_PROBES)
+  if(NOT NEVR_ALLOW_UNSIGNED_PLUGINS)
+    message(FATAL_ERROR "NEVR_MAP_PROBES=ON needs NEVR_ALLOW_UNSIGNED_PLUGINS=ON (use --preset mingw-plugin-dev): a probe build must carry NEVR-PLUGIN-TRUST dev so the release packaging refuses it")
+  endif()
+  set(_probe_sources probe/probe_logic.cpp probe/probe_module.cpp probe/probe_level_events.cpp probe/probe_rules.cpp
+    probe/probe_skew.cpp probe/probe_sublevel.cpp)
+  target_sources(nevr_runtime PRIVATE ${_probe_sources})
+  target_compile_definitions(nevr_runtime PRIVATE NEVR_MAP_PROBES=1)
+  set_source_files_properties(${_probe_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  message(STATUS "NEVR_MAP_PROBES=ON: nevr-runtime.dll carries the custom-map probes (probe build, never ship)")
+endif()
+
 set_target_properties(nevr_runtime PROPERTIES
   OUTPUT_NAME "nevr-runtime"
   PREFIX ""
@@ -2406,6 +2424,14 @@ if(BUILD_TESTING)
     target_include_directories(test_cli_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_cli_check PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_cli_check DISCOVERY_MODE PRE_TEST)
+
+    # The custom-map probes' game-free half (probe/probe_logic.cpp): the config reader, the level diff, the P-SUBLEVEL matcher,
+    # the P-SKEW client and the P-RULES store check. Nothing is hooked.
+    add_executable(test_map_probe tests/test_map_probe.cpp probe/probe_logic.cpp)
+    set_source_files_properties(tests/test_map_probe.cpp probe/probe_logic.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_map_probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_map_probe PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk)
+    gtest_discover_tests(test_map_probe DISCOVERY_MODE PRE_TEST)
 
     # test_scenario_ui_text.cpp (#906, the ui_text fire action in runtime/scenario/scenario_protocol.h) and test_scenario_invite.cpp
     # (#1156, the invite fire actions) ride in this executable.

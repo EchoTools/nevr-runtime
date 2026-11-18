@@ -24,6 +24,15 @@ class ScenarioControlAbsentTest(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn("carries the scenario control endpoint", message)
 
+    def test_dll_with_a_map_probe_fails_and_says_why(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dll = pathlib.Path(tmp) / "nevr-runtime.dll"
+            dll.write_bytes(b"MZ\x00\x00[NEVR.PROBE] probe_hello role=%s\x00")
+            ok, message = checker.check(dll)
+            self.assertFalse(ok)
+            self.assertIn("carries the custom-map probes", message)
+            self.assertIn("NEVR_MAP_PROBES", message)
+
     def test_every_named_dll_is_checked_and_one_with_the_endpoint_fails_the_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             host = pathlib.Path(tmp) / "BugSplat64.dll"
