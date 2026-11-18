@@ -4,7 +4,7 @@ This directory is the historical record. Its entries are dated by design and are
 current-tree rule in `AGENTS.md` ("Documentation, plans and findings"): they cite the tree as it was
 when measured, and nothing here is rewritten or deleted without the owner's confirmation.
 
-One record lives in the tree (see "Records kept in the tree"). The others were each checked against the code they
+The records kept in the tree are listed under "Records kept in the tree". The others were each checked against the code they
 described; what was still open became a GitHub issue, and the record was removed.
 A deleted file is not a lost file: `git show <sha>:<path>` returns its exact bytes,
 so a citation is sufficient and keeping a stale copy is not required. Every command
@@ -31,6 +31,7 @@ Retired findings that were not filed, and why:
 |------|---------------|
 | `2026-11-12-instruction-settlement.md` | the contradictions and duplicate procedures settled on 2026-11-12, each with its deciding source, and the three questions left for the owner |
 | `2026-11-05-q15t-origin-citations.md` | the origin citations of the old q15t plugin repository (file, line and source commit of each), its module rules, its commit log and the provenance of the variant libraries (#2167) |
+| `2026-11-18-unmerged-branches-postmortem.md` | why so many branches and worktrees were never merged on 2026-11-18, the mitigations landed or filed with their issues, and what the cleanup itself cost |
 
 ## Reading an old citation
 

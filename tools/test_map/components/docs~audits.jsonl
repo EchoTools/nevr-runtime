@@ -1,4 +1,5 @@
 {"component":"docs/audits","dir":"docs/audits"}
 {"file":"docs/audits/2026-11-05-q15t-origin-citations.md","none":"documentation: only the scanners read it"}
 {"file":"docs/audits/2026-11-12-instruction-settlement.md","none":"documentation: only the scanners read it"}
+{"file":"docs/audits/2026-11-18-unmerged-branches-postmortem.md","none":"documentation: only the scanners read it"}
 {"file":"docs/audits/README.md","tests":["go:cmd/one-home"]}
