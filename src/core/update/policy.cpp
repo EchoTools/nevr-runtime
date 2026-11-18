@@ -17,10 +17,8 @@ bool IsSha256Hex(const std::string& s) {
   return s.size() == 64 && std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isxdigit(c) != 0 && !std::isupper(c); });
 }
 
-bool IsChannelName(const std::string& s) {
-  if (s.empty() || s.size() > 32) return false;
-  return std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isalnum(c) != 0 || c == '.' || c == '_' || c == '-'; });
-}
+// The channels this build knows (policy.h): a name outside them is never passed to the core.
+bool IsKnownChannel(const std::string& s) { return s == kStableChannel || s == kBetaChannel; }
 
 // A short, plain word: the action and reason fields of the core's result go into a log line.
 bool IsWord(const std::string& s) {
@@ -162,26 +160,22 @@ SourceResolution ResolveSource(bool dev_build, const std::optional<std::string>&
 const char* ChannelSourceWord(ChannelSource source) {
   switch (source) {
     case ChannelSource::kConfig: return "config";
-    case ChannelSource::kState: return "state";
     case ChannelSource::kDefault: return "default";
   }
   return "default";
 }
 
-Channel ResolveChannel(const std::optional<std::string>& config_channel, const std::optional<std::string>& state_channel) {
+Channel ResolveChannel(const std::optional<std::string>& config_channel) {
   Channel out;
-  if (config_channel.has_value() && !config_channel->empty()) {
-    if (IsChannelName(*config_channel)) {
-      out.name = *config_channel;
-      out.source = ChannelSource::kConfig;
-      return out;
-    }
-    out.config_rejected = true;
+  out.name = kStableChannel;
+  out.source = ChannelSource::kDefault;
+  if (!config_channel.has_value() || config_channel->empty()) return out;
+  if (IsKnownChannel(*config_channel)) {
+    out.name = *config_channel;
+    out.source = ChannelSource::kConfig;
+    return out;
   }
-  if (state_channel.has_value() && IsChannelName(*state_channel)) {
-    out.name = *state_channel;
-    out.source = ChannelSource::kState;
-  }
+  out.config_rejected = true;
   return out;
 }
 
@@ -252,12 +246,6 @@ bool ParsePendingTarget(const std::string& text, PendingTarget* out) {
   if (!names::IsVersionName(t.version) || !IsSha256Hex(t.sha256)) return false;
   *out = std::move(t);
   return true;
-}
-
-std::optional<std::string> StateChannel(const std::string& state_text) {
-  const std::optional<json> doc = ParseObject(state_text);
-  if (!doc || !doc->contains("channel") || !(*doc)["channel"].is_string()) return std::nullopt;
-  return (*doc)["channel"].get<std::string>();
 }
 
 std::vector<QuarantineEntry> StateQuarantine(const std::string& state_text) {

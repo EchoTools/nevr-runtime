@@ -528,23 +528,31 @@ TEST(UpdateSource, BaseAndPinsReachTheCoreOnlyWhenTheCheckEnvHoldsThem) {
   EXPECT_FALSE(baseOnly.contains("pins")) << "no pins given: the core keeps its built-in keys";
 }
 
-TEST(UpdatePolicy, ChannelIsTheConfigsThenTheInstallersThenTheCores) {
-  Channel c = ResolveChannel("beta", "stable");
+// The channel is update.channel when it names a channel this build knows, else stable (ADR 0024, section 2). There is no other
+// input: the installer's record in update\state.json is not an argument, so it cannot decide the channel.
+TEST(UpdatePolicy, ChannelIsTheConfigsKnownNameElseStable) {
+  Channel c = ResolveChannel("beta");
   EXPECT_EQ(c.name, "beta");
   EXPECT_EQ(c.source, ChannelSource::kConfig);
-  c = ResolveChannel(std::nullopt, "stable");
+  EXPECT_FALSE(c.config_rejected);
+  c = ResolveChannel("stable");
   EXPECT_EQ(c.name, "stable");
-  EXPECT_EQ(c.source, ChannelSource::kState);
-  c = ResolveChannel(std::nullopt, std::nullopt);
-  EXPECT_EQ(c.name, "");
+  EXPECT_EQ(c.source, ChannelSource::kConfig);
+  c = ResolveChannel(std::nullopt);
+  EXPECT_EQ(c.name, "stable");
   EXPECT_EQ(c.source, ChannelSource::kDefault);
-  c = ResolveChannel("", "stable");
-  EXPECT_EQ(c.source, ChannelSource::kState) << "an empty config value is absent";
-  c = ResolveChannel("be ta/../x", "stable");
-  EXPECT_EQ(c.source, ChannelSource::kState) << "a value that is not a channel name is never passed on";
-  EXPECT_TRUE(c.config_rejected);
+  EXPECT_FALSE(c.config_rejected) << "an absent value is not rejected";
+  c = ResolveChannel("");
+  EXPECT_EQ(c.name, "stable");
+  EXPECT_EQ(c.source, ChannelSource::kDefault) << "an empty config value is absent";
+  EXPECT_FALSE(c.config_rejected);
+  for (const char* bad : {"be ta/../x", "nightly", "Stable", "BETA", "beta/../x"}) {
+    c = ResolveChannel(bad);
+    EXPECT_EQ(c.name, "stable") << bad;
+    EXPECT_EQ(c.source, ChannelSource::kDefault) << bad;
+    EXPECT_TRUE(c.config_rejected) << bad << ": a value that names no known channel is never passed on";
+  }
   EXPECT_STREQ(ChannelSourceWord(ChannelSource::kConfig), "config");
-  EXPECT_STREQ(ChannelSourceWord(ChannelSource::kState), "state");
   EXPECT_STREQ(ChannelSourceWord(ChannelSource::kDefault), "default");
 }
 
@@ -638,12 +646,9 @@ TEST(UpdatePolicy, StateReadersAndConfirmState) {
                                  {"owned", json::array({{{"path", "nevr-runtime.dll"}, {"sha256", kNewSha}}})},
                                  {"quarantine", json::array({{{"version", "5.17.0"}, {"runtime_sha256", kOldSha}}, {{"version", "x"}}})}}
                                 .dump();
-  EXPECT_EQ(StateChannel(state).value_or(""), "beta");
   const auto q = StateQuarantine(state);
   ASSERT_EQ(q.size(), 1u) << "an entry with no sha is skipped";
   EXPECT_EQ(q[0].version, "5.17.0");
-  EXPECT_FALSE(StateChannel("{}").has_value());
-  EXPECT_FALSE(StateChannel("garbage").has_value());
 
   std::string out;
   ASSERT_TRUE(ConfirmState(state, "5.99.0", kNewSha, &out));
@@ -881,7 +886,7 @@ TEST(UpdateCheck, AVerifiedReleaseIsPublishedLastAndEveryDecisionIsALine) {
   const json cfg = json::parse(core.open_config);
   EXPECT_EQ(cfg["platform"], "pc");
   EXPECT_EQ(cfg["nevr_root"], root.path()) << "an ASCII root reaches the core as it is";
-  EXPECT_FALSE(cfg.contains("channel")) << "no channel anywhere: the core's default";
+  EXPECT_EQ(cfg["channel"], "stable") << "no channel named anywhere: the stable channel, never the core's own default";
   // Nothing outside update\ and the core's own folders is written.
   for (const std::string& p : root.List()) {
     EXPECT_EQ(p.rfind("update", 0), 0u) << p << " is outside update\\";
@@ -1179,15 +1184,16 @@ TEST(UpdateCheck, AFileThatCouldNotBeReadIsNotDiscardedAndAFailedRecordIsAWarnin
   }
 }
 
-TEST(UpdateCheck, TheChannelAndItsSourceReachTheCoreAndTheLine) {
+TEST(UpdateCheck, TheChannelReachesTheCoreAndTheLineSaysWhereItCameFrom) {
   Root root;
-  root.Write("update\\state.json", R"({"channel":"stable","owned":[]})");
+  root.Write("update\\state.json", R"({"channel":"beta","owned":[]})");
   Lines lines;
   FakeCore core;
   CheckEnv env = MakeEnv(root, core, lines);
   RunCheck(env);
-  EXPECT_EQ(json::parse(core.open_config)["channel"], "stable");
-  EXPECT_NE(lines.Find("update check", {"channel=stable", "channel_source=state"}), "") << lines.Dump();
+  EXPECT_EQ(json::parse(core.open_config)["channel"], "stable") << "the installer's record is not the choice";
+  EXPECT_NE(lines.Find("update check", {"channel=stable", "channel_source=default"}), "") << lines.Dump();
+  EXPECT_EQ(lines.Find("update check").find("core_default"), std::string::npos) << "the core's own default is never named";
 
   Lines lines2;
   FakeCore core2;
@@ -1196,6 +1202,36 @@ TEST(UpdateCheck, TheChannelAndItsSourceReachTheCoreAndTheLine) {
   RunCheck(env2);
   EXPECT_EQ(json::parse(core2.open_config)["channel"], "beta");
   EXPECT_NE(lines2.Find("update check", {"channel=beta", "channel_source=config"}), "") << lines2.Dump();
+  EXPECT_EQ(lines2.Find("update channel ignored"), "") << "a known name is not reported";
+}
+
+TEST(UpdateCheck, AConfigNameThatIsNotKnownRunsStableAndSaysSoOnce) {
+  Root root;
+  Lines lines;
+  FakeCore core;
+  CheckEnv env = MakeEnv(root, core, lines);
+  env.config_channel = "nightly";
+  RunCheck(env);
+  EXPECT_EQ(json::parse(core.open_config)["channel"], "stable");
+  EXPECT_EQ(lines.LevelOf("update channel ignored", {"reason=not_a_channel", "channel=stable", "consequence=runs_stable_channel"}), kWarning)
+      << lines.Dump();
+  EXPECT_NE(lines.Find("update check", {"channel=stable", "channel_source=default", "config_channel_rejected=true"}), "") << lines.Dump();
+  EXPECT_EQ(lines.Find("update channel ignored").find("nightly"), std::string::npos) << "the value itself is not logged";
+}
+
+TEST(UpdateCheck, AnAbsentOrEmptyConfigValueRunsStableWithoutAWarning) {
+  const std::optional<std::string> values[] = {std::nullopt, std::optional<std::string>("")};
+  for (const std::optional<std::string>& value : values) {
+    Root root;
+    Lines lines;
+    FakeCore core;
+    CheckEnv env = MakeEnv(root, core, lines);
+    env.config_channel = value;
+    RunCheck(env);
+    EXPECT_EQ(json::parse(core.open_config)["channel"], "stable");
+    EXPECT_NE(lines.Find("update check", {"channel=stable", "channel_source=default"}), "") << lines.Dump();
+    EXPECT_EQ(lines.Find("update channel ignored"), "") << "nothing was ignored: the value was not given";
+  }
 }
 
 TEST(UpdateCheck, TheQuarantineInStateReachesTheCore) {

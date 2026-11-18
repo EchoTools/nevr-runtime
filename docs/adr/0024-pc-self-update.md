@@ -127,9 +127,11 @@ flowchart TD
   signed one. The one exception is the Quest dev source: `update.base` (and `update.pins`) in `config.yaml` give a dev build its own
   manifest host and trusted keys, and a dev build with a valid base updates from that base. A release build ignores both keys and
   says so; the pinned release keys and host never change (`ResolveSource` in `src/core/update/policy.cpp`, one `update source` line).
-- **Which channel.** `update.channel` in `config.yaml`, else the channel recorded in `update\state.json` by the installer
-  that installed the runtime (`pc install --channel`), else the core's default. A player who installed from `beta` stays on
-  `beta`.
+- **Which channel.** `update.channel` in `config.yaml` when it names a known channel (`stable` or `beta`, the table in
+  `src/core/update/policy.h`), else `stable`. Absent, empty and unknown values all run `stable`; an unknown value is a Warning
+  (`update channel ignored`). The channel recorded in `update\state.json` by the installer (`pc install --channel`) is not the
+  choice: a player who installed from `beta` and has no `update.channel` runs `stable` and the installer's record is kept as
+  the installer wrote it.
 - **Off switches.** `update.enabled: false` in `config.yaml` and the `-no-update` flag, both for operators and testers.
   They are two new config keys and one new flag; the flat key map count of N133 and the flag registry change with them.
 - **A host that cannot swap.** The host context gains a `capabilities` word (appended after `reserved`; `kMinor`
@@ -167,8 +169,8 @@ units (`src/core/update/names.cpp`, `host/file_digest.cpp`), compiled into both 
   worker enforces the 120 s: a result that arrives after it is not published (`update check action=failed reason=timeout`). The
   thread itself cannot be stopped and ends with the process.
 - **The order of the check.** `update\` or `update\staging` a link: `blocked reason=reparse_point`. A `update\pending.json`:
-  `none reason=release_pending`, with nothing fetched (section 6, Q1). Then `state.json` is read for the installer's channel and
-  the quarantine, the core is opened with `{"platform": "pc", "nevr_root": <root as UTF-8>, "channel"?}` (the core derives its state,
+  `none reason=release_pending`, with nothing fetched (section 6, Q1). Then `state.json` is read for the quarantine, the channel is
+  resolved (section 2), and the core is opened with `{"platform": "pc", "nevr_root": <root as UTF-8>, "channel": <name>, "base"?, "pins"?}` (the core derives its state,
   log and download folders from `nevr_root`), the manifest is fetched, `NevrPcStage` runs with the running runtime's version (from
   its `NEVR-BUILD` literal) and sha256 and the quarantine, and the run is ended and closed on every path. The result must parse
   inside the host's vocabulary (`src/core/update/names.h`: a version, a plain member path, 64 lowercase hex) or it is
@@ -450,8 +452,9 @@ a rollback can restore a release denylisted after the player ran it (the accepte
 `install-nevr-runtime pc install` (and so `install.ps1`) writes `update\state.json` with the channel and the installed release, under
 the lock, and removes `swap.json`, `staged.json`, `staging\`, `previous\`, `failed\`, `pending.json` and `crashed`: after an install the
 installer's release is the baseline and nothing older competes with it. The quarantine list stays. `uninstall.ps1` does not
-touch `update\`. The channel precedence is `update.channel` in `config.yaml`, then `state.json`, then the core's default;
-every `update check` line carries `channel_source`, so a player whose config disagrees with the installer shows it in the log.
+touch `update\`. The runtime's channel is `update.channel` in `config.yaml` when it names a known channel, else `stable` (section 2);
+`state.json`'s `channel` is written here and is not read by the runtime's choice. Every `update check` line carries `channel` and
+`channel_source` (`config` or `default`), so a player whose config disagrees with the installer shows it in the log.
 
 **As built.** `installer/src/update_state.rs`, called from `Session::pc` after the files are installed and read back.
 - **When.** After every `pc install` that ends `installed`, and after one that ends `unchanged` (the release in the root is
@@ -486,7 +489,8 @@ A runtime line is `[NEVR.UPDATE] <event> key=value ...` through `Log()` (the tag
 | runtime | `update disabled` | `reason` (`dev_build`, `no_root` when `%LOCALAPPDATA%` is not set, `flag`, `config`, `host_cannot_swap`; `no_root` is a Warning, the rest Info) |
 | Quest runtime | `update source` | Warning, once per launch and only when `update.base` or `update.pins` is in `config.yaml`: `outcome` (`used`: a dev build reads that base, with `base_host` (host and port only) and `pins` (the key count, or `builtin`); `ignored`: a release build does not use the key, `reason=release_build`; `rejected`: a dev build refused the value, with `key` and `reason`: `empty`, `too_long`, `control_character`, `not_http_or_https`, `credentials_query_or_fragment`, `no_host`, `pins_without_base`, `no_keys`, `malformed_line`, `malformed_key`), `source=config`, `consequence`. The `update check` line carries `source_override=true` when the check ran against the override |
 | runtime | `update discard` | `version`, `recorded`, `reason` (`verify_failed`): the verifier refused a staged release and the core was told (Warning when it could not be recorded) |
-| runtime | `update check` | `channel` (`core_default` when none was named), `channel_source` (`config`, `state`, `default`), `current`, `target`, `direction`, `action` (`none`, `staged`, `blocked`, `failed`), `reason`, `config_channel_rejected` when `update.channel` is not a channel name, `elapsed_ms` |
+| runtime | `update check` | `channel` (always set: `update.channel` or `stable`), `channel_source` (`config`, `default`), `current`, `target`, `direction`, `action` (`none`, `staged`, `blocked`, `failed`), `reason`, `config_channel_rejected` when `update.channel` names no known channel, `elapsed_ms` |
+| runtime | `update channel ignored` | Warning, once per check that finds `update.channel` naming no known channel: `key`, `reason=not_a_channel`, `channel=stable`, `consequence=runs_stable_channel` (the value is not logged) |
 | core | `manifest_check`, `release_selected`, `artifact_fetch` | as ADR 0023 section 5; a cut-off download is `artifact_fetch ok=false reason=short_body bytes=<n> size=<n>` |
 | core | `stage_member` | `path`, `size`, `sha256`, `ok`, `reason` |
 | core | `stage_end` | `version`, `files`, `ok`, `reason`, `elapsed_ms` |

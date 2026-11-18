@@ -850,9 +850,9 @@ arena:
 #
 #   enabled   false turns the check off (a release the host already swapped in is still confirmed). The "-no-update" flag
 #             does the same for one run. Absent: true.
-#   channel   The release channel to follow (for example "beta" or "stable"). Absent: the channel the installer recorded,
-#             else the core's default. The "update check" log line names the channel and where it came from
-#             (channel_source: config, state or default).
+#   channel   The release channel to follow: "stable" or "beta". Absent, empty or any other name: "stable", and the
+#             "update channel ignored" Warning says so. The installer's own record of a channel is not used here. The
+#             "update check" log line names the channel and where it came from (channel_source: config or default).
 #   base      Quest, development builds only. Where a development build reads the manifest and the channel: an http:// or
 #             https:// address with a host, no credentials, query or fragment (http:// is for a base that adb reverse serves on
 #             the local machine; the core fetches plain http only from 127.0.0.1 or localhost). With a valid base a development
@@ -866,6 +866,7 @@ arena:
 #
 # Not secrets.
 # Reader: src/runtime/lifecycle/service_config.cpp (NevrCfgUpdateEnabled, NevrCfgUpdateChannel) on PC,
+#         the channel choice is src/core/update/policy.cpp (ResolveChannel), shared by PC and Quest,
 #         src/quest/sentinel/quest_config.cpp (ReadUpdate) on Quest, src/core/update/worker.cpp; base and pins are decided by
 #         src/core/update/policy.cpp (ResolveSource) and read on Quest only, no PC reader reads them
 # ---------------------------------------------------------------------------

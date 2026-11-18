@@ -66,6 +66,17 @@ void Emit(const LogFn& log, int level, const std::string& event, const Fields& f
 
 std::string VersionWord(const std::string& v) { return names::IsVersionName(v) ? v : std::string("unknown"); }
 
+// The check's channel: update.channel when it names a known channel, else stable (ADR 0024, section 2). A value that names none is
+// said once, as a Warning, and the check runs stable; the value itself is never logged.
+Channel ChannelFor(const LogFn& log, const std::optional<std::string>& config_channel) {
+  Channel channel = ResolveChannel(config_channel);
+  if (channel.config_rejected) {
+    Emit(log, kWarning, "update channel ignored",
+         {{"key", "update.channel"}, {"reason", "not_a_channel"}, {"channel", channel.name}, {"consequence", "runs_stable_channel"}});
+  }
+  return channel;
+}
+
 // ---- the core's error text is classified, never logged (logging Rule 4: remote text is not a field) -----------------------
 
 // The core displays every error as "FAIL step N: <message>" (installer/src/error.rs; ADR 0023: the nine steps). Step 1 is the fetch
@@ -157,7 +168,7 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
       out.version = target;
       out.direction = direction;
       const std::uint64_t now = env.now_ms ? env.now_ms() : started;
-      Fields f = {{"channel", channel.name.empty() ? std::string("core_default") : channel.name},
+      Fields f = {{"channel", channel.name},
                   {"channel_source", ChannelSourceWord(channel.source)},
                   {"current", VersionWord(env.version)}};
       if (!target.empty()) f.push_back({"target", VersionWord(target)});
@@ -174,7 +185,7 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
     // A root that is absent or whose text the platform could not convert is never given to the core or the fs: nothing is read
     // from it, the channel is the config's, and the check ends `failed reason=root_unconvertible`.
     if (env.root.empty() || env.root_unconvertible) {
-      channel = ResolveChannel(env.config_channel, std::nullopt);
+      channel = ChannelFor(env.log, env.config_channel);
       return done(CheckAction::kFailed, "root_unconvertible", "", "");
     }
     const UpdateFs& fs = *env.fs;
@@ -188,16 +199,13 @@ CheckOutcome RunCheck(const CheckEnv& env) noexcept {
     if (fs.Exists(paths.UpdateFile(names::kPendingJson))) return done(CheckAction::kNone, "release_pending", "", "");
 
     std::string state_text;
-    std::optional<std::string> state_channel;
     std::vector<QuarantineEntry> quarantine;
     if (fs.ReadSmallFile(paths.UpdateFile(names::kStateJson), &state_text) == Read::kOk) {
-      state_channel = StateChannel(state_text);
       quarantine = StateQuarantine(state_text);
     }
-    channel = ResolveChannel(env.config_channel, state_channel);
+    channel = ChannelFor(env.log, env.config_channel);
 
-    json config = {{"platform", env.platform}, {"nevr_root", env.root}};
-    if (!channel.name.empty()) config["channel"] = channel.name;
+    json config = {{"platform", env.platform}, {"nevr_root", env.root}, {"channel", channel.name}};
     if (env.source.has_value()) {
       config["base"] = env.source->base;
       if (!env.source->pins.empty()) config["pins"] = env.source->pins;

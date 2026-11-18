@@ -360,7 +360,7 @@ void ReadUpdate(const nevr::NevrConfig& cfg, LoadResult& r) {
   if (channel && !channel->empty()) {
     r.config.update.channel = *channel;
   } else if (!channel && cfg.Kind(kChannelKey) != nevr::NodeKind::kAbsent) {
-    Add(r, LogLevel::kWarn, std::string("config file key=") + kChannelKey + " rejected reason=not_a_word (default stays)");
+    Add(r, LogLevel::kWarn, std::string("config file key=") + kChannelKey + " rejected reason=not_a_word (the channel stays stable)");
   }
   // The development update source: read as given, decided by ResolveSource (the config does not know the build).
   const std::pair<const char*, std::optional<std::string>*> raw[] = {{kBaseKey, &r.config.update.base}, {kPinsKey, &r.config.update.pins}};

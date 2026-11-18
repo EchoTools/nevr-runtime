@@ -4,10 +4,10 @@
 // I/O, no windows.h, so a test drives every branch. The worker that acts on them is core/update/worker.h.
 //
 //   Decide        update.enabled / -no-update / a dev build / a host that cannot swap  ->  why no check runs
-//   ResolveChannel  update.channel in config.yaml, else the installer's channel in update\state.json, else the core's default
+//   ResolveChannel  update.channel in config.yaml when it names a known channel, else stable (never the installer's record)
 //   BuildCurrentJson / ParseStageResult  the two JSON documents of the core's NevrPcStage (installer/include/nevr_install.h)
 //   BuildStagedJson  update\staged.json, the file whose existence tells the host there is something to swap
-//   PendingTarget / StateChannel / StateQuarantine  what the runtime reads from the host's files in the update folder
+//   PendingTarget / StateQuarantine  what the runtime reads from the host's files in the update folder
 //   ConfirmDue     the 10 s of per-frame work that mark a swapped release as started (section 6)
 
 #include <cstddef>
@@ -76,21 +76,26 @@ inline constexpr std::size_t kPinKeyBase64Chars = 56;
 /// kRejected with the key and a reason word, and nothing is used: a dev build then stays disabled (dev_build).
 SourceResolution ResolveSource(bool dev_build, const std::optional<std::string>& base, const std::optional<std::string>& pins);
 
-enum class ChannelSource { kConfig, kState, kDefault };
-/// config, state, default: the `channel_source` field of the `update check` line.
+/// The channel a player who names none gets, and the one a name this build does not know falls back to (ADR 0024, section 2).
+inline constexpr char kStableChannel[] = "stable";
+/// The other channel this build knows. Adding a channel is a change here, not a config value.
+inline constexpr char kBetaChannel[] = "beta";
+
+enum class ChannelSource { kConfig, kDefault };
+/// config, default: the `channel_source` field of the `update check` line.
 const char* ChannelSourceWord(ChannelSource source);
 
 struct Channel {
-  /// Empty for kDefault: the core picks its own default channel.
+  /// Always set: kStableChannel unless update.channel names a known channel.
   std::string name;
   ChannelSource source = ChannelSource::kDefault;
-  /// A value was given in config.yaml and is not a channel name ([A-Za-z0-9._-]{1,32}); it was ignored.
+  /// A value was given in config.yaml and names no known channel; it was ignored and the check runs stable.
   bool config_rejected = false;
 };
 
-/// update.channel from config.yaml, else `channel` from update\state.json, else the core's default. A value that is not a
-/// channel name is never passed on; an empty one counts as absent.
-Channel ResolveChannel(const std::optional<std::string>& config_channel, const std::optional<std::string>& state_channel);
+/// update.channel from config.yaml when it names a known channel (kStableChannel or kBetaChannel), else kStableChannel. Absent,
+/// empty, non-string and unknown values all give stable; the installer's record in update\state.json is never read here.
+Channel ResolveChannel(const std::optional<std::string>& config_channel);
 
 struct QuarantineEntry {
   std::string version;
@@ -133,8 +138,6 @@ struct PendingTarget {
 };
 bool ParsePendingTarget(const std::string& text, PendingTarget* out);
 
-/// `channel` of update\state.json, when it has a string one.
-std::optional<std::string> StateChannel(const std::string& state_text);
 /// `quarantine` of update\state.json: each entry with a version and a runtime sha256. Entries without both are skipped.
 std::vector<QuarantineEntry> StateQuarantine(const std::string& state_text);
 
