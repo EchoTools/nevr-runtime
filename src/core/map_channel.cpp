@@ -279,9 +279,11 @@ std::vector<nevr_maps::FetchReport> Channel::FetchPass(nevr_cdn::Env& env, nevr_
                                                        const std::function<bool()>& keep_going) {
   std::vector<nevr_maps::FetchReport> reports;
   if (start_ != Start::kRun || !booted_) return reports;
+  nevr_maps::FetchScope scope;  // the maps this run mounted are never evicted (FetchScope::in_use)
+  scope.in_use = MountedIds();
   for (const std::string& group : groups) {
     if (!keep_going()) break;
-    reports.push_back(nevr_maps::FetchGroup(env, fs, config_, group, result_.report.deferred, deriver, now_utc, keep_going));
+    reports.push_back(nevr_maps::FetchGroup(env, fs, config_, group, result_.report.deferred, deriver, now_utc, keep_going, nullptr, scope));
   }
   return reports;
 }
@@ -289,6 +291,10 @@ std::vector<nevr_maps::FetchReport> Channel::FetchPass(nevr_cdn::Env& env, nevr_
 nevr_maps::MountReport Channel::MountGroups(const std::vector<std::string>& groups, const std::string& now_utc) {
   if (start_ != Start::kRun || !booted_ || !mount_) return nevr_maps::MountReport();
   return mount_->Mount(groups, now_utc);
+}
+
+std::vector<std::string> Channel::MountedIds() const {
+  return mount_ ? mount_->MountedIds() : std::vector<std::string>();
 }
 
 // ---- FetchWorker -------------------------------------------------------------------------------------------------------------------

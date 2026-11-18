@@ -143,6 +143,10 @@ class Channel {
   // Empty when Boot did not run the channel. Worker thread only, after Boot.
   nevr_maps::MountReport MountGroups(const std::vector<std::string>& groups, const std::string& now_utc);
 
+  // The maps this run has mounted (CacheMount::MountedIds): the in-use set every fetch of this channel passes as FetchScope::in_use, so
+  // a fetch never evicts them. Empty before Boot mounts anything.
+  std::vector<std::string> MountedIds() const;
+
  private:
   nevr_maps::ChannelConfig config_;
   Start start_ = Start::kOff;

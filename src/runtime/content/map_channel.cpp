@@ -287,8 +287,11 @@ bool RequestServerGroup(const std::string& group) {
 nevr_maps::FetchReport FetchServerGroup(State* st, const std::string& group, const std::function<bool()>& keep_going) {
   const std::string now = NowUtc();
   const nevr_maps::FetchProgressFn progress = [](const nevr_maps::FetchProgress& p) { nevr_map_hold::NoteFetchProgress(p); };
+  // The maps this run already mounted (an earlier group's) are never evicted by this group's fetch: the same in-use set FetchPass uses.
+  nevr_maps::FetchScope scope;
+  scope.in_use = st->channel->MountedIds();
   const nevr_maps::FetchReport report = nevr_maps::FetchGroup(*st->env, *st->fs, st->channel->config(), group, st->deferred,
-                                                              st->deriver.get(), now, keep_going, progress);
+                                                              st->deriver.get(), now, keep_going, progress, scope);
   if (report.outcome == nevr_maps::FetchOutcome::kFailed) return report;
   const nevr_maps::MountReport mounted = st->channel->MountGroups({group}, now);
   GrantMounted(st, mounted);

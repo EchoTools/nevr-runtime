@@ -18,6 +18,7 @@
 
 #include "core/base64.h"
 #include "cdn/cdn_limits.h"
+#include "core/map_channel.h"
 #include "core/map_fetch_queue.h"
 #include "core/map_index.h"
 #include "core/map_set_tables.h"
@@ -34,6 +35,15 @@ namespace {
 
 using namespace map_run_fixture;
 
+// The cache budget's sizes (see the budget tests below): kSmallMap is the chunks of the small map, kLargeMap is bigger than one small map
+// and no bigger than two (one eviction is not enough for it), and kTinyFreeBytes is a free space whose storage share is one byte, so
+// nothing fits and eviction decides.
+constexpr int kSmallMap = 2;
+constexpr int kLargeMap = 4;
+constexpr std::uint64_t kTinyFreeBytes = 1;
+constexpr const char* kPlayedFirst = "2026-11-11T00:00:01Z";
+constexpr const char* kPlayedSecond = "2026-11-11T00:00:02Z";
+
 // The GTest fixture: the shared fixture (map_run_fixture::Fixture), with the assertions a test makes on its own reads.
 class MapRunTest : public ::testing::Test, public Fixture {
  protected:
@@ -45,8 +55,309 @@ class MapRunTest : public ::testing::Test, public Fixture {
   }
   // Every handle the mount opened is the mounter's, or closed.
   void ExpectNoLeak() { EXPECT_EQ(env.open_blobs(), mounter.Owned()); }
+  // Whether the cache index holds the map (its current or its last version).
+  bool Cached(const std::string& id) { return Index().maps.count(MapKey(id, kPlatformPc)) != 0; }
+  // A client's fetch of the ids it asks for, at `now`, with `in_use` the maps this run mounted (FetchScope, map_run.h).
+  FetchReport FetchOnDemand(const std::vector<std::string>& ids, const std::string& now, const std::vector<std::string>& in_use = {}) {
+    FetchScope scope;
+    scope.on_demand = true;
+    scope.ids = ids;
+    scope.in_use = in_use;
+    return FetchGroup(env, fs, config, kGroup, {}, nullptr, now, keep_going, nullptr, scope);
+  }
+  // `mapped` (a configured channel over this fixture's cache) is booted over the empty cache, then the first group is fetched and
+  // mounted, as a server does. Then the second group is published alone (the first group's map is unlisted by it) and the device has
+  // room for nothing, so the second group's map fits only if the first group's mounted map is evicted.
+  void MountFirstGroupThenListOnlyASecondMap(nevr_map_channel::Channel& mapped) {
+    ASSERT_EQ(mapped.Boot(env, fs, mounter, nullptr, kNow, {}).reason, "ok");
+    channel.Publish("alpha", "1.0.0", MakeSet(kSmallMap, 'a'));
+    channel.Sign(1);
+    Fetch();
+    const MountReport mounted = mapped.MountGroups({kGroup}, kNow);
+    ASSERT_EQ(mounted.mounted, (std::vector<std::string>{"alpha"}));
+    channel.group = kOtherGroup;
+    channel.Unpublish("alpha");
+    channel.Publish("gamma", "1.0.0", MakeSet(kSmallMap, 'c'));
+    channel.Sign(2);
+    env.device.free_bytes = kTinyFreeBytes;
+  }
 };
 
+// The cache budget (ADR 0045 decision 8; docs/reference/maps-channel.md). What one fetch may add is the device's storage share of the
+// free space, read when the fetch starts. An on-demand fetch that needs more room evicts the least recently played maps it may evict
+// (never played is oldest), never a map this run mounted; a map with no room is refused, and nothing is evicted for it.
+namespace {
+// The free space at which the device's storage share (free less 1 part in kStorageShareKept) holds `bytes`.
+std::uint64_t FreeFor(std::uint64_t bytes) {
+  std::uint64_t free_bytes = bytes;
+  while (free_bytes - free_bytes / nevr_cdn::kStorageShareKept < bytes) ++free_bytes;
+  return free_bytes;
+}
+}  // namespace
+
+// The budget follows the device's free space: the same fetch that fits without eviction on a roomy device evicts on a small one.
+TEST_F(MapRunTest, TheBudgetIsTheDevicesFreeSpaceShare) {
+  channel.Publish("alpha", "1.0.0", MakeSet(kSmallMap, 'a'));
+  channel.Publish("beta", "1.0.0", MakeSet(kSmallMap, 'b'));
+  channel.Sign(1);
+  Fetch();  // the whole group: alpha and beta cached, never played
+  channel.Publish("gamma", "1.0.0", MakeSet(kSmallMap, 'c'));
+  channel.Sign(2);
+  env.device.free_bytes = FreeFor(MakeSet(kSmallMap, 'c').size());  // a storage share that holds exactly one more small map
+  const FetchReport fetched = FetchOnDemand({"gamma"}, kNow);
+  EXPECT_EQ(fetched.maps_updated, 1u);
+  EXPECT_EQ(env.FindRecord("map_gc", "reason", "budget"), nullptr);
+  EXPECT_TRUE(Cached("alpha"));
+  EXPECT_TRUE(Cached("beta"));
+  EXPECT_EQ(Index().maps.at(MapKey("gamma", kPlatformPc)).last_played_utc, kNow);  // a map the session asks for is played now
+}
+
+TEST_F(MapRunTest, TheSameFetchEvictsTheNeverPlayedMapWhenTheDeviceHasLessRoom) {
+  channel.Publish("alpha", "1.0.0", MakeSet(kSmallMap, 'a'));
+  channel.Publish("beta", "1.0.0", MakeSet(kSmallMap, 'b'));
+  channel.Sign(1);
+  Fetch();
+  FetchOnDemand({"beta"}, kPlayedFirst);  // beta is played; alpha never is
+  channel.Publish("gamma", "1.0.0", MakeSet(kSmallMap, 'c'));
+  channel.Sign(2);
+  env.device.free_bytes = kTinyFreeBytes;
+  const FetchReport fetched = FetchOnDemand({"gamma"}, kNow);
+  EXPECT_EQ(fetched.maps_updated, 1u);
+  EXPECT_NE(env.FindRecord("map_gc", "evicted", MapKey("alpha", kPlatformPc)), nullptr);
+  EXPECT_FALSE(Cached("alpha"));
+  EXPECT_TRUE(Cached("beta"));
+  EXPECT_TRUE(Cached("gamma"));
+}
+
+// Two played maps: the one played longer ago goes first, and one eviction is enough, so the later one stays. A play time never moves
+// back: replaying alpha at an earlier time keeps its later stamp, so beta, played first, is still the one evicted.
+TEST_F(MapRunTest, EvictsTheLeastRecentlyPlayedFirst) {
+  channel.Publish("alpha", "1.0.0", MakeSet(kSmallMap, 'a'));
+  channel.Publish("beta", "1.0.0", MakeSet(kSmallMap, 'b'));
+  channel.Sign(1);
+  Fetch();
+  FetchOnDemand({"beta"}, kPlayedFirst);
+  FetchOnDemand({"alpha"}, kPlayedSecond);
+  FetchOnDemand({"alpha"}, kPlayedFirst);
+  EXPECT_EQ(Index().maps.at(MapKey("alpha", kPlatformPc)).last_played_utc, kPlayedSecond);
+  channel.Publish("gamma", "1.0.0", MakeSet(kSmallMap, 'c'));
+  channel.Sign(2);
+  env.device.free_bytes = kTinyFreeBytes;
+  const FetchReport fetched = FetchOnDemand({"gamma"}, kNow);
+  EXPECT_EQ(fetched.maps_updated, 1u);
+  EXPECT_NE(env.FindRecord("map_gc", "evicted", MapKey("beta", kPlatformPc)), nullptr);
+  EXPECT_EQ(env.FindRecord("map_gc", "evicted", MapKey("alpha", kPlatformPc)), nullptr);
+  EXPECT_FALSE(Cached("beta"));
+  EXPECT_FALSE(fs.HasDir(channel.VersionDir("beta")));  // the evicted version's directory is removed
+  EXPECT_TRUE(Cached("alpha"));
+}
+
+// Maps never played are oldest, and ties go by id: alpha goes before beta.
+TEST_F(MapRunTest, NeverPlayedMapsGoByIdWhenTheyTie) {
+  channel.Publish("alpha", "1.0.0", MakeSet(kSmallMap, 'a'));
+  channel.Publish("beta", "1.0.0", MakeSet(kSmallMap, 'b'));
+  channel.Sign(1);
+  Fetch();
+  channel.Publish("gamma", "1.0.0", MakeSet(kSmallMap, 'c'));
+  channel.Sign(2);
+  env.device.free_bytes = kTinyFreeBytes;
+  const FetchReport fetched = FetchOnDemand({"gamma"}, kNow);
+  EXPECT_EQ(fetched.maps_updated, 1u);
+  EXPECT_NE(env.FindRecord("map_gc", "evicted", MapKey("alpha", kPlatformPc)), nullptr);
+  EXPECT_TRUE(Cached("beta"));
+}
+
+// A map the session asks for is kept though it is played and the oldest candidate would be another. The large map needs both small
+// ones gone, so with alpha kept the fetch is refused and beta, the only victim left, stays too.
+TEST_F(MapRunTest, AMapTheSessionAsksForIsNeverEvicted) {
+  channel.Publish("alpha", "1.0.0", MakeSet(kSmallMap, 'a'));
+  channel.Publish("beta", "1.0.0", MakeSet(kSmallMap, 'b'));
+  channel.Sign(1);
+  Fetch();
+  FetchOnDemand({"alpha"}, kPlayedSecond);  // alpha is played; beta never is
+  channel.Publish("gamma", "1.0.0", MakeSet(kLargeMap, 'c'));
+  channel.Sign(2);
+  env.device.free_bytes = kTinyFreeBytes;
+  const FetchReport fetched = FetchOnDemand({"alpha", "gamma"}, kNow);
+  EXPECT_EQ(fetched.reason, "over_budget");
+  EXPECT_EQ(env.FindRecord("map_gc", "reason", "budget"), nullptr);
+  EXPECT_TRUE(Cached("alpha"));
+  EXPECT_TRUE(Cached("beta"));
+}
+
+// The budget is one pass's: the first map takes the room and the second, which the room does not hold, is refused.
+TEST_F(MapRunTest, TwoNewMapsShareOneBudget) {
+  channel.Publish("gamma", "1.0.0", MakeSet(kSmallMap, 'c'));
+  channel.Publish("delta", "1.0.0", MakeSet(kSmallMap, 'd'));
+  channel.Sign(1);
+  env.device.free_bytes = FreeFor(MakeSet(kSmallMap, 'c').size());  // a storage share that holds exactly one small map
+  const FetchReport fetched = FetchOnDemand({"gamma", "delta"}, kNow);
+  EXPECT_EQ(fetched.maps_updated, 1u);
+  EXPECT_EQ(fetched.reason, "over_budget");
+  EXPECT_TRUE(Cached("delta"));  // the manifest is planned in id order, so delta takes the room first
+  EXPECT_FALSE(Cached("gamma"));
+}
+
+// Each new map takes the next victim, not the one before it: with no room, gamma evicts alpha and delta must then evict beta.
+TEST_F(MapRunTest, EachNewMapTakesTheNextVictim) {
+  channel.Publish("alpha", "1.0.0", MakeSet(kSmallMap, 'a'));
+  channel.Publish("beta", "1.0.0", MakeSet(kSmallMap, 'b'));
+  channel.Sign(1);
+  Fetch();
+  FetchOnDemand({"alpha"}, kPlayedFirst);
+  FetchOnDemand({"beta"}, kPlayedSecond);
+  channel.Publish("gamma", "1.0.0", MakeSet(kSmallMap, 'c'));
+  channel.Publish("delta", "1.0.0", MakeSet(kSmallMap, 'd'));
+  channel.Sign(2);
+  env.device.free_bytes = kTinyFreeBytes;
+  const FetchReport fetched = FetchOnDemand({"gamma", "delta"}, kNow);
+  EXPECT_EQ(fetched.maps_updated, 2u);
+  EXPECT_FALSE(Cached("alpha"));
+  EXPECT_FALSE(Cached("beta"));  // the second map's victim, not a second count of alpha's bytes
+  EXPECT_TRUE(Cached("gamma"));
+  EXPECT_TRUE(Cached("delta"));
+}
+
+// A new version of a map keeps the play time of the version it replaces.
+TEST_F(MapRunTest, AnUpdatedMapKeepsItsPlayTime) {
+  channel.Publish("alpha", "1.0.0", MakeSet(kSmallMap, 'a'));
+  channel.Sign(1);
+  Fetch();
+  FetchOnDemand({"alpha"}, kPlayedFirst);
+  channel.Publish("alpha", "1.1.0", MakeSet(kSmallMap, 'b'));
+  channel.Sign(2);
+  Fetch();  // the whole group: alpha's update is stored, and no id asks for it
+  EXPECT_EQ(Index().maps.at(MapKey("alpha", kPlatformPc)).version, "1.1.0");
+  EXPECT_EQ(Index().maps.at(MapKey("alpha", kPlatformPc)).last_played_utc, kPlayedFirst);
+}
+
+// A map this run mounted keeps its superseded version's directory: the update is stored, and the GC of the next pass leaves the old
+// version in place while this run mounts the map; the next run's GC removes it.
+TEST_F(MapRunTest, AMountedMapKeepsItsSupersededVersionUntilTheNextRun) {
+  channel.Publish("alpha", "1.0.0", MakeSet(kSmallMap, 'a'));
+  channel.Sign(1);
+  Fetch();
+  const std::string old_version = channel.VersionDir("alpha");
+  channel.Publish("alpha", "1.1.0", MakeSet(kSmallMap, 'b'));
+  channel.Sign(2);
+  const std::vector<std::string> in_use = {"alpha"};
+  FetchOnDemand({}, kNow, in_use);  // stores 1.1.0; the old version is still the one the index named at this pass's GC
+  FetchOnDemand({}, kNow, in_use);  // this pass's GC finds 1.0.0 unreferenced
+  EXPECT_EQ(Index().maps.at(MapKey("alpha", kPlatformPc)).version, "1.1.0");
+  EXPECT_TRUE(fs.HasDir(old_version));
+}
+
+// A map this run mounted keeps its directory and its index entry when the group stops listing it; the next run's GC removes it.
+TEST_F(MapRunTest, AMountedMapIsKeptByTheGcWhileThisRunMountsIt) {
+  channel.Publish("alpha", "1.0.0", MakeSet(kSmallMap, 'a'));
+  channel.Sign(1);
+  Fetch();
+  channel.Unpublish("alpha");
+  channel.Sign(2);
+  const std::vector<std::string> in_use = {"alpha"};
+  FetchOnDemand({}, kNow, in_use);  // the group loses alpha at the end of this pass
+  FetchOnDemand({}, kNow, in_use);  // and this pass's GC would remove it, were it not mounted
+  EXPECT_TRUE(fs.HasDir(std::string(kDir) + "/alpha"));
+  EXPECT_TRUE(Cached("alpha"));
+  EXPECT_EQ(env.FindRecord("map_gc", "reason", "unlisted"), nullptr);
+}
+
+// The maps this run mounted are never evicted, and a refused map evicts nothing: the two mounted maps are the only ones that could
+// make room for the large map, so the fetch is refused and both stay, mounted, with their directories.
+TEST_F(MapRunTest, AMapThisRunMountedIsNeverEvicted) {
+  channel.Publish("alpha", "1.0.0", MakeSet(kSmallMap, 'a'));
+  channel.Publish("beta", "1.0.0", MakeSet(kSmallMap, 'b'));
+  channel.Sign(1);
+  Fetch();
+  CacheMount mount(env, fs, config, mounter, nullptr);
+  mount.Mount({kGroup}, kNow);
+  const std::vector<std::string> in_use = mount.MountedIds();
+  EXPECT_EQ(in_use, (std::vector<std::string>{"alpha", "beta"}));
+  channel.Publish("gamma", "1.0.0", MakeSet(kLargeMap, 'c'));
+  channel.Sign(2);
+  env.device.free_bytes = kTinyFreeBytes;
+  const FetchReport fetched = FetchOnDemand({"gamma"}, kPlayedSecond, in_use);
+  EXPECT_EQ(fetched.reason, "over_budget");
+  EXPECT_EQ(env.FindRecord("map_gc", "reason", "budget"), nullptr);
+  EXPECT_TRUE(Cached("alpha"));
+  EXPECT_TRUE(Cached("beta"));
+  EXPECT_TRUE(fs.HasDir(std::string(kDir) + "/alpha"));
+  EXPECT_TRUE(fs.HasDir(std::string(kDir) + "/beta"));
+  EXPECT_EQ(Index().maps.at(MapKey("alpha", kPlatformPc)).last_played_utc, kPlayedSecond);
+}
+
+// The channel's fetch keeps the maps it mounted this run: Channel::FetchPass passes FetchScope::in_use, built from Channel::MountedIds. The
+// second group does not list alpha, so only that scope keeps it: without it the garbage collection drops alpha as unlisted, and the
+// new map is refused over_budget with alpha gone. Here alpha stays, with its directory and its index entry.
+TEST_F(MapRunTest, AFetchPassKeepsTheMapsTheChannelMountedThisRun) {
+  nevr_map_channel::Settings settings;
+  settings.base_url = kBase;
+  settings.keys = {key.pin};
+  nevr_map_channel::Channel mapped(config, settings);
+  MountFirstGroupThenListOnlyASecondMap(mapped);
+  const std::vector<FetchReport> passes = mapped.FetchPass(env, fs, nullptr, {kOtherGroup}, kPlayedSecond, keep_going);
+  ASSERT_EQ(passes.size(), 1u);
+  EXPECT_NE(env.FindRecord("map_plan", "reason", "over_budget"), nullptr);
+  EXPECT_EQ(env.FindRecord("map_gc", "reason", "unlisted"), nullptr);
+  EXPECT_TRUE(Cached("alpha"));
+  EXPECT_TRUE(fs.HasDir(std::string(kDir) + "/alpha"));
+  EXPECT_FALSE(Cached("gamma"));
+}
+
+// A dedicated server fetches each group with the same in_use scope (runtime/content/map_channel.cpp, FetchServerGroup, from
+// Channel::MountedIds): the second group's fetch keeps the first group's mounted map, the same as the channel's own pass.
+TEST_F(MapRunTest, ASecondServerGroupDoesNotEvictTheFirstGroupsMountedMap) {
+  nevr_map_channel::Settings settings;
+  settings.base_url = kBase;
+  settings.keys = {key.pin};
+  nevr_map_channel::Channel mapped(config, settings);
+  MountFirstGroupThenListOnlyASecondMap(mapped);
+  FetchScope scope;
+  scope.in_use = mapped.MountedIds();
+  ASSERT_EQ(scope.in_use, (std::vector<std::string>{"alpha"}));
+  const FetchReport fetched = FetchGroup(env, fs, config, kOtherGroup, {}, nullptr, kPlayedSecond, keep_going, nullptr, scope);
+  EXPECT_EQ(fetched.maps_updated, 0u);
+  EXPECT_NE(env.FindRecord("map_plan", "reason", "over_budget"), nullptr);
+  EXPECT_EQ(env.FindRecord("map_gc", "reason", "unlisted"), nullptr);
+  EXPECT_TRUE(Cached("alpha"));
+  EXPECT_TRUE(fs.HasDir(std::string(kDir) + "/alpha"));
+}
+
+// A refusal says why, in the record: the bytes the map needs and the room the device gives once every map it may evict is gone.
+TEST_F(MapRunTest, ANoRoomRefusalNamesWhyAndEvictsNothing) {
+  channel.Publish("alpha", "1.0.0", MakeSet(kSmallMap, 'a'));
+  channel.Sign(1);
+  Fetch();
+  channel.Publish("gamma", "1.0.0", MakeSet(kLargeMap, 'c'));
+  channel.Sign(2);
+  const std::uint64_t needed = MakeSet(kLargeMap, 'c').size();
+  const std::uint64_t small = MakeSet(kSmallMap, 'a').size();
+  env.device.free_bytes = kTinyFreeBytes;
+  const FetchReport fetched = FetchOnDemand({"gamma"}, kNow);
+  EXPECT_EQ(fetched.reason, "over_budget");
+  const Record* plan = env.FindRecord("map_plan", "reason", "over_budget");
+  ASSERT_NE(plan, nullptr);
+  EXPECT_EQ(plan->level, nevr_cdn::EventLevel::kWarn);
+  EXPECT_EQ(plan->Get("needed"), std::to_string(needed));
+  EXPECT_EQ(plan->Get("available"), std::to_string(kTinyFreeBytes + small));
+  EXPECT_FALSE(plan->Get("consequence").empty());
+  EXPECT_EQ(env.FindRecord("map_gc", "reason", "budget"), nullptr);
+  EXPECT_TRUE(Cached("alpha"));
+}
+
+// A whole-group fetch keeps every map the group lists, so a fetch over the budget evicts none of them.
+TEST_F(MapRunTest, AWholeGroupFetchEvictsNothingItLists) {
+  channel.Publish("alpha", "1.0.0", MakeSet(kSmallMap, 'a'));
+  channel.Sign(1);
+  Fetch();
+  channel.Publish("gamma", "1.0.0", MakeSet(kSmallMap, 'c'));
+  channel.Sign(2);
+  env.device.free_bytes = kTinyFreeBytes;
+  const FetchReport fetched = Fetch();
+  EXPECT_EQ(fetched.reason, "over_budget");
+  EXPECT_TRUE(Cached("alpha"));
+  EXPECT_EQ(env.FindRecord("map_gc", "reason", "budget"), nullptr);
+}
 
 TEST_F(MapRunTest, AnOfflineMountMountsFromTheCacheWithoutNetworkOrMemberHashing) {
   const std::string set_bytes = MakeSet(6, 'a');

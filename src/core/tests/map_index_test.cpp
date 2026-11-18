@@ -44,6 +44,7 @@ CacheIndex SampleIndex() {
   m.game_build = "echovr.exe 34.4.631547";
   m.dir = "arena/windows-x86_64/" + nevr_maps::VersionDirName(m.index_sha256);
   m.pinned_serial = 42;
+  m.last_played_utc = "2026-11-11T00:00:01Z";
   nevr_maps::CachedFile set;
   set.path = "set/windows-x86_64.nevrres";
   set.size = 3000;

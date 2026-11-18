@@ -133,6 +133,7 @@ class CacheMount {
  public:
   CacheMount(nevr_cdn::Env& env, MapFs& fs, const ChannelConfig& config, Mounter& mounter, Deriver* deriver);
   MountReport Mount(const std::vector<std::string>& groups, const std::string& now_utc);
+  std::vector<std::string> MountedIds() const;  // every map this mount holds, sorted: the maps a fetch must not evict
 
  private:
   nevr_cdn::Env& env_;
@@ -172,10 +173,21 @@ struct FetchReport {
   std::uint64_t set_bytes = 0, bytes_to_fetch = 0, bytes_fetched = 0, elapsed_ms = 0;
 };
 
+// What a fetch may evict to make room (the cache budget, docs/reference/maps-channel.md). The default scope is a whole-group fetch: every
+// map the group lists is kept. `on_demand` (a client's fetch) keeps only the ids the session asks for, the maps this fetch stores, and
+// `in_use`: the maps this run mounted, which are never evicted and are stamped as played by this fetch.
+struct FetchScope {
+  bool on_demand = false;
+  std::vector<std::string> ids;
+  std::vector<std::string> in_use;
+};
+
 // Fetches one group's manifest and the maps it lists. `deferred` are maps a mount deferred (MountReport::deferred): their files
 // are hashed again before the plan. `progress` (optional) is called after the plan and after every piece, on the worker.
+// `scope` says which maps the fetch keeps and may evict (FetchScope).
 FetchReport FetchGroup(nevr_cdn::Env& env, MapFs& fs, const ChannelConfig& config, const std::string& group,
                        const std::vector<std::string>& deferred, Deriver* deriver, const std::string& now_utc,
-                       const std::function<bool()>& keep_going, const FetchProgressFn& progress = nullptr);
+                       const std::function<bool()>& keep_going, const FetchProgressFn& progress = nullptr,
+                       const FetchScope& scope = FetchScope());
 
 }  // namespace nevr_maps
