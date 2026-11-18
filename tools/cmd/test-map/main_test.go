@@ -790,7 +790,7 @@ func TestBuildMapOneComponentPerDirectoryAndNoTestNoReasonIsExit1(t *testing.T) 
 	cov.add("a.txt", "x")
 	cov.add("d/x.txt", "y")
 	cov.add("d/y.txt", "z")
-	mp, err := buildMap([]string{"a.txt", "d/x.txt", "d/y.txt"}, cov)
+	mp, err := buildMap([]string{"a.txt", "d/x.txt", "d/y.txt"}, cov, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -803,7 +803,7 @@ func TestBuildMapOneComponentPerDirectoryAndNoTestNoReasonIsExit1(t *testing.T) 
 	if len(mp.Components) != len(wantDirs) || byDir[""].Name != rootName || len(byDir["d"].Files) != len(wantFiles) {
 		t.Errorf("components = %+v", mp.Components)
 	}
-	_, err = buildMap([]string{"src/zz/unknown.weird"}, cover{})
+	_, err = buildMap([]string{"src/zz/unknown.weird"}, cover{}, nil)
 	var fl failure
 	if !errors.As(err, &fl) || fl.code != exitUncovered {
 		t.Errorf("a file with no test and no reason: %v, want a failure with exit %d", err, exitUncovered)
@@ -816,7 +816,7 @@ func TestTheMapsOwnFilesAreInNoComponent(t *testing.T) {
 	t.Parallel()
 	cov := cover{}
 	cov.add("a.txt", "x")
-	mp, err := buildMap([]string{"a.txt", testmap.DefaultPath + "/map.json", testmap.DefaultPath + "/components/x.jsonl"}, cov)
+	mp, err := buildMap([]string{"a.txt", testmap.DefaultPath + "/map.json", testmap.DefaultPath + "/components/x.jsonl"}, cov, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

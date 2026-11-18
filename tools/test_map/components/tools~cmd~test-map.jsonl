@@ -5,3 +5,5 @@
 {"file":"tools/cmd/test-map/main_test.go","tests":["go:cmd/guard-proof","go:cmd/test-map"]}
 {"file":"tools/cmd/test-map/rules.go","tests":["go:cmd/guard-proof","go:cmd/test-map"]}
 {"file":"tools/cmd/test-map/tools.go","tests":["go:cmd/guard-proof","go:cmd/test-map"]}
+{"file":"tools/cmd/test-map/walkers.go","tests":["go:cmd/guard-proof","go:cmd/test-map"]}
+{"file":"tools/cmd/test-map/walkers_test.go","tests":["go:cmd/guard-proof","go:cmd/test-map"]}

@@ -4,7 +4,9 @@
   "The map just test-changed reads (tools/cmd/test-changed). It is written by just test-map (tools/cmd/test-map) from the",
   "build trees, the Quest presets, the Go packages and the tests' own text: never by hand. Each tracked file is in exactly",
   "one component, the one of its directory: its tests in files, or in none the reason it has no test of its own.",
-  "A file's tests are its own, then those of each scanner whose globs match it. A test id is a target below, or",
+  "A file's tests are its own, then those of each scanner whose globs match it; a test that walks the tree (rglob, glob,",
+  "iterdir, os.walk or git ls-files over the repository) is a scanner the generator derives from its text (walkers.go).",
+  "A test id is a target below, or",
   "gtest:<binary> (just test-auth-unit <binary>), just:<recipe>, go:<package under tools/> (go -C tools test -count=1 ./<package>)",
   "or pytest:<name> (tools/tests/<name>.py). {preset} in a target is the build preset, else mingw-release.",
   "A land runs only the fast unit tests: the heavy ids (internal/testmap heavy.go) are listed and skipped by test-changed,",
@@ -78,6 +80,423 @@
    ],
    "tests": [
     "doc-paths"
+   ]
+  },
+  {
+   "name": "walk-internal-questwiring",
+   "globs": [
+    "**"
+   ],
+   "tests": [
+    "go:internal/questwiring"
+   ]
+  },
+  {
+   "name": "walk-internal-testshelf",
+   "globs": [
+    "src/**/*.cpp",
+    "src/**/*.cc",
+    "src/**/*.h",
+    "src/quest/host_tests/**/*.cmake",
+    "src/quest/host_tests/**/CMakeLists.txt"
+   ],
+   "tests": [
+    "go:internal/testshelf"
+   ]
+  },
+  {
+   "name": "walk-test_adr_numbers",
+   "globs": [
+    "docs/adr/*.md"
+   ],
+   "tests": [
+    "pytest:test_adr_numbers"
+   ]
+  },
+  {
+   "name": "walk-test_build_identity_scope",
+   "globs": [
+    "sdk/**/*.h",
+    "sdk/**/*.hpp",
+    "src/**/*.h",
+    "src/**/*.hpp"
+   ],
+   "tests": [
+    "pytest:test_build_identity_scope"
+   ]
+  },
+  {
+   "name": "walk-test_builtin_defaults_contract",
+   "globs": [
+    "config/public-defaults.env",
+    "config/public-defaults.env/**",
+    "plugins/**/*",
+    "src/**/*"
+   ],
+   "tests": [
+    "pytest:test_builtin_defaults_contract"
+   ]
+  },
+  {
+   "name": "walk-test_cli_flag_names",
+   "globs": [
+    "**"
+   ],
+   "tests": [
+    "pytest:test_cli_flag_names"
+   ]
+  },
+  {
+   "name": "walk-test_config_yaml_source",
+   "globs": [
+    "src/abi",
+    "src/abi/**",
+    "src/core",
+    "src/core/**",
+    "src/extension",
+    "src/extension/**",
+    "src/launcher",
+    "src/launcher/**",
+    "src/modules",
+    "src/modules/**",
+    "src/runtime",
+    "src/runtime/**"
+   ],
+   "tests": [
+    "pytest:test_config_yaml_source"
+   ]
+  },
+  {
+   "name": "walk-test_content_packs_doc",
+   "globs": [
+    "src/**/*"
+   ],
+   "tests": [
+    "pytest:test_content_packs_doc"
+   ]
+  },
+  {
+   "name": "walk-test_credits_text_wiring",
+   "globs": [
+    "src/**/credits_block.cpp",
+    "src/**/credits_block.cpp/**",
+    "src/runtime/**/*"
+   ],
+   "tests": [
+    "pytest:test_credits_text_wiring"
+   ]
+  },
+  {
+   "name": "walk-test_echocombat_plugins_workflow",
+   "globs": [
+    ".github/workflows/*.yml"
+   ],
+   "tests": [
+    "pytest:test_echocombat_plugins_workflow"
+   ]
+  },
+  {
+   "name": "walk-test_executable_scripts",
+   "globs": [
+    "**"
+   ],
+   "tests": [
+    "pytest:test_executable_scripts"
+   ]
+  },
+  {
+   "name": "walk-test_frame_stats_wiring",
+   "globs": [
+    "src/runtime/**/*.cpp"
+   ],
+   "tests": [
+    "pytest:test_frame_stats_wiring"
+   ]
+  },
+  {
+   "name": "walk-test_host_log_mutex_creation",
+   "globs": [
+    "src/runtime/host/**"
+   ],
+   "tests": [
+    "pytest:test_host_log_mutex_creation"
+   ]
+  },
+  {
+   "name": "walk-test_installer_name",
+   "globs": [
+    "**"
+   ],
+   "tests": [
+    "pytest:test_installer_name"
+   ]
+  },
+  {
+   "name": "walk-test_invite_answer_wiring",
+   "globs": [
+    "src/runtime/**/*.cpp"
+   ],
+   "tests": [
+    "pytest:test_invite_answer_wiring"
+   ]
+  },
+  {
+   "name": "walk-test_loadout_entrant_wiring",
+   "globs": [
+    "src/runtime/**/*"
+   ],
+   "tests": [
+    "pytest:test_loadout_entrant_wiring"
+   ]
+  },
+  {
+   "name": "walk-test_naming_inventory",
+   "globs": [
+    "**"
+   ],
+   "tests": [
+    "pytest:test_naming_inventory"
+   ]
+  },
+  {
+   "name": "walk-test_no_conflict_markers",
+   "globs": [
+    "CMakeLists.txt",
+    "CMakeLists.txt/**",
+    "sdk",
+    "sdk/**",
+    "src",
+    "src/**",
+    "tools",
+    "tools/**"
+   ],
+   "tests": [
+    "pytest:test_no_conflict_markers"
+   ]
+  },
+  {
+   "name": "walk-test_patch_detour_logging",
+   "globs": [
+    "src/**/*"
+   ],
+   "tests": [
+    "pytest:test_patch_detour_logging"
+   ]
+  },
+  {
+   "name": "walk-test_plugin_sdk_package",
+   "globs": [
+    "sdk/include/nevr/*.h",
+    "sdk/include/nevr/pc/*.h"
+   ],
+   "tests": [
+    "pytest:test_plugin_sdk_package"
+   ]
+  },
+  {
+   "name": "walk-test_process_memcpy_error_argument",
+   "globs": [
+    "src/runtime/**/*"
+   ],
+   "tests": [
+    "pytest:test_process_memcpy_error_argument"
+   ]
+  },
+  {
+   "name": "walk-test_quest_attach_wiring",
+   "globs": [
+    "src/quest/**/*"
+   ],
+   "tests": [
+    "pytest:test_quest_attach_wiring"
+   ]
+  },
+  {
+   "name": "walk-test_quest_crash_dir_wiring",
+   "globs": [
+    "src/quest/**/*.cpp",
+    "src/quest/**/*.h"
+   ],
+   "tests": [
+    "pytest:test_quest_crash_dir_wiring"
+   ]
+  },
+  {
+   "name": "walk-test_quest_hand_pose_log_wiring",
+   "globs": [
+    "src/quest/**/*.[ch]*",
+    "src/quest/sentinel/*.cpp"
+   ],
+   "tests": [
+    "pytest:test_quest_hand_pose_log_wiring"
+   ]
+  },
+  {
+   "name": "walk-test_quest_hook_budget",
+   "globs": [
+    "src/quest/**/*"
+   ],
+   "tests": [
+    "pytest:test_quest_hook_budget"
+   ]
+  },
+  {
+   "name": "walk-test_quest_no_code_writes",
+   "globs": [
+    "src/quest/**/*"
+   ],
+   "tests": [
+    "pytest:test_quest_no_code_writes"
+   ]
+  },
+  {
+   "name": "walk-test_quest_plugin_default_wiring",
+   "globs": [
+    "tools/cmd/quest-repack-libs/*.go",
+    "tools/internal/questrepack/*.go"
+   ],
+   "tests": [
+    "pytest:test_quest_plugin_default_wiring"
+   ]
+  },
+  {
+   "name": "walk-test_quest_quit_path",
+   "globs": [
+    "src/quest/**/*"
+   ],
+   "tests": [
+    "pytest:test_quest_quit_path"
+   ]
+  },
+  {
+   "name": "walk-test_quest_sentinel_no_namespace_mutex",
+   "globs": [
+    "src/quest/sentinel/*.cpp"
+   ],
+   "tests": [
+    "pytest:test_quest_sentinel_no_namespace_mutex"
+   ]
+  },
+  {
+   "name": "walk-test_quest_shared_redirect_sources",
+   "globs": [
+    "src/quest/**/*",
+    "src/runtime/**/*"
+   ],
+   "tests": [
+    "pytest:test_quest_shared_redirect_sources"
+   ]
+  },
+  {
+   "name": "walk-test_quest_store_wiring",
+   "globs": [
+    "src/quest/obb/*.cpp"
+   ],
+   "tests": [
+    "pytest:test_quest_store_wiring"
+   ]
+  },
+  {
+   "name": "walk-test_release_assets",
+   "globs": [
+    ".github/workflows/*.yml"
+   ],
+   "tests": [
+    "pytest:test_release_assets"
+   ]
+  },
+  {
+   "name": "walk-test_return_to_lobby_queue_wiring",
+   "globs": [
+    "src/runtime/**/*.cpp"
+   ],
+   "tests": [
+    "pytest:test_return_to_lobby_queue_wiring"
+   ]
+  },
+  {
+   "name": "walk-test_run_tool_tests",
+   "globs": [
+    "tools/tests/*.py"
+   ],
+   "tests": [
+    "pytest:test_run_tool_tests"
+   ]
+  },
+  {
+   "name": "walk-test_runtime_dll_name",
+   "globs": [
+    "**"
+   ],
+   "tests": [
+    "pytest:test_runtime_dll_name"
+   ]
+  },
+  {
+   "name": "walk-test_serverdb_route_wiring",
+   "globs": [
+    "src/runtime/**/*.cpp",
+    "src/runtime/**/*.h"
+   ],
+   "tests": [
+    "pytest:test_serverdb_route_wiring"
+   ]
+  },
+  {
+   "name": "walk-test_spectatorstream_order",
+   "globs": [
+    "src/**/*.cpp"
+   ],
+   "tests": [
+    "pytest:test_spectatorstream_order"
+   ]
+  },
+  {
+   "name": "walk-test_vcpkg_pin",
+   "globs": [
+    ".github/actions/**/*.yml",
+    ".github/workflows/*.yml",
+    "tools/*.sh"
+   ],
+   "tests": [
+    "pytest:test_vcpkg_pin"
+   ]
+  },
+  {
+   "name": "walk-test_verifying_a_release_doc",
+   "globs": [
+    "docs/reference/release-verification/**"
+   ],
+   "tests": [
+    "pytest:test_verifying_a_release_doc"
+   ]
+  },
+  {
+   "name": "walk-test_werror_live",
+   "globs": [
+    "**/*CMakeLists.txt"
+   ],
+   "tests": [
+    "pytest:test_werror_live"
+   ]
+  },
+  {
+   "name": "walk-test_workflow_action_runtimes",
+   "globs": [
+    ".github/actions/*/action.yml",
+    ".github/workflows/*.yml"
+   ],
+   "tests": [
+    "pytest:test_workflow_action_runtimes"
+   ]
+  },
+  {
+   "name": "walk-test_workflows_ndk",
+   "globs": [
+    ".github/workflows/*.yml"
+   ],
+   "tests": [
+    "pytest:test_workflows_ndk"
    ]
   }
  ]

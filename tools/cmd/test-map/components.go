@@ -14,7 +14,7 @@ const rootName = "(root)"
 
 // buildMap makes the map from the coverage: one component per directory that holds tracked files, each file in its files
 // (with its test ids) or in none (with its reason). A file with neither is an exitUncovered failure naming every such file.
-func buildMap(tracked []string, cov cover) (*testmap.Map, error) {
+func buildMap(tracked []string, cov cover, walks []testmap.Scanner) (*testmap.Map, error) {
 	byDir := map[string][]string{}
 	for _, f := range tracked {
 		if testmap.IsMapFile(f) {
@@ -68,7 +68,7 @@ func buildMap(tracked []string, cov cover) (*testmap.Map, error) {
 		Schema:     testmap.Schema,
 		About:      about,
 		Targets:    targets,
-		Scanners:   scanners,
+		Scanners:   append(append([]testmap.Scanner(nil), scanners...), walks...),
 		Components: comps,
 	}, nil
 }

@@ -174,7 +174,7 @@ func (g *generator) do() int {
 	if err := m.cover(); err != nil {
 		return g.fail(err)
 	}
-	mp, err := buildMap(m.tracked, m.cov)
+	mp, err := buildMap(m.tracked, m.cov, m.walks)
 	if err != nil {
 		return g.fail(err)
 	}

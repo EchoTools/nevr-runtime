@@ -122,6 +122,7 @@ type mapper struct {
 	incCache  map[string][]string
 	cov       cover
 	fallbacks []string
+	walks     []testmap.Scanner // the scanners of the tests that walk the tree (walkScanners)
 }
 
 // newMapper reads the tracked files of repo.
@@ -156,6 +157,7 @@ func (m *mapper) cover() error {
 		{"whole-trees", m.wholeTrees},
 		{"go", m.goPackages},
 		{"references", m.references},
+		{"walks", m.walkStage},
 		{"fixed", m.fixed},
 		{"include-closure", m.closure},
 	}
@@ -627,6 +629,13 @@ func (m *mapper) coverText(text, id string, modules map[string]string) {
 			m.cov.add(modules[stem], id)
 		}
 	}
+}
+
+// walkStage derives the scanners of the tests that walk the tree.
+func (m *mapper) walkStage() error {
+	w, err := m.walkScanners(goWalks)
+	m.walks = w
+	return err
 }
 
 // fixed covers each file the fixed rules name: the rows of fixedRules.
