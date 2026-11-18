@@ -414,6 +414,7 @@ just test-changed             # The fast unit tests that cover this branch's cha
 just test-map                 # Write the map, the directory tools/test_map/, from the build trees (-check: compare, write nothing)
 just test-full                # The full suite: verify and the suites verify does not run (owner only)
 just test-auth-unit test_x    # Build and run the named GTest binaries only
+python3 tools/run_tool_tests.py tools/tests/test_x.py   # The named Python tool tests only; `just test-tools <file>` runs them and then the whole Go half of tools/ (test-go-tools), so it is not a file's check
 ```
 
 Go-based system tests in `tests/system/` and `tests/plugins/`:
@@ -749,7 +750,7 @@ your seat name, for example `claude-main` or `codex`.
     test the shelf names, and an entry for a test that does not exist fails `go -C tools test ./internal/testshelf`.
 - **No agent runs the full suite or any whole suite.** The whole suites are `just test-full` (`just verify` and the
   suites it does not run), `just verify`, `just test-tools` with no argument that names test files (options, their values
-  and directories leave it whole) and `just test-auth-unit` with no binary and no `GTEST_FILTER`; only the owner runs them, at the
+  and directories leave it whole; a file narrows only the Python half, since `just test-tools <file>` still runs `go test` over all of `tools/`: the clean form for one file is `python3 tools/run_tool_tests.py <file>`) and `just test-auth-unit` with no binary and no `GTEST_FILTER`; only the owner runs them, at the
   owner's choice. Each run of one is recorded in
   `<work root>/test-runs/suite-run.jsonl` (the time, the process, the agent session it came from and its directory, the
   command, the exit code; `tools/cmd/suite-run`), and an agent's run calls the alert hook: the program
