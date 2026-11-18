@@ -50,15 +50,20 @@ inline bool ValidName(std::string_view name) {
 }
 
 // The combat module's features, from what it actually started (runtime/combat/combat.cpp): EchoCombat when VeilNet
-// started, and MEDIGUN when combat.medigun is on and both of its prerequisites (OVERCHARGE's PowerBoost and VeilNet)
+// started and the server holds a whole EchoCombat set (`combatSetMounted`, PLAN-v7 5.5 F7: a server that holds none states
+// none), and MEDIGUN when combat.medigun is on and both of its prerequisites (OVERCHARGE's PowerBoost and VeilNet)
 // started, the same condition the MEDIGUN feature line reports.
-inline std::vector<std::string> CombatFeatures(bool veilStarted, bool medigunOn, bool overchargeStarted) {
+inline std::vector<std::string> CombatFeatures(bool veilStarted, bool medigunOn, bool overchargeStarted, bool combatSetMounted) {
   std::vector<std::string> features;
-  if (!veilStarted) return features;
+  if (!veilStarted || !combatSetMounted) return features;
   features.emplace_back(kEchoCombat);
   if (medigunOn && overchargeStarted) features.emplace_back(kEchoCombatMedigun);
   return features;
 }
+
+// The features line's reason (PLAN-v7 5.5 F7): VeilNet started, and the server holds no whole EchoCombat set, so the set alone withholds
+// EchoCombat from what the server states.
+inline bool WithheldForNoSet(bool veilStarted, bool combatSetMounted) { return veilStarted && !combatSetMounted; }
 
 // "a,b" for a log line; "none" for an empty list.
 inline std::string Joined(const std::vector<std::string>& features) {

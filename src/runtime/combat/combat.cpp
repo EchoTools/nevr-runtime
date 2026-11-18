@@ -32,6 +32,7 @@
 #include "runtime/combat/team_ready.h"
 #include "runtime/combat/unlock_time.h"
 #include "runtime/combat/write_gate.h"
+#include "runtime/content/cargo_pin.h"
 #include "runtime/compat/server_features.h"
 #include "runtime/lifecycle/game_image_guard.h"
 #include "runtime/lifecycle/service_config.h"
@@ -232,14 +233,20 @@ void Install(std::uintptr_t gameBase, bool isServer) {
         OnOff(overcharge && veil && at(Group::kMedigun).on), OnOff(veil), OnOff(veilnet::MatchControlStarted()),
         OnOff(cleanExit));
 
-    // #2333: the features a server states to its clients, from what actually started (server_features.h).
+    // #2333: the features a server states to its clients, from what actually started (server_features.h). PLAN-v7 5.5 F7: a server
+    // states EchoCombat only with a whole set of its own; its boot set was published in StartServer, before this Install (boot.cpp).
+    const bool combatSet = nevr_cargo_pin::ServerHoldsSet();
     std::vector<std::string> features =
-        nevr_server_features::CombatFeatures(veil, at(Group::kMedigun).on, overcharge);
+        nevr_server_features::CombatFeatures(veil, at(Group::kMedigun).on, overcharge, combatSet);
     if (isServer) {
+      const bool noSet = nevr_server_features::WithheldForNoSet(veil, combatSet);
       Log(EchoVR::LogLevel::Info,
-          "[NEVR.COMBAT] server features features=%s (the registration and the lobby settings carry them, so a client "
+          "[NEVR.COMBAT] server features features=%s%s (the registration and the lobby settings carry them, so a client "
           "shows the EchoCombat tac mods%s only on a server that states them)",
-          nevr_server_features::Joined(features).c_str(), features.size() > 1 ? " and MEDIGUN" : "");
+          nevr_server_features::Joined(features).c_str(),
+          noSet ? " reason=no_combat_set (this server holds no whole EchoCombat set, so it states none)"
+                : "",
+          features.size() > 1 ? " and MEDIGUN" : "");
     }
     std::lock_guard<std::mutex> lock(g_featuresLock);
     g_serverFeatures = std::move(features);

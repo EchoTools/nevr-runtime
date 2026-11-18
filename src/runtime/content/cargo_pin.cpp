@@ -20,6 +20,7 @@ struct Edge {
   std::string marker;
   bool boot_state = false;
   bool server = false;  // BindServerFeed: B is also the server's cargo pin
+  bool holds_set = false;  // a server's boot set pins a whole set (ServerHoldsSet)
   Sha256HexFn sha256_hex;
 };
 
@@ -76,6 +77,7 @@ void Arm(const nevr_cdn::RunConfig& config, nevr_cdn::Env* env) {
     edge.marker = nevr_cdn::BootRefetchPath(config.dir);
     edge.boot_state = config.boot_state;
     edge.server = false;
+    edge.holds_set = false;
     edge.sha256_hex = HasherOf(env);
     edge.feed = std::make_unique<CargoFeed>(config.platform, config.policy);
   }
@@ -92,6 +94,8 @@ void SetBootSet(const nevr_cdn::BootMount& boot) {
     edge.feed->OnBoot(boot, edge.sha256_hex);
     server = edge.server;
     pin = edge.feed->View().local;
+    // F7: a server states EchoCombat only with a whole set of its own, which is what its boot pin says (the boot set is set once per run).
+    if (server) edge.holds_set = pin != kCargoPinNone;
   }
   // The server's B is the pin its tick writes into the lobby; the session pin takes its own lock, so it is set outside this one.
   if (server) nevr_map_session_pin::SetCargoServerPin(pin);
@@ -116,11 +120,18 @@ void BindFeed(nevr_cdn::RunConfig& config, nevr_cdn::Env* env) {
   config.on_end = [](const char* cause) { SetFetchState(cause); };
 }
 
+bool ServerHoldsSet() {
+  Edge& edge = State();
+  std::lock_guard<std::mutex> lock(edge.mutex);
+  return edge.holds_set;
+}
+
 void BindServerFeed(nevr_cdn::RunConfig& config, nevr_cdn::Env* env) {
   Edge& edge = State();
   {
     std::lock_guard<std::mutex> lock(edge.mutex);
     edge.server = true;
+    edge.holds_set = false;
     edge.sha256_hex = HasherOf(env);
     edge.feed = std::make_unique<CargoFeed>(config.platform, config.policy);
   }

@@ -19,6 +19,10 @@ void SetManifestPin(const nevr_cdn::Manifest& manifest);
 // RunConfig::on_end: the cause the fetch's boot-state writes settled on ("none", "settled", "undeliverable" or "no_space").
 void SetFetchState(const char* cause);
 
+// True on a dedicated server whose boot set pins a whole set (B != kCargoPinNone; PLAN-v7 5.5 "Consequences", F7). False before the boot set,
+// and on a client. The server's features state EchoCombat only while this holds (runtime/combat/combat.cpp).
+bool ServerHoldsSet();
+
 // Binds the client's feed to one run's config: Arm, then the three seams above. Called after config.boot_state is set (Arm reads it),
 // before nevr_cdn::Start (lifecycle/cdn_start.cpp).
 void BindFeed(nevr_cdn::RunConfig& config, nevr_cdn::Env* env);

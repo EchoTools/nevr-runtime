@@ -98,11 +98,15 @@ process.
    custom combat map (`docs/adr/0048-custom-maps-channel.md`), whose level is none of the six. Falsifier for the scope: a session on a
    level outside the six that reads `combat_content` records, played by a client on another set.
    Status on this tree: a PC client arms the decision (`src/runtime/content/cargo_pin.cpp`, `Arm`) and a PC server writes its boot set's
-   pin (`BindServerFeed`, `SetCargoServerPin`). The features a server states do not yet follow its set (tracker #2242).
+   pin (`BindServerFeed`, `SetCargoServerPin`). A PC server states EchoCombat only while its boot set holds a whole set
+   (`nevr_cargo_pin::ServerHoldsSet`, `nevr_server_features::CombatFeatures`, `src/runtime/combat/combat.cpp`; PLAN-v7 5.5 F7), and its
+   features line says `reason=no_combat_set` when it holds none. KNOWN-WRONG #2242: a server whose data directory has no nEVR root runs
+   no CDN start, so it writes no pin and a client with a set stays in its sessions (the cause is named where `StartServer` returns early).
 10. **Client textures; server game data on demand.** A dedicated server fetches no texture cargo. At boot it fetches only the boot-only
     labels (`combat_content`, `kBootOnlyLabels`, `src/cdn/cdn_run.h`) before its one boot set, stored and then mounted once from the cache,
-    bounded by `kServerBootFetchMs`; a fetch that ends at the bound or fails leaves the cache's set, and a server with no whole set states
-    no pin (`nevr_cdn::StartServer`, `ServerBoot`). It makes no background fetch, and its boot set does not change in the run.
+    bounded by `kServerBootFetchMs`; a fetch that ends at the bound or fails leaves the cache's set. A server with no whole set writes
+    `kCargoPinNone` as its pin and states no EchoCombat (`nevr_cdn::StartServer`, `ServerBoot`, `nevr_cargo_pin::ServerHoldsSet`), so a
+    client with a set leaves its combat sessions. It makes no background fetch, and its boot set does not change in the run.
     When it learns a session's game mode,
     and its map when the session names one, it takes the objects they need across every level the mode can load from the manifest, in
     every label its defaults turn on, `game` included, and resolves each in this order: the nEVR cache, then the game's installed files

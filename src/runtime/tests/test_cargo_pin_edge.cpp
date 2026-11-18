@@ -334,3 +334,52 @@ TEST_F(CargoPinEdge, TheServersFeedArmsNoClientDecision) {
   EXPECT_TRUE(game.notices.empty());
   EXPECT_TRUE(env.atomic_writes.empty());
 }
+
+// PLAN-v7 5.5 "Consequences" (F7): a server holds a set only while its boot set pins one, and nothing holds a set before the boot set. A client
+// never holds one (the server's features read this on a server only).
+TEST_F(CargoPinEdge, AServerHoldsASetOnlyWhenItsBootSetPinsOne) {
+  CountingEnv env;
+  nc::RunConfig config;
+  config.dir = kDir;
+  config.platform = nc::kWindowsX64;
+  config.policy = PolicyOn();
+  ncp::BindServerFeed(config, &env);
+  EXPECT_FALSE(ncp::ServerHoldsSet());
+  config.on_boot(BootWith(Golden(), Whole(), kCauseNone));
+  EXPECT_TRUE(ncp::ServerHoldsSet());
+}
+
+TEST_F(CargoPinEdge, AClientNeverHoldsASet) {
+  CountingEnv env;
+  nc::RunConfig config = BoundConfig(&env, /*boot_state=*/false);
+  config.on_boot(BootWith(Golden(), Whole(), kCauseNone));
+  EXPECT_FALSE(ncp::ServerHoldsSet());
+}
+
+// PLAN-v7 5.5 R11 test 11 (G2): a server whose cache is empty at its deadline. Its boot runs once with an empty Mounted: its pin is
+// kCargoPinNone, it holds no set, and its tick writes kCargoPinNone with no map pin mounted. A client on a set leaves that server's combat
+// session with server_none (row 10).
+TEST_F(CargoPinEdge, AServerWithAnEmptyCacheAtItsDeadlineWritesNoneAndAClientWithASetLeaves) {
+  CountingEnv server_env;
+  nc::RunConfig server;
+  server.dir = kDir;
+  server.platform = nc::kWindowsX64;
+  server.policy = PolicyOn();
+  ncp::BindServerFeed(server, &server_env);
+  server.on_boot(BootWith(nc::Manifest(), nc::Mounted(), "ceiling"));
+  EXPECT_FALSE(ncp::ServerHoldsSet());
+
+  FakeServer host;
+  host.owner["level"] = kLevel;
+  Tick(host);
+  EXPECT_EQ(host.owner[sp::kOwnerCargoPinKey], ncp::kCargoPinNone);
+
+  CountingEnv client_env;
+  nc::RunConfig client = BoundConfig(&client_env, /*boot_state=*/false);
+  client.on_boot(BootWith(Golden(), Whole(), kCauseNone));
+  FakeClient game = ClientAt(ncp::kCargoPinNone);
+  Tick(game);
+  const sp::PinEvent* skew = FindCargoSkew(game);
+  ASSERT_NE(skew, nullptr);
+  EXPECT_EQ(skew->reason, "server_none");
+}

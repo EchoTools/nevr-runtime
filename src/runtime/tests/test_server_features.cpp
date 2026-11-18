@@ -28,16 +28,32 @@ using Names = std::vector<std::string>;
 Statement Read(const std::string& text) { return ReadDocument(text.data(), text.size()); }
 
 TEST(ServerFeaturesCombat, NothingWithoutVeilNet) {
-  EXPECT_EQ(CombatFeatures(false, true, true), Names{});
-  EXPECT_EQ(CombatFeatures(false, false, false), Names{});
+  EXPECT_EQ(CombatFeatures(false, true, true, true), Names{});
+  EXPECT_EQ(CombatFeatures(false, false, false, true), Names{});
 }
 
-TEST(ServerFeaturesCombat, EchoCombatWhenVeilNetStarted) { EXPECT_EQ(CombatFeatures(true, false, true), Names{"echocombat"}); }
+TEST(ServerFeaturesCombat, EchoCombatWhenVeilNetStarted) { EXPECT_EQ(CombatFeatures(true, false, true, true), Names{"echocombat"}); }
 
 TEST(ServerFeaturesCombat, MedigunNeedsTheKeyAndOvercharge) {
-  EXPECT_EQ(CombatFeatures(true, true, true), (Names{"echocombat", "echocombat_medigun"}));
-  EXPECT_EQ(CombatFeatures(true, true, false), Names{"echocombat"});
-  EXPECT_EQ(CombatFeatures(true, false, true), Names{"echocombat"});
+  EXPECT_EQ(CombatFeatures(true, true, true, true), (Names{"echocombat", "echocombat_medigun"}));
+  EXPECT_EQ(CombatFeatures(true, true, false, true), Names{"echocombat"});
+  EXPECT_EQ(CombatFeatures(true, false, true, true), Names{"echocombat"});
+}
+
+// PLAN-v7 5.5 R11 test 10 (F7): a server with no whole EchoCombat set (its boot set pins none) states no EchoCombat, whatever started, and
+// MEDIGUN goes with it. With the set, the same inputs state it.
+TEST(ServerFeaturesCombat, NoWholeSetStatesNoEchoCombat) {
+  EXPECT_EQ(CombatFeatures(true, true, true, false), Names{});
+  EXPECT_EQ(CombatFeatures(true, false, false, false), Names{});
+  EXPECT_EQ(CombatFeatures(true, true, true, true), (Names{"echocombat", "echocombat_medigun"}));
+}
+
+// The features line's reason (PLAN-v7 5.5 F7): only VeilNet started with no whole set is withheld for that reason.
+TEST(ServerFeaturesCombat, WithheldForNoSetOnlyWhenVeilStartedAndNoSet) {
+  EXPECT_TRUE(nevr_server_features::WithheldForNoSet(true, false));
+  EXPECT_FALSE(nevr_server_features::WithheldForNoSet(true, true));
+  EXPECT_FALSE(nevr_server_features::WithheldForNoSet(false, false));
+  EXPECT_FALSE(nevr_server_features::WithheldForNoSet(false, true));
 }
 
 TEST(ServerFeaturesNames, OnlyTheServicesPattern) {

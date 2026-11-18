@@ -157,6 +157,9 @@ bool Start() noexcept {
 
 bool StartServer() noexcept {
   const std::string root = nevr_root::RootA();
+  // KNOWN-WRONG #2242: this early return binds no feed and publishes no boot set, so the server writes no nevr_cargo_pin key and states no
+  // EchoCombat (ServerHoldsSet stays false). A client with a set reads no key, which is the pre-R11 server case and it stays, so the
+  // Warning below's "leaves its combat sessions" is not what happens on this path.
   if (root.empty()) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.CDN] cdn_start role=server result=off reason=no_nevr_root consequence=\"this server holds no EchoCombat set this run: it states "
@@ -190,6 +193,8 @@ SessionDemandOutcome ResolveDemandForSession(std::uint64_t level, std::string_vi
   config.policy.role = nevr_cdn::Role::kServer;
   config.script_dir = GameScriptDir();
   // The demand resolve does not apply boot_only: a session's set is the manifest's of its own fetch, whatever the boot set (StartServer) held.
+  // KNOWN-WRONG #2242: the server's cargo pin is its boot set's pin and is not rewritten when this resolve mounts a different set, so a session's
+  // combat_content can differ from the pin the server states (PLAN-v7 5.5 "Consequences", the open gap of SERVER-BOOT).
   config.boot_only.clear();
   // The manifest's v2 to v1 fallback on a 404 is the client's too: a decision, two-way door (PLAN-v5 R6-a-2b 3.6).
   nevr_cdn::WindowsEnv& env = ProcessEnv();

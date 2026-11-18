@@ -90,8 +90,13 @@ func TestTheRegistrationCarriesTheCombatModulesFeatures(t *testing.T) {
 }
 
 func TestTheCombatModuleComputesThemFromWhatStarted(t *testing.T) {
-	if !regexp.MustCompile(`CombatFeatures\(veil, at\(Group::kMedigun\)\.on, overcharge\)`).MatchString(code(t, "src/runtime/combat/combat.cpp")) {
-		t.Error("combat.cpp no longer computes the features from what started")
+	src := code(t, "src/runtime/combat/combat.cpp")
+	if !regexp.MustCompile(`const bool combatSet = nevr_cargo_pin::ServerHoldsSet\(\);`).MatchString(src) ||
+		!regexp.MustCompile(`CombatFeatures\(veil, at\(Group::kMedigun\)\.on, overcharge, combatSet\)`).MatchString(src) {
+		t.Error("combat.cpp no longer computes the features from what started and whether the server holds its whole set")
+	}
+	if !strings.Contains(code(t, "src/runtime/combat/combat.cpp"), "reason=no_combat_set") {
+		t.Error("the server features line no longer says why it states no EchoCombat (reason=no_combat_set)")
 	}
 }
 
