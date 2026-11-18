@@ -117,6 +117,11 @@ nevr_ht_test(tls_ca_test GROUP shared HOST PTHREAD LIBS curl ssl crypto
       src/quest/auth/prompt_presenters.cpp src/quest/auth/prompt_board.cpp
       src/quest/auth/curl_http.cpp src/quest/auth/ca_bundle.cpp src/quest/tests/tls_ca_test.cpp)
 
+# The Quest crash report POST (integration/crash_send_step.h, CurlCrashPost) against a loopback HTTP server: the request, the status,
+# the transport failures and the refusal of plain http in the sentinel's setting.
+nevr_ht_test(crash_send_step_test GROUP shared HOST PTHREAD LIBS curl ssl crypto
+  SRC src/quest/integration/crash_send_step.cpp src/quest/auth/curl_http.cpp src/quest/auth/ca_bundle.cpp
+      src/quest/tests/crash_send_step_test.cpp)
 # Quest login rewrite: the compose half (login_rewrite.cpp, exceptions enabled) and the apply half (login_apply.cpp, built
 # -fno-exceptions exactly as on the device, because it runs while game code is live) plus the shared PCVR login builder, against a
 # fake CJson. The Android adapter (login_hook.cpp) cannot run on the host; build-android compiles it. The login tests also link the

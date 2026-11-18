@@ -9,7 +9,8 @@
 
 namespace nevr_quest::integration {
 
-/// The POST of the shared sender through the sentinel's CurlHttpClient. `context` is unused. Never throws.
+/// The POST of the shared sender through the sentinel's CurlHttpClient. `context` is null in the sentinel (https only, the Android
+/// CA store); a test passes a pointer to a `bool` that is true to admit plain http to a loopback server. Never throws.
 nevr_crash_send::PostResult CurlCrashPost(void* context, const std::string& url, const std::string& body,
                                           const nevr_crash_send::Timeouts& timeouts);
 

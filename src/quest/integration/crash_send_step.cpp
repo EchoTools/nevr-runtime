@@ -21,6 +21,9 @@ namespace {
 
 std::atomic<bool> g_started{false};
 
+// The client's own request timeout; every POST here passes its own timeouts (PostJsonWithHeaders), so this one is never reached.
+constexpr long kClientTimeoutSeconds = 10;
+
 long Seconds(long ms) { return ms <= 0 ? 1 : (ms + 999) / 1000; }
 
 bool RandomBytes(std::uint8_t* bytes, std::size_t count) {
@@ -64,11 +67,12 @@ void* SendMain(void* parameter) {
 
 }  // namespace
 
-nevr_crash_send::PostResult CurlCrashPost(void*, const std::string& url, const std::string& body,
+nevr_crash_send::PostResult CurlCrashPost(void* context, const std::string& url, const std::string& body,
                                           const nevr_crash_send::Timeouts& timeouts) {
   nevr_crash_send::PostResult result;
   try {
-    nevr::quest_auth::CurlHttpClient client;
+    const bool allowPlainHttp = context != nullptr && *static_cast<const bool*>(context);
+    nevr::quest_auth::CurlHttpClient client(nevr::quest_auth::AndroidCaDirs(), nullptr, kClientTimeoutSeconds, allowPlainHttp);
     const nevr::auth::HttpResponse response =
         client.PostJsonWithHeaders(url, body, std::vector<std::string>(), Seconds(timeouts.connectMs), Seconds(timeouts.totalMs));
     result.transportOk = response.transport_ok;
