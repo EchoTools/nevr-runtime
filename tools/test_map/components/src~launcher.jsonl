@@ -1,4 +1,5 @@
 {"component":"src/launcher","dir":"src/launcher"}
 {"file":"src/launcher/CMakeLists.txt","tests":["build","pytest:test_config_yaml_source","pytest:test_pe_version_info"]}
 {"file":"src/launcher/echovr_server_launcher.cpp","tests":["build","pytest:test_config_yaml_source"]}
+{"file":"src/launcher/launcher_core.h","tests":["build","gtest:test_launcher_core","pytest:test_config_yaml_source"]}
 {"file":"src/launcher/server_log.h","tests":["build","gtest:test_server_log","pytest:test_config_yaml_source"]}

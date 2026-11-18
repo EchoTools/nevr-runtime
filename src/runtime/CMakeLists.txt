@@ -1223,6 +1223,15 @@ if(BUILD_TESTING)
     target_link_libraries(test_server_log PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_server_log DISCOVERY_MODE PRE_TEST)
 
+    # The server launcher's helpers (launcher/launcher_core.h, header-only): the argument quoting held to CommandLineToArgvW,
+    # the logs folder listing and the run-log follower. main() stays in the launcher; this is the part that decides.
+    add_executable(test_launcher_core tests/test_launcher_core.cpp)
+    set_source_files_properties(tests/test_launcher_core.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_launcher_core PRIVATE -Werror)
+    target_include_directories(test_launcher_core PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_launcher_core PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json shell32)
+    gtest_discover_tests(test_launcher_core DISCOVERY_MODE PRE_TEST)
+
     # #990, #996: the capture header's game type is the settings JSON's gametype, else the lobby type (telemetry_game_type.cpp).
     add_executable(test_telemetry_game_type tests/test_telemetry_game_type.cpp server/telemetry_game_type.cpp)
     set_source_files_properties(tests/test_telemetry_game_type.cpp server/telemetry_game_type.cpp
