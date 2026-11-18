@@ -117,6 +117,7 @@ set(PATCHES_SOURCES
     "combat/loc_script.cpp"
     "combat/orb_pause.cpp"
     "combat/point_rate.cpp"
+    "combat/podium_pages.cpp"
     "combat/rules_button.cpp"
     "combat/wall_script.cpp"
     "combat/script_guard.cpp"
@@ -1414,6 +1415,16 @@ if(BUILD_TESTING)
     target_include_directories(test_wall_script PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_wall_script PRIVATE GTest::gtest GTest::gtest_main nevr_core)
     gtest_discover_tests(test_wall_script DISCOVERY_MODE PRE_TEST)
+
+    # #2242 (H-POD-a): the podium terminal's rules page 2 (runtime/combat/podium_pages.h): the page logic, and the six rows
+    # installed through the script hook table on a fake terminal image (MinHook, the prologue check, Rule 6 on a refusal).
+    add_executable(test_podium_pages tests/test_podium_pages.cpp combat/podium_pages.cpp hook/script_hooks.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_podium_pages.cpp combat/podium_pages.cpp hook/script_hooks.cpp hook/hook_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_podium_pages PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_podium_pages PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_podium_pages PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    gtest_discover_tests(test_podium_pages DISCOVERY_MODE PRE_TEST)
 
     # #600: the shared magazine's frisbee condition (runtime/combat/shared_magazine.h), on a fake shared magazine script.
     add_executable(test_shared_magazine tests/test_shared_magazine.cpp combat/shared_magazine.cpp hook/script_hooks.cpp
