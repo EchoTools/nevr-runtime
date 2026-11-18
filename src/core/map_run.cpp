@@ -216,9 +216,10 @@ struct Listing {
 class MountRun {
  public:
   MountRun(Env& env, MapFs& fs, const ChannelConfig& config, Mounter& mounter, Deriver* deriver,
-           std::map<std::string, std::string>& mounted, std::map<std::uint64_t, std::string>& script_holders)
+           std::map<std::string, std::string>& mounted, std::map<std::uint64_t, std::string>& script_holders,
+           const std::vector<std::string>* only)
       : env_(env), fs_(fs), config_(config), mounter_(mounter), deriver_(deriver), mounted_(mounted),
-        script_holders_(script_holders) {}
+        script_holders_(script_holders), only_(only) {}
 
   MountReport Run(const std::vector<std::string>& groups, const std::string& now_utc) {
     const std::uint64_t started = env_.NowMs();
@@ -314,7 +315,8 @@ class MountRun {
     NotMounted(&report_.skipped, id, token);
     std::vector<Field> fields{{"id", id}, {"reason", token}};
     if (!local_name.empty()) fields.emplace_back("local_name", local_name);
-    env_.Event(EventLevel::kWarn, "map_skipped", fields);
+    // A cached map no session asked for is the expected state under mount_on_demand, not a fault: Info (docs/standards/logging.md).
+    env_.Event(token == kNotAskedToken ? EventLevel::kInfo : EventLevel::kWarn, "map_skipped", fields);
   }
 
   void Defer(const std::string& id, const std::string& token) {
@@ -372,17 +374,13 @@ class MountRun {
     }
   }
 
-  // The listing whose manifest pins the version the cache holds, the first such group in the order given. When none pins it
-  // (the manifest that did was replaced, and the new version is not stored yet), the cached version still mounts under the first
-  // group that lists the map, but its scripts are not counted as official: no manifest verified now vouches for them.
-  static Listing Choose(const std::vector<Listing>& listings, const std::string& cached_sha256) {
+  // The listing whose manifest pins the version the cache holds, the first such group in the order given; null when none does.
+  // A cached version no verified manifest lists is refused stale (kStaleToken), never mounted in place of the listed one.
+  static const Listing* Pinning(const std::vector<Listing>& listings, const std::string& cached_sha256) {
     for (const Listing& l : listings) {
-      if (l.entry.index.sha256 == cached_sha256) return l;
+      if (l.entry.index.sha256 == cached_sha256) return &l;
     }
-    Listing fallback = listings.front();
-    fallback.official = false;
-    fallback.compiled_official = false;
-    return fallback;
+    return nullptr;
   }
 
   void MountOne(const std::string& id, const std::vector<Listing>& listings) {
@@ -406,10 +404,13 @@ class MountRun {
         report_.kept.push_back(id);
         return;
       }
-      return Skip(id, "mounted_other_version");
+      return Skip(id, kMountedOtherVersionToken);
     }
     if (revoked_sha_.count(cached.index_sha256)) return Refuse(id, "revoked");
-    const Listing selected = Choose(listings, cached.index_sha256);
+    if (only_ != nullptr && !Contains(*only_, id)) return Skip(id, kNotAskedToken);
+    const Listing* pinning = Pinning(listings, cached.index_sha256);
+    if (pinning == nullptr) return Refuse(id, kStaleToken);
+    const Listing selected = *pinning;
     const std::string version_dir = Join(config_.dir, cached.dir);
 
     // The package index is held to its pin by its stamp, never hashed here: while the file's stamp, read through the handle the
@@ -578,6 +579,7 @@ class MountRun {
   Deriver* deriver_;
   std::map<std::string, std::string>& mounted_;
   std::map<std::uint64_t, std::string>& script_holders_;
+  const std::vector<std::string>* only_;  // null: every cached map its groups list may mount (ChannelConfig::mount_on_demand)
   CacheIndex index_;
   std::map<std::string, std::vector<Listing>> listings_;
   std::set<std::string> revoked_ids_, revoked_sha_;
@@ -1314,6 +1316,15 @@ class FetchRun {
 
   void PlanAndFetch() {
     const Manifest& manifest = parsed_.manifest;
+    // A named id the verified manifest does not list for this platform fails the fetch before any map is planned or fetched:
+    // nothing outside the verified manifest is ever fetched (ADR 0048 decision 16).
+    for (const std::string& asked : scope_.ids) {
+      const auto listed = manifest.maps.find(asked);
+      if (listed != manifest.maps.end() && listed->second.platforms.count(config_.platform) != 0) continue;
+      env_.Event(EventLevel::kWarn, "map_plan", {{"group", group_}, {"id", asked}, {"reason", "not_listed"}});
+      MapFailed("not_listed");
+      return;
+    }
     std::uint64_t planned = 0;
     struct Planned {
       std::string id;
@@ -1329,6 +1340,13 @@ class FetchRun {
       auto plan = [&](const char* reason, EventLevel level = EventLevel::kInfo) {
         env_.Event(level, "map_plan", {{"group", group_}, {"id", id}, {"reason", reason}});
       };
+      const auto cached = index_.maps.find(key);
+      // On demand, a map the cache does not hold and no session asked for is left alone: a bucket of many maps costs the player
+      // only the maps it plays (a cached map is kept current whether or not it was asked for: it is one the player holds).
+      if (scope_.on_demand && cached == index_.maps.end() && !Contains(scope_.ids, id)) {
+        plan("not_needed");
+        continue;
+      }
       report_.set_bytes += entry.bytes;
       const LocalPrecedence local = DecideLocalPrecedence({id, entry.level_name}, local_names_);
       if (local.skip) {
@@ -1348,7 +1366,6 @@ class FetchRun {
         plan("signed_only", EventLevel::kWarn);
         continue;
       }
-      const auto cached = index_.maps.find(key);
       if (cached != index_.maps.end() && cached->second.index_sha256 == entry.index.sha256) {
         plan("current");
         continue;
@@ -1565,7 +1582,7 @@ class FetchRun {
   Deriver* deriver_;
   const std::function<bool()>& keep_going_;
   const FetchProgressFn& progress_fn_;
-  const FetchScope& scope_;
+  const FetchScope scope_;  // copied: the caller's scope may be a temporary
   const std::set<std::string> in_use_;
   std::string now_utc_;
   struct Victim {
@@ -1621,8 +1638,9 @@ const char* FetchOutcomeName(FetchOutcome outcome) noexcept {
 CacheMount::CacheMount(Env& env, MapFs& fs, const ChannelConfig& config, Mounter& mounter, Deriver* deriver)
     : env_(env), fs_(fs), config_(config), mounter_(mounter), deriver_(deriver) {}
 
-MountReport CacheMount::Mount(const std::vector<std::string>& groups, const std::string& now_utc) {
-  return MountRun(env_, fs_, config_, mounter_, deriver_, mounted_, script_holders_).Run(groups, now_utc);
+MountReport CacheMount::Mount(const std::vector<std::string>& groups, const std::string& now_utc,
+                              const std::vector<std::string>* only) {
+  return MountRun(env_, fs_, config_, mounter_, deriver_, mounted_, script_holders_, only).Run(groups, now_utc);
 }
 
 FetchReport FetchGroup(Env& env, MapFs& fs, const ChannelConfig& config, const std::string& group,

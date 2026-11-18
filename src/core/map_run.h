@@ -97,6 +97,9 @@ struct ChannelConfig {
   bool signed_only = false;          // -require-signed-plugins: a map's scripts count only under an official key (ADR 0048 decision 7)
   std::string channel;               // maps.channel; empty = the channel base_url was bound to at its first fetch
   std::uint32_t boot_budget_ms = 0;  // maps.boot_budget_ms: how long one mount may take; 0 = no limit
+  // A mount grants only the maps a session asked for (CacheMount::Mount's `only`), not every cached map at boot. Off by default:
+  // no platform sets it in this tree, and no config key does (ADR 0048 decision 16: no key chooses which maps a player has).
+  bool mount_on_demand = false;
 };
 
 // Where a group's manifest is on the channel, and where the cache keeps the copy it verified.
@@ -109,6 +112,15 @@ std::vector<std::string> CachedGroupIds(nevr_cdn::Env& env, const std::string& d
 // The files a mount holds open take at most 1 part in this many of the descriptors the process has free (ADR 0045 decision 8);
 // the texture cargo's store files take their own share (cdn/cdn_limits.h, kDescriptorShareForStore).
 inline constexpr std::uint64_t kDescriptorShareForMaps = 4;
+
+// The refusal token of a cached version that no verified manifest lists now (`refused` of map_mounted, a Warning): the map does
+// not mount until the listed version is stored, so an old version never plays in its place (ADR 0048 decision 3).
+inline constexpr const char* kStaleToken = "stale";
+// The skip token of a map an earlier mount of this process holds at another version: a mounted map is never replaced in the
+// process, so a session that names the newer version is told to restart.
+inline constexpr const char* kMountedOtherVersionToken = "mounted_other_version";
+// The skip token of a cached, current map that no session asked for, under ChannelConfig::mount_on_demand.
+inline constexpr const char* kNotAskedToken = "not_asked";
 
 struct MountedMap {
   std::string id, version, index_sha256, platform, source_sha256, title, group;
@@ -132,7 +144,10 @@ struct MountReport {
 class CacheMount {
  public:
   CacheMount(nevr_cdn::Env& env, MapFs& fs, const ChannelConfig& config, Mounter& mounter, Deriver* deriver);
-  MountReport Mount(const std::vector<std::string>& groups, const std::string& now_utc);
+  // `only`, when given, are the ids this call may grant; every other cached map at its listed version is skipped (not_asked).
+  // Given only under ChannelConfig::mount_on_demand: a call without it grants every cached map its groups list.
+  MountReport Mount(const std::vector<std::string>& groups, const std::string& now_utc,
+                    const std::vector<std::string>* only = nullptr);
   std::vector<std::string> MountedIds() const;  // every map this mount holds, sorted: the maps a fetch must not evict
 
  private:
@@ -173,18 +188,20 @@ struct FetchReport {
   std::uint64_t set_bytes = 0, bytes_to_fetch = 0, bytes_fetched = 0, elapsed_ms = 0;
 };
 
-// What a fetch may evict to make room (the cache budget, docs/reference/maps-channel.md). The default scope is a whole-group fetch: every
-// map the group lists is kept. `on_demand` (a client's fetch) keeps only the ids the session asks for, the maps this fetch stores, and
-// `in_use`: the maps this run mounted, which are never evicted and are stamped as played by this fetch.
+// Which of a group's listed maps one fetch stores. By default every listed map (a dedicated server's group, ADR 0048 decision 13).
+// On demand (a client's pass and its request entry, ADR 0048 decision 16): only the ids named here, and the maps the cache already
+// holds at a version the manifest no longer lists, so a bucket of many maps costs a player only the maps it plays. A named id the
+// verified manifest does not list for this platform fails the fetch (not_listed): nothing outside that manifest is fetched.
+// What a fetch may evict to make room (the cache budget, docs/reference/maps-channel.md): every map the group lists is kept by a
+// whole-group fetch. `in_use`: the maps this run mounted, which are never evicted and are stamped as played by this fetch.
 struct FetchScope {
   bool on_demand = false;
   std::vector<std::string> ids;
   std::vector<std::string> in_use;
 };
 
-// Fetches one group's manifest and the maps it lists. `deferred` are maps a mount deferred (MountReport::deferred): their files
-// are hashed again before the plan. `progress` (optional) is called after the plan and after every piece, on the worker.
-// `scope` says which maps the fetch keeps and may evict (FetchScope).
+// Fetches one group's manifest and the maps `scope` takes of it. `deferred` are maps a mount deferred (MountReport::deferred): their
+// files are hashed again before the plan. `progress` (optional) is called after the plan and after every piece, on the worker.
 FetchReport FetchGroup(nevr_cdn::Env& env, MapFs& fs, const ChannelConfig& config, const std::string& group,
                        const std::vector<std::string>& deferred, Deriver* deriver, const std::string& now_utc,
                        const std::function<bool()>& keep_going, const FetchProgressFn& progress = nullptr,

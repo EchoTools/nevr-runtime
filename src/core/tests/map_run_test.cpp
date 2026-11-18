@@ -21,6 +21,7 @@
 #include "core/map_channel.h"
 #include "core/map_fetch_queue.h"
 #include "core/map_index.h"
+#include "core/map_request.h"
 #include "core/map_set_tables.h"
 #include "monocypher-ed25519.h"
 #include "monocypher.h"
@@ -286,9 +287,11 @@ TEST_F(MapRunTest, AMapThisRunMountedIsNeverEvicted) {
   EXPECT_EQ(Index().maps.at(MapKey("alpha", kPlatformPc)).last_played_utc, kPlayedSecond);
 }
 
-// The channel's fetch keeps the maps it mounted this run: Channel::FetchPass passes FetchScope::in_use, built from Channel::MountedIds. The
-// second group does not list alpha, so only that scope keeps it: without it the garbage collection drops alpha as unlisted, and the
-// new map is refused over_budget with alpha gone. Here alpha stays, with its directory and its index entry.
+// The channel's fetch keeps the maps it mounted this run: Channel::FetchPass passes FetchScope::in_use, built from Channel::MountedIds.
+// A client's pass is on demand (ADR 0048 decision 16): with nothing asked it stores no map, so gamma is left alone (not_needed) and
+// alpha stays. The second group does not list alpha, so only the in_use scope keeps it when a session asks for gamma: without it the
+// garbage collection drops alpha as unlisted, and gamma is refused over_budget with alpha gone. Here alpha stays, with its directory and
+// its index entry, in both cases.
 TEST_F(MapRunTest, AFetchPassKeepsTheMapsTheChannelMountedThisRun) {
   nevr_map_channel::Settings settings;
   settings.base_url = kBase;
@@ -297,6 +300,18 @@ TEST_F(MapRunTest, AFetchPassKeepsTheMapsTheChannelMountedThisRun) {
   MountFirstGroupThenListOnlyASecondMap(mapped);
   const std::vector<FetchReport> passes = mapped.FetchPass(env, fs, nullptr, {kOtherGroup}, kPlayedSecond, keep_going);
   ASSERT_EQ(passes.size(), 1u);
+  EXPECT_NE(env.FindRecord("map_plan", "reason", "not_needed"), nullptr);
+  EXPECT_EQ(env.FindRecord("map_plan", "reason", "over_budget"), nullptr);
+  EXPECT_FALSE(Cached("gamma"));
+  EXPECT_TRUE(Cached("alpha"));
+  EXPECT_TRUE(fs.HasDir(std::string(kDir) + "/alpha"));
+
+  FetchScope scope;
+  scope.on_demand = true;
+  scope.ids = {"gamma"};
+  scope.in_use = mapped.MountedIds();
+  const FetchReport asked = FetchGroup(env, fs, config, kOtherGroup, {}, nullptr, kPlayedSecond, keep_going, nullptr, scope);
+  EXPECT_EQ(asked.maps_updated, 0u);
   EXPECT_NE(env.FindRecord("map_plan", "reason", "over_budget"), nullptr);
   EXPECT_EQ(env.FindRecord("map_gc", "reason", "unlisted"), nullptr);
   EXPECT_TRUE(Cached("alpha"));
@@ -448,7 +463,7 @@ TEST_F(MapRunTest, ALocalMapIsSkippedWithNoGrant) {
   EXPECT_EQ(env.open_blobs(), 0u);
 }
 
-TEST_F(MapRunTest, ACrashBeforeTheIndexLeavesTheOldVersionMountedAndTheNextGcRemovesTheNewDirectory) {
+TEST_F(MapRunTest, ACrashBeforeTheIndexMountsNoOldVersionAndTheNextGcRemovesTheNewDirectory) {
   channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
   channel.Sign(1);
   Fetch();
@@ -462,9 +477,10 @@ TEST_F(MapRunTest, ACrashBeforeTheIndexLeavesTheOldVersionMountedAndTheNextGcRem
   EXPECT_EQ(crashed.outcome, FetchOutcome::kFailed);
   EXPECT_TRUE(fs.HasDir(v2_dir));
 
+  // The stored manifest lists 1.1.0 and the cache holds 1.0.0 only: the old version is refused stale, never mounted in its place.
   const MountReport boot = Boot();
-  ASSERT_EQ(boot.staged.size(), 1u);
-  EXPECT_EQ(boot.staged[0].version, "1.0.0");
+  EXPECT_TRUE(boot.staged.empty());
+  EXPECT_EQ(TokenOf(boot, "alpha"), kStaleToken);
 
   env.fail_writes.clear();
   env.server.clear();  // offline: the GC runs, the fetch then fails at the manifest
@@ -507,9 +523,9 @@ TEST_F(MapRunTest, AConfiguredOfficialKeyDoesNotSatisfySignedOnly) {
   EXPECT_TRUE(mounter.script_official.empty());
 }
 
-// A cached version no verified manifest pins any longer (its newer version is not stored yet) still mounts, but an official
-// manifest that pins another version does not vouch for its scripts.
-TEST_F(MapRunTest, AnOfficialManifestDoesNotVouchForAVersionItDoesNotPin) {
+// A cached version no verified manifest lists any longer (its newer version is not stored yet) is refused stale, with or without
+// -require-signed-plugins: the old version never mounts in place of the listed one (ADR 0048 decision 3).
+TEST_F(MapRunTest, ACachedVersionNoManifestListsIsRefusedStale) {
   TestKey official{1, true};
   config.keys = {official.pin};
   channel.Publish("scripted", "1.0.0", MakeSet(2, 'a'), {{1, "dll"}});
@@ -520,11 +536,12 @@ TEST_F(MapRunTest, AnOfficialManifestDoesNotVouchForAVersionItDoesNotPin) {
   env.fail_writes = {std::string(kDir) + "/index.json"};  // the new manifest is stored, the new version is not
   Fetch();
   config.signed_only = true;
-  EXPECT_EQ(TokenOf(Boot(), "scripted"), "signed_only");
+  EXPECT_EQ(TokenOf(Boot(), "scripted"), kStaleToken);
   config.signed_only = false;
   const MountReport boot = Boot();
-  ASSERT_EQ(boot.staged.size(), 1u);
-  EXPECT_EQ(boot.staged[0].version, "1.0.0");
+  EXPECT_TRUE(boot.staged.empty());
+  EXPECT_EQ(TokenOf(boot, "scripted"), kStaleToken);
+  EXPECT_FALSE(mounter.Called("set map:scripted"));
 }
 
 TEST_F(MapRunTest, TheSummaryListsEveryRefusalAndRefusedGroup) {
@@ -1473,6 +1490,192 @@ TEST(GroupFetchQueue, ABadGroupIsRefusedAndStopAnswersEveryWaitingRequest) {
   EXPECT_FALSE(queue.Request(kGroup, nullptr, &reason));
   EXPECT_EQ(reason, "stopped");
   EXPECT_FALSE(queue.WaitForRequest(0));
+}
+
+// ---- On demand (ADR 0048 decision 16): a client's fetch stores the maps it asks for and the ones it holds, never the rest of a group.
+
+class OnDemandTest : public MapRunTest {
+ protected:
+  FetchReport FetchOnDemand(const std::vector<std::string>& ids) {
+    FetchScope scope;
+    scope.on_demand = true;
+    scope.ids = ids;
+    return FetchGroup(env, fs, config, kGroup, {}, nullptr, kNow, keep_going, nullptr, scope);
+  }
+  std::size_t IndexGets(const std::string& id) { return GetsOf(std::string(kBase) + "blobs/sha256/" + channel.IndexSha(id)); }
+  // The worker: runs each queued request with the fetch its scope asks for, until none waits.
+  void Serve(MapRequests& requests) {
+    while (requests.RunNext([this](const std::string& group, const FetchScope& scope) {
+      return FetchGroup(env, fs, config, group, {}, nullptr, kNow, keep_going, nullptr, scope);
+    })) {
+    }
+  }
+};
+
+TEST_F(OnDemandTest, OnlyTheNamedMapOfAGroupIsFetched) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+  channel.Sign(1);
+  const FetchReport fetched = FetchOnDemand({"beta"});
+  EXPECT_EQ(fetched.reason, "");
+  EXPECT_EQ(fetched.outcome, FetchOutcome::kFetched);
+  EXPECT_EQ(fetched.maps_updated, 1u);
+  EXPECT_EQ(IndexGets("alpha"), 0u);
+  EXPECT_EQ(IndexGets("beta"), 1u);
+  const MountReport boot = Boot();
+  EXPECT_TRUE(Mounted(boot, "beta"));
+  EXPECT_FALSE(Mounted(boot, "alpha"));
+  EXPECT_EQ(TokenOf(boot, "alpha"), "not_cached");
+}
+
+TEST_F(OnDemandTest, ACachedCurrentMapCostsOnlyTheManifest) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Sign(1);
+  ASSERT_EQ(FetchOnDemand({"alpha"}).outcome, FetchOutcome::kFetched);
+  const std::size_t gets = env.requests.size();
+  const FetchReport again = FetchOnDemand({"alpha"});
+  EXPECT_EQ(again.outcome, FetchOutcome::kCached);
+  EXPECT_EQ(again.pieces_fetched, 0u);
+  EXPECT_EQ(env.requests.size(), gets + 1);  // the group's manifest only
+  EXPECT_TRUE(Mounted(Boot(), "alpha"));
+}
+
+// A held map the manifest updated is refreshed though nothing names it: only its changed piece is fetched.
+TEST_F(OnDemandTest, AHeldMapTheManifestUpdatedFetchesOnlyTheChangedPieceAndMountsTheNewVersion) {
+  const std::string v1 = MakeSet(6, 'a');
+  channel.Publish("alpha", "1.0.0", v1);
+  channel.Sign(1);
+  ASSERT_EQ(FetchOnDemand({"alpha"}).outcome, FetchOutcome::kFetched);
+  std::string v2 = v1;
+  v2[FramesStart(6) + 3 * kFrameBytes + 20] ^= 1;  // a byte of frame 3's payload
+  channel.Publish("alpha", "1.1.0", v2);
+  channel.Sign(2);
+  const FetchReport update = FetchOnDemand({});
+  EXPECT_EQ(update.maps_updated, 1u);
+  EXPECT_EQ(update.pieces_fetched, 1u);
+  EXPECT_EQ(update.pieces_reused, 6u);
+  const MountReport boot = Boot();
+  ASSERT_EQ(boot.staged.size(), 1u);
+  EXPECT_EQ(boot.staged[0].version, "1.1.0");
+}
+
+TEST_F(OnDemandTest, AnUpdateThatFailsToFetchLeavesTheOldVersionRefusedStale) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Sign(1);
+  ASSERT_EQ(FetchOnDemand({"alpha"}).outcome, FetchOutcome::kFetched);
+  channel.Publish("alpha", "1.1.0", MakeSet(4, 'b'));
+  channel.Sign(2);
+  const std::string v2_index = std::string(kBase) + "blobs/sha256/" + channel.IndexSha("alpha");
+  env.server.erase(v2_index);  // the manifest arrives, the new version cannot be had
+  const FetchReport failed = FetchOnDemand({"alpha"});
+  EXPECT_EQ(failed.outcome, FetchOutcome::kFailed);
+  const MountReport boot = Boot();
+  EXPECT_TRUE(boot.staged.empty());
+  EXPECT_EQ(TokenOf(boot, "alpha"), kStaleToken);
+  EXPECT_FALSE(mounter.Called("set map:alpha"));
+}
+
+TEST_F(OnDemandTest, ANamedIdTheManifestDoesNotListFailsAndFetchesNothing) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Sign(1);
+  const FetchReport fetched = FetchOnDemand({"ghost"});
+  EXPECT_EQ(fetched.outcome, FetchOutcome::kFailed);
+  EXPECT_EQ(fetched.reason, "not_listed");
+  EXPECT_EQ(fetched.pieces_fetched, 0u);
+  EXPECT_EQ(IndexGets("alpha"), 0u);
+  EXPECT_NE(env.FindRecord("map_plan", "reason", "not_listed"), nullptr);
+  EXPECT_TRUE(Boot().mounted.empty());
+}
+
+// The mount grants only the asked ids under mount_on_demand: every other cached map at its listed version is not_asked.
+TEST_F(OnDemandTest, AMountGrantsOnlyTheAskedMapsAndTheFlagIsOffByDefault) {
+  EXPECT_FALSE(ChannelConfig().mount_on_demand);
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+  channel.Sign(1);
+  ASSERT_EQ(Fetch().outcome, FetchOutcome::kFetched);  // both cached
+  config.mount_on_demand = true;
+  CacheMount mount(env, fs, config, mounter, nullptr);
+  const std::vector<std::string> asked{"beta"};
+  const MountReport boot = mount.Mount({kGroup}, kNow, &asked);
+  EXPECT_TRUE(Mounted(boot, "beta"));
+  EXPECT_FALSE(Mounted(boot, "alpha"));
+  EXPECT_EQ(TokenOf(boot, "alpha"), kNotAskedToken);
+  EXPECT_FALSE(mounter.Called("set map:alpha"));
+}
+
+// ---- The request entry (core/map_request.h): a session's group and the map it lacks, queued for the worker.
+
+TEST_F(OnDemandTest, ASessionSuccessDownloadsNoMapOfItsGroup) {
+  channel.Publish("arena_c", "1.0.0", MakeSet(4, 'c'));
+  channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+  channel.Sign(1);
+  MapRequests requests(env);
+  std::string reason;
+  ASSERT_TRUE(requests.RequestGroup(kGroup, &reason)) << reason;
+  Serve(requests);
+  EXPECT_EQ(requests.SessionGroup(), std::string(kGroup));
+  EXPECT_EQ(IndexGets("arena_c"), 0u);
+  EXPECT_EQ(IndexGets("beta"), 0u);
+  EXPECT_NE(env.FindRecord("map_request", "outcome", "cached"), nullptr);
+}
+
+TEST_F(OnDemandTest, ARequestedMapIsFetchedAndTheOthersAreNot) {
+  channel.Publish("arena_c", "1.0.0", MakeSet(4, 'c'));
+  channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+  channel.Sign(1);
+  MapRequests requests(env);
+  std::string reason;
+  ASSERT_TRUE(requests.RequestGroup(kGroup, &reason)) << reason;
+  ASSERT_TRUE(requests.RequestMap("beta", &reason)) << reason;
+  Serve(requests);
+  EXPECT_EQ(IndexGets("arena_c"), 0u);
+  EXPECT_EQ(IndexGets("beta"), 1u);
+  const MountReport boot = Boot();
+  EXPECT_TRUE(Mounted(boot, "beta"));
+  EXPECT_EQ(TokenOf(boot, "arena_c"), "not_cached");
+}
+
+TEST_F(OnDemandTest, AMapWithNoSessionGroupOrAnInvalidIdIsRefusedWithOneRecord) {
+  MapRequests requests(env);
+  std::string reason;
+  EXPECT_FALSE(requests.RequestMap("beta", &reason));
+  EXPECT_EQ(reason, "no_session_group");
+  const Record* refusal = env.FindRecord("map_request", "outcome", "refused");
+  ASSERT_NE(refusal, nullptr);
+  EXPECT_EQ(refusal->Get("reason"), "no_session_group");
+  ASSERT_TRUE(requests.RequestGroup(kGroup, &reason)) << reason;
+  EXPECT_FALSE(requests.RequestMap("Not A Map Id", &reason));
+  EXPECT_EQ(reason, "bad_id");
+}
+
+TEST_F(OnDemandTest, AnUnlistedRequestedMapFailsWithItsConsequence) {
+  channel.Publish("arena_c", "1.0.0", MakeSet(4, 'c'));
+  channel.Sign(1);
+  MapRequests requests(env);
+  std::string reason;
+  ASSERT_TRUE(requests.RequestGroup(kGroup, &reason)) << reason;
+  ASSERT_TRUE(requests.RequestMap("ghost", &reason)) << reason;
+  Serve(requests);
+  EXPECT_EQ(IndexGets("arena_c"), 0u);
+  const Record* answer = env.FindRecord("map_request", "reason", "not_listed");
+  ASSERT_NE(answer, nullptr);
+  EXPECT_NE(answer->Get("consequence").find("not in your lobby group's map list"), std::string::npos);
+}
+
+TEST_F(OnDemandTest, AQueuedRequestWakesTheWorkerAndAStoppedEntryRefuses) {
+  MapRequests requests(env);
+  int wakes = 0;
+  requests.SetWake([&wakes] { ++wakes; });
+  std::string reason;
+  ASSERT_TRUE(requests.RequestGroup(kGroup, &reason)) << reason;
+  EXPECT_EQ(wakes, 1);
+  ASSERT_TRUE(requests.RequestMap("beta", &reason)) << reason;
+  EXPECT_EQ(wakes, 2);
+  requests.Stop();
+  EXPECT_FALSE(requests.RequestGroup(kGroup, &reason));
+  EXPECT_EQ(reason, "stopped");
+  EXPECT_EQ(wakes, 2);
 }
 
 }  // namespace

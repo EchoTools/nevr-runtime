@@ -132,8 +132,9 @@ class Channel {
   Start start() const { return start_; }
   const nevr_maps::ChannelConfig& config() const { return config_; }
 
-  // The worker: fetches each group in order (FetchGroup), after Boot. A map the boot mount deferred is hashed here, and only here.
-  // Stops early when keep_going turns false. Empty when the channel does not run or Boot has not run.
+  // The worker: fetches each group in order (FetchGroup, on demand: only the held maps are updated, see FetchScope), after Boot. A map
+  // the boot mount deferred is hashed here, and only here. Stops early when keep_going turns false. Empty when the channel does not
+  // run or Boot has not run.
   std::vector<nevr_maps::FetchReport> FetchPass(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_maps::Deriver* deriver,
                                                 const std::vector<std::string>& groups, const std::string& now_utc,
                                                 const std::function<bool()>& keep_going);

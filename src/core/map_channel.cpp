@@ -279,11 +279,15 @@ std::vector<nevr_maps::FetchReport> Channel::FetchPass(nevr_cdn::Env& env, nevr_
                                                        const std::function<bool()>& keep_going) {
   std::vector<nevr_maps::FetchReport> reports;
   if (start_ != Start::kRun || !booted_) return reports;
-  nevr_maps::FetchScope scope;  // the maps this run mounted are never evicted (FetchScope::in_use)
-  scope.in_use = MountedIds();
+  // A client's pass is on demand (ADR 0048 decision 16): it refreshes the maps the cache holds at an older version and downloads no
+  // other map of the group. Every platform's client runs this pass, so the Quest and the PC take the same rule from here.
+  nevr_maps::FetchScope scope;
+  scope.on_demand = true;
+  scope.in_use = MountedIds();  // the maps this run mounted are never evicted (FetchScope::in_use)
   for (const std::string& group : groups) {
     if (!keep_going()) break;
-    reports.push_back(nevr_maps::FetchGroup(env, fs, config_, group, result_.report.deferred, deriver, now_utc, keep_going, nullptr, scope));
+    reports.push_back(
+        nevr_maps::FetchGroup(env, fs, config_, group, result_.report.deferred, deriver, now_utc, keep_going, nullptr, scope));
   }
   return reports;
 }

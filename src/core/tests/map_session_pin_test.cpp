@@ -839,3 +839,28 @@ TEST_F(MapSessionPin, RowFourteenAsksForTheMarkerOncePerKey) {
   sp::TickWith(client);
   EXPECT_EQ(asks, 2);
 }
+
+// The request entry's rows (ADR 0048 decision 16): a listed map the client does not hold leaves with a download notice and asks for
+// it; a stale copy is never played in its place, so it leaves the same way.
+TEST_F(MapSessionPin, AListedMapNotCachedLeavesWithADownloadNoticeAndRequestsIt) {
+  sp::ChannelView view;
+  view.listed = {{Level("arena_c"), "arena_c"}};
+  view.not_mounted = {{"arena_c", "not_cached"}};
+  sp::SetChannelView(view);
+  const sp::ClientDecision decision = sp::DecideClient(Level("arena_c"), sp::PinValue(Pin("arena_c", "1.0", kSourceA)));
+  EXPECT_EQ(decision.action, sp::ClientAction::kLeave);
+  EXPECT_EQ(decision.reason, "not_mounted");
+  EXPECT_TRUE(decision.request_fetch);
+  EXPECT_EQ(decision.notice_line, "Downloading arena_c; it plays after your next launch.");
+}
+
+TEST_F(MapSessionPin, AStaleCopyLeavesAndRequestsTheListedVersion) {
+  sp::ChannelView view;
+  view.listed = {{Level("arena_c"), "arena_c"}};
+  view.not_mounted = {{"arena_c", "stale"}};
+  sp::SetChannelView(view);
+  const sp::ClientDecision decision = sp::DecideClient(Level("arena_c"), sp::PinValue(Pin("arena_c", "1.1", kSourceA)));
+  EXPECT_EQ(decision.action, sp::ClientAction::kLeave);
+  EXPECT_TRUE(decision.request_fetch);
+  EXPECT_EQ(decision.notice_line, "Downloading arena_c; it plays after your next launch.");
+}
