@@ -689,6 +689,7 @@ your seat name, for example `claude-main` or `codex`.
   `just package-dev`), with no job count on the command line, no `systemd-run` slice and no `MemoryMax`. The job count comes
   from the environment (`CMAKE_BUILD_PARALLEL_LEVEL`, `VCPKG_MAX_CONCURRENCY`) when the machine sets them, and otherwise
   from `$(nproc)`, which is every justfile fallback's default. Never pass `-j` or `--parallel` yourself.
+- **An agent MUST NOT run a hand-typed build or compile line.** No `cmake`, `ninja`, `make` or `go build`, and no compiler or linker run by hand (`g++`, `gcc`, `clang`, `x86_64-w64-mingw32-g++`), with flags of the agent's own choosing. A build goes through a `just` recipe, which calls CMake, and a test binary is built by the recipe that owns it (`just build`, `just test-auth-unit <names>`, `just test-changed`). A build the task needs that no recipe covers is reported as a missing recipe (rule 1 of "How an agent works here"), not typed out. Reason: a hand-typed line skips the preset, the toolchain file, the flags and the ccache and build-checkout rules that the recipe carries, so the binary it makes is not the one the tests and the land check run.
 - **Every live game run gets its own scope in `nevr-live.slice`:** `launch-client.sh`, `launch-server.sh`, `verify-server.sh`, scenario runs and a hand-launched client or server. `systemd-run --user --scope --slice=nevr-live.slice <cmd>`. The slice is transient: it has no unit file, and systemd creates it with the first scope.
 - **Memory pressure pauses builds, not live runs.** While a live run is active, a build waits for it to exit. A live run is never stopped to make room for a build.
 - **Never interrupt another agent's build.**
@@ -1261,9 +1262,7 @@ in `certs/`, for development builds only.
 ### Unit Tests (GTest under Wine)
 
 ```sh
-cmake --preset mingw-debug -DBUILD_TESTING=ON
-cmake --build --preset mingw-debug
-env -u DISPLAY -u WAYLAND_DISPLAY wine build/mingw-debug/bin/test_token_auth.exe
+just test-auth-unit test_token_auth
 ```
 
 ### System Tests (Go)
