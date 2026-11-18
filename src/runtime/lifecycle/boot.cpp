@@ -730,7 +730,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // (runtime/patch/peer_timeout_log_rules.h). Both roles, one call; the hook for the other role is not installed.
   nevr_peer_timeout_log::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress), g_isServer);
 
-  // The CDN fetches only on a client; a server serves no asset.
+  // The CDN: a client mounts its cache and fetches in the background; a server fetches its EchoCombat set before its one boot set
+  // (PLAN-v7 5.4 "Server") and resolves each session's content on demand.
   if (!g_isServer) {
     if (nevr_cdn_start::Start()) {
       // The read hook serves the mounted set (ADR 0045); EnsureResolverHook logs its own install outcome.
@@ -739,10 +740,13 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
             "[NEVR.CDN] cdn_start result=no_read_hook consequence=\"the CDN's mounted set is not served this run\"");
       }
     }
-  } else if (!nevr::assets::EnsureResolverHook()) {
-    // PLAN-v5 R6-a-2b: a server serves each session's content through the read hook (N152). Without it the session's
-    // content cannot load, so the server stops with the cause (N120), not a degraded run.
-    ServerFatal("the CDN read hook did not install; this server cannot serve a session's content (N152)");
+  } else {
+    nevr_cdn_start::StartServer();
+    if (!nevr::assets::EnsureResolverHook()) {
+      // PLAN-v5 R6-a-2b: a server serves each session's content through the read hook (N152). Without it the session's
+      // content cannot load, so the server stops with the cause (N120), not a degraded run.
+      ServerFatal("the CDN read hook did not install; this server cannot serve a session's content (N152)");
+    }
   }
 
   // #960: the game data check, every run. Before the client-only patches so a missing folder is logged even when they

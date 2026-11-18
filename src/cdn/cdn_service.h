@@ -83,4 +83,10 @@ FirstRunResult FirstRun(Env& env, const RunConfig& config, PublishFn publish, co
 // `cdn_start` Warning says so).
 bool Start(Env* env, const RunConfig& config, PublishFn publish) noexcept;
 
+// The dedicated server's start (PLAN-v7 5.4 "Server"), on the calling thread, once per process: ServerBoot (cdn_run.h), the boot-only labels
+// fetched before the one boot publish and then one RunConfig::on_boot call. No background thread: a server's data never changes in a run,
+// and a session's own objects are the demand resolve's (cdn_demand.h). False (with one `cdn_start` Warning) when a server start ran before
+// in this process; true otherwise, also when the cache directory cannot be made (ServerBoot says so). `env` is never freed.
+bool StartServer(Env* env, const RunConfig& config, PublishFn publish) noexcept;
+
 }  // namespace nevr_cdn

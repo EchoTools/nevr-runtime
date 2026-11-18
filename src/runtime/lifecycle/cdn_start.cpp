@@ -66,13 +66,29 @@ void PublishSet(const nevr_cdn::Mounted* set) {
   if (set != nullptr) nevr_combat::announcer::OnPublished(set->shadow.get(), set->labels, t_boot_mount);
 }
 
-// A server's demand set (PLAN-v5 R6-a-2b): kept for the read hook, which serves it, and never fed to the announcer (announcer_callouts.h).
-// Sets are not freed: the read hook keeps the shadow for the life of the process, so the set is leaked on purpose, once per session.
-void PublishServerSet(std::unique_ptr<nevr_cdn::Mounted> set) {
-  if (!set || !set->shadow) return;
-  const nevr_cdn::Mounted* kept = set.release();
+// A server's set (its boot set, PLAN-v7 5.4 "Server", and each session's demand set, PLAN-v5 R6-a-2b): kept for the read hook, which serves
+// it, and never fed to the announcer (announcer_callouts.h). Sets are not freed: the read hook keeps the shadow for the life of the process,
+// so the set is leaked on purpose, once per publish.
+void KeepServerSet(const nevr_cdn::Mounted* kept) {
   g_published.store(kept, std::memory_order_release);
   nevr::assets::PublishCdnShadow(kept->shadow.get());
+}
+
+void PublishServerSet(std::unique_ptr<nevr_cdn::Mounted> set) {
+  if (!set || !set->shadow) return;
+  KeepServerSet(set.release());
+}
+
+// nevr_cdn::StartServer's publisher: the boot set, which the core publishes only when it has a shadow.
+void PublishServerBootSet(const nevr_cdn::Mounted* set) {
+  if (set != nullptr && set->shadow != nullptr) KeepServerSet(set);
+}
+
+// The Env holds no state, so one object for the process lifetime (the fetch thread and the published sets outlive every caller) is all the
+// client's start, the server's start and a session's demand resolve need.
+nevr_cdn::WindowsEnv& ProcessEnv() {
+  static nevr_cdn::WindowsEnv env;
+  return env;
 }
 
 // The self-update trial (PLAN-v7 5.4 "The self-update trial", G9): update\pending.json names a release, and this start is the last try of it.
@@ -129,8 +145,7 @@ bool Start() noexcept {
   // self-update trial (PLAN-v7 G9) decides whether this start waits for the boot fetch. Both are set here, and only the client's start sets them.
   config.boot_state = true;
   config.last_update_trial = LastUpdateTrialThisStart(root);
-  // The Env holds no state, so one object for the process lifetime (the fetch thread outlives every caller) is all it needs.
-  static nevr_cdn::WindowsEnv env;
+  nevr_cdn::WindowsEnv& env = ProcessEnv();
   // The client's cargo feed (PLAN-v7 5.5 "Feed", R11), bound after config's boot_state is set; the server's half is not here.
   nevr_cargo_pin::BindFeed(config, &env);
   // The boot mount publishes on this thread inside Start; the fetch thread it spawns is another thread.
@@ -138,6 +153,26 @@ bool Start() noexcept {
   const bool started = nevr_cdn::Start(&env, config, &PublishSet);
   t_boot_mount = false;
   return started;
+}
+
+bool StartServer() noexcept {
+  const std::string root = nevr_root::RootA();
+  if (root.empty()) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.CDN] cdn_start role=server result=off reason=no_nevr_root consequence=\"this server holds no EchoCombat set this run: it states "
+        "no EchoCombat, and every client with one leaves its combat sessions\"");
+    return false;
+  }
+  const std::string dir = nevr_root::Join(nevr_root::CacheDir(root), kCdnCacheName);
+  const nevr_cdn::Settings settings{};
+  nevr_cdn::RunConfig config = nevr_cdn::MakeRunConfig(settings, dir, nevr_cdn::kWindowsX64);
+  // The boot half mounts the pin label, whose script records the gate checks (cdn_script_gate.h), so the server sets the script folder and the
+  // registrar as the client does (PLAN-v5 R10b); the boot-state files and the self-update trial are the client's, and the core leaves them off.
+  config.script_dir = GameScriptDir();
+  config.registrar = nevr_cdn_scripts::PcRegistrar(dir, nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly);
+  nevr_cdn::WindowsEnv& env = ProcessEnv();
+  nevr_cargo_pin::BindServerFeed(config, &env);
+  return nevr_cdn::StartServer(&env, config, &PublishServerBootSet);
 }
 
 const nevr_cdn::Mounted* Published() noexcept { return g_published.load(std::memory_order_acquire); }
@@ -154,10 +189,10 @@ SessionDemandOutcome ResolveDemandForSession(std::uint64_t level, std::string_vi
   nevr_cdn::RunConfig config = nevr_cdn::MakeRunConfig(settings, dir, nevr_cdn::kWindowsX64);
   config.policy.role = nevr_cdn::Role::kServer;
   config.script_dir = GameScriptDir();
-  // A server has no boot mount, so no label is fixed at boot (ADR 0045 decision 7).
+  // The demand resolve does not apply boot_only: a session's set is the manifest's of its own fetch, whatever the boot set (StartServer) held.
   config.boot_only.clear();
   // The manifest's v2 to v1 fallback on a 404 is the client's too: a decision, two-way door (PLAN-v5 R6-a-2b 3.6).
-  static nevr_cdn::WindowsEnv env;
+  nevr_cdn::WindowsEnv& env = ProcessEnv();
   config = nevr_cdn::ResolveManifestPath(env, config, keep_going);
   const nevr_cdn::DemandInput input{level, std::string(game_type)};
   const nevr_cdn::DemandResult result =

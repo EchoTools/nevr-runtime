@@ -51,6 +51,9 @@ struct BootMount {
 // The client's boot-only fetch (PLAN-v7 5.4 "Client start" item 2): a stall (no byte for this long) ends it, the wait's ceiling ends it.
 inline constexpr std::uint64_t kClientBootFetchStallMs = 15000;
 inline constexpr std::uint64_t kClientBootFetchCeilingMs = 120000;
+// The dedicated server's boot fetch (PLAN-v7 5.4 "Server"): the one wait of a server's start, from the manifest request to the last object.
+// A named wait, chosen rather than measured. The fetch ends there with `deadline`, and the boot set is what the cache holds.
+inline constexpr std::uint64_t kServerBootFetchMs = 60000;
 
 struct RunConfig {
   std::string dir;            // the store directory (absolute)
@@ -95,9 +98,9 @@ struct RunConfig {
   std::function<void(const char* cause)> on_end;
 };
 
-// The client's boot-only labels, the fixed part of RunConfig::boot_only: the EchoCombat data a combat session simulates. MakeRunConfig
-// gives them to the windows-x86_64 client only.
-inline constexpr const char* kClientBootOnlyLabels[] = {"combat_content"};
+// The boot-only labels, the fixed part of RunConfig::boot_only: the EchoCombat data a combat session simulates. MakeRunConfig gives them to
+// the windows-x86_64 client only; ServerBoot gives them to the server (its boot fetch takes these labels and no other).
+inline constexpr const char* kBootOnlyLabels[] = {"combat_content"};
 
 // Receives a mounted set. The set is never freed by the worker: a request being filled from its shadow must stay valid.
 using Publish = std::function<void(std::unique_ptr<Mounted>)>;
@@ -134,6 +137,14 @@ bool MountFromCache(Env& env, const RunConfig& config, const Publish& publish, B
 // before the boot mount (NeedsBootFetch), makes it when they do (store only, under the ceiling and stall window), mounts once, and calls
 // RunConfig::on_boot once. Events: cdn_start role=client (fetch=boot_only, the result; fetch=none, the trial's reason).
 BootMount ClientBoot(Env& env, const RunConfig& config, const Publish& give);
+
+// The dedicated server's boot half (PLAN-v7 5.4 "Server"), on the calling thread: fetches the boot-only labels (store only, under
+// kServerBootFetchMs), mounts once from the cache, and calls RunConfig::on_boot once, also when nothing was published. A server fetches
+// its labels before its boot set so that its pin and its features are known when it registers, and its set never changes in a run. It
+// takes no other label (a session's game data is the demand resolve's, cdn_demand.h), makes no background fetch and writes neither the
+// refetch marker nor the boot-fetch stamp (the copy of `config` it runs with has boot_state and last_update_trial off). Events: one
+// cdn_start role=server (result ok, deadline or failed), written after the mount so its consequence says what the server holds.
+BootMount ServerBoot(Env& env, const RunConfig& config, const Publish& give);
 
 // The result text of the client's boot fetch from its run: "ok", "stalled", "ceiling", "undeliverable", "no_space" or "failed" (PLAN-v7
 // 5.4 item 2). Undeliverable and no_space also name a pin label the plan skipped for its files or its storage.

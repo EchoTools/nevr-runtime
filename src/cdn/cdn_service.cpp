@@ -10,6 +10,8 @@ namespace nevr_cdn {
 namespace {
 
 std::atomic<bool> g_started{false};
+// The server's start is its own one-shot: a process is one role, and a test host can start both.
+std::atomic<bool> g_serverStarted{false};
 
 }  // namespace
 
@@ -26,7 +28,7 @@ RunConfig MakeRunConfig(const Settings& settings, const std::string& cache_dir, 
   c.policy.required_only = settings.required_only;
   c.source = settings.from_config ? "config" : "default";
   if (std::strcmp(platform.name, kWindowsX64.name) == 0) {
-    for (const char* label : kClientBootOnlyLabels) c.boot_only.push_back(label);
+    for (const char* label : kBootOnlyLabels) c.boot_only.push_back(label);
   }
   return c;
 }
@@ -133,6 +135,16 @@ bool Start(Env* env, const RunConfig& config, PublishFn publish) noexcept {
     const auto keepGoing = [] { return true; };
     FetchAndMount(*env, resolvedAtBoot ? *held : ResolveManifestPath(*env, *held, keepGoing), give, keepGoing);
   }).detach();
+  return true;
+}
+
+bool StartServer(Env* env, const RunConfig& config, PublishFn publish) noexcept {
+  if (g_serverStarted.exchange(true)) {
+    env->Event(EventLevel::kWarn, "cdn_start", {{"role", "server"}, {"result", "refused"}, {"reason", "already_started"}});
+    return false;
+  }
+  const Publish give = [publish](std::unique_ptr<Mounted> set) { publish(set.release()); };
+  ServerBoot(*env, config, give);
   return true;
 }
 

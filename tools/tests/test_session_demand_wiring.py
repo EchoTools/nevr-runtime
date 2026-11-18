@@ -104,7 +104,8 @@ class SessionDemandWiring(unittest.TestCase):
     def test_server_installs_the_read_hook_or_stops(self):
         boot = code("src/runtime/lifecycle/boot.cpp")
         self.assertIn("if (!g_isServer) {", boot)
-        tail = between(boot, "} else if (!nevr::assets::EnsureResolverHook()) {", "CheckGameData();")
+        tail = between(boot, "nevr_cdn_start::StartServer();", "CheckGameData();")
+        self.assertIn("if (!nevr::assets::EnsureResolverHook()) {", tail)
         self.assertIn("ServerFatal(", tail)
 
     def test_the_release_branch_forwards_the_held_start(self):

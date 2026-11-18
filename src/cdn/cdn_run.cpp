@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -1136,6 +1137,51 @@ Policy BootOnlyPolicy(const Policy& policy, const std::vector<std::string>& boot
   return out;
 }
 
+// One boot fetch (PLAN-v7 5.4 item 2), the client's and the server's: the manifest path is asked for and the objects fetched under one
+// clock that ends at `ceilingMs`, with the boot-only labels only, stored and saved and mounted nowhere. `config` is the run's own.
+struct BootFetched {
+  RunResult result;
+  std::string outcome;        // BootFetchResultOf(result)
+  std::uint64_t ms = 0;       // the wait
+  std::string resolved_path;  // the manifest path the fetch asked the CDN for
+};
+
+BootFetched FetchBeforeBoot(Env& env, const RunConfig& config, std::uint64_t ceilingMs, std::uint64_t stallMs) {
+  BootFetched out;
+  const std::uint64_t waitStarted = env.NowMs();
+  const std::function<bool()> keepGoing = [&env, waitStarted, ceilingMs]() { return env.NowMs() - waitStarted < ceilingMs; };
+  const RunConfig resolved = ResolveManifestPath(env, config, keepGoing);
+  out.resolved_path = resolved.manifest_path;
+  RunConfig fetchConfig = resolved;
+  fetchConfig.policy = BootOnlyPolicy(config.policy, config.boot_only);
+  fetchConfig.first_run = true;
+  fetchConfig.store_only = true;
+  fetchConfig.stall_ms = stallMs;
+  out.result = FetchAndMount(env, fetchConfig, [](std::unique_ptr<Mounted>) {}, keepGoing);
+  out.outcome = BootFetchResultOf(out.result);
+  out.ms = env.NowMs() - waitStarted;
+  return out;
+}
+
+// The policy of the server's boot mount: the boot-only labels as the run's policy states them, every other label off (a server's `game`
+// label is the demand resolve's, ADR 0045 decision 10).
+Policy ServerBootPolicy(const Policy& policy, const std::vector<std::string>& bootOnly) {
+  Policy out = BootOnlyPolicy(policy, bootOnly);
+  out.required_only = policy.required_only;
+  for (const std::string& label : bootOnly) out.overrides[label] = StateOf(label, policy);
+  return out;
+}
+
+// What a server that holds no whole pin-label set at boot is told it means (PLAN-v7 5.4 "Server", F7).
+constexpr const char* kServerNoSetConsequence =
+    "this server holds no EchoCombat set this run: it states no EchoCombat, and every client with one leaves its combat sessions";
+
+// The result token of the server's boot fetch (PLAN-v7 5.4 "Server"): `ok`, `deadline` (the wait ran out) or `failed`.
+const char* ServerFetchResultOf(const std::string& outcome) {
+  if (outcome == "ok") return "ok";
+  return outcome == "ceiling" ? "deadline" : "failed";
+}
+
 // The consequence a boot fetch's result names (PLAN-v7 5.4 item 2).
 std::string BootFetchConsequence(const std::string& outcome) {
   if (outcome == "undeliverable") return "combat sessions are left until the CDN publishes another set; no launch fetches this set before boot again";
@@ -1206,18 +1252,11 @@ BootMount ClientBoot(Env& env, const RunConfig& config, const Publish& give) {
     store.reset();
     // The ceiling is the only bound on the wait besides the stall: keep_going is false once it has run that long (PLAN-v7 5.4 item 2). The
     // manifest path is asked for under the same clock, and only here, because the fetch is what needs it (ResolveManifestPath).
-    const std::uint64_t waitStarted = env.NowMs();
-    const std::function<bool()> keepGoing = [&env, waitStarted]() { return env.NowMs() - waitStarted < kClientBootFetchCeilingMs; };
-    const RunConfig resolved = ResolveManifestPath(env, config, keepGoing);
-    resolvedPath = resolved.manifest_path;
-    RunConfig fetchConfig = resolved;
-    fetchConfig.policy = BootOnlyPolicy(config.policy, config.boot_only);
-    fetchConfig.first_run = true;
-    fetchConfig.store_only = true;
-    fetchConfig.stall_ms = kClientBootFetchStallMs;
-    const RunResult fetched = FetchAndMount(env, fetchConfig, [](std::unique_ptr<Mounted>) {}, keepGoing);
-    const std::string outcome = BootFetchResultOf(fetched);
-    const std::uint64_t fetchMs = env.NowMs() - waitStarted;
+    const BootFetched boot = FetchBeforeBoot(env, config, kClientBootFetchCeilingMs, kClientBootFetchStallMs);
+    resolvedPath = boot.resolved_path;
+    const RunResult& fetched = boot.result;
+    const std::string& outcome = boot.outcome;
+    const std::uint64_t fetchMs = boot.ms;
     if (outcome == "ok") {
       env.Event(EventLevel::kInfo, "cdn_start",
                 {{"role", "client"}, {"fetch", "boot_only"}, {"result", outcome}, {"fetch_ms", fetchMs}, {"bytes", fetched.bytes}});
@@ -1247,6 +1286,56 @@ BootMount ClientBoot(Env& env, const RunConfig& config, const Publish& give) {
   MountStore(env, config, limits, store.get(), give, &bm);
   bm.boot_fetch = bootFetch;
   bm.resolved_manifest_path = resolvedPath;
+  if (config.on_boot) config.on_boot(bm);
+  return bm;
+}
+
+BootMount ServerBoot(Env& env, const RunConfig& given, const Publish& give) {
+  // A server's boot fetch is its own: no boot-state file is written and no self-update trial applies (PLAN-v7 5.4 "Server"), and its
+  // boot-only labels are the pin labels.
+  RunConfig config = given;
+  config.boot_only.assign(std::begin(kBootOnlyLabels), std::end(kBootOnlyLabels));
+  config.boot_state = false;
+
+  if (!env.MakeDirs(config.dir)) {
+    env.Event(EventLevel::kWarn, "cdn_start",
+              {{"role", "server"},
+               {"result", "off"},
+               {"reason", "no_cache_dir"},
+               {"consequence", kServerNoSetConsequence}});
+    BootMount none;
+    if (config.on_boot) config.on_boot(none);  // the feed is told once, with nothing mounted (PLAN-v7 5.4 item 4)
+    return none;
+  }
+
+  const bool wanted = PinWanted(config.policy);
+  BootFetched fetched;
+  if (wanted) {
+    fetched = FetchBeforeBoot(env, config, kServerBootFetchMs, config.stall_ms);
+  } else {
+    env.Event(EventLevel::kInfo, "cdn_start",
+              {{"role", "server"}, {"fetch", "none"}, {"reason", "label_off"},
+               {"consequence", "this server fetches no EchoCombat set and holds none: it states no EchoCombat"}});
+  }
+  RunConfig mountConfig = config;
+  mountConfig.policy = ServerBootPolicy(config.policy, config.boot_only);
+  BootMount bm;
+  MountFromCache(env, mountConfig, give, &bm);
+  bm.boot_fetch = fetched.result.end_cause == "settled" ? "none" : fetched.result.end_cause;
+  if (wanted) {
+    // After the mount, so that the consequence says what the server holds (the cache's set when the fetch gave none).
+    const bool whole = nevr_cargo_pin::BootStatus(bm.mounted, bm.gated, config.policy).state == nevr_cargo_pin::CargoBoot::kWhole;
+    const char* result = ServerFetchResultOf(fetched.outcome);
+    std::vector<Field> fields = {{"role", "server"}, {"fetch_ms", fetched.ms}, {"result", result}, {"bytes", fetched.result.bytes}};
+    if (std::string(result) == "failed") fields.push_back({"reason", fetched.outcome});
+    if (!whole) {
+      fields.push_back({"consequence", kServerNoSetConsequence});
+    } else if (fetched.outcome != "ok") {
+      fields.push_back({"consequence",
+                        "this server mounts the EchoCombat set its cache holds, which may be older than the CDN's; clients on the CDN's set leave its combat sessions"});
+    }
+    env.Event(fetched.outcome == "ok" ? EventLevel::kInfo : EventLevel::kWarn, "cdn_start", fields);
+  }
   if (config.on_boot) config.on_boot(bm);
   return bm;
 }

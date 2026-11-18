@@ -274,6 +274,30 @@ void StartIsOneShotAndOffWithoutACacheDirectory() {
   QCHECK(env.requests.empty());  // neither call fetched anything
 }
 
+// The server's start (cdn/cdn_service.h StartServer), one per process like the client's but on its own guard: it runs the boot half on the
+// calling thread (the feed is told once, even with a CDN that has nothing) and a second start is refused with one Warning.
+void StartServerRunsTheBootHalfOnceAndRefusesASecondStart() {
+  static cdn_test::FakeEnv env;  // StartServer keeps the env for the process
+  nc::Settings settings;
+  nc::RunConfig config = nc::MakeRunConfig(settings, "/server/cache", nc::kAndroidArm64);
+  int boots = 0;
+  config.on_boot = [&boots](const nc::BootMount&) { ++boots; };
+  QCHECK(nc::StartServer(&env, config, &NoPublish));
+  QCHECK(boots == 1);
+  std::vector<std::string> lines = env.EventsNamed("cdn_start");
+  std::size_t failed = 0;
+  for (const std::string& l : lines) {
+    if (cdn_test::FakeEnv::Value(l, "role") == "server" && cdn_test::FakeEnv::Value(l, "result") == "failed") ++failed;
+  }
+  QCHECK(failed == 1);
+  QCHECK(!nc::StartServer(&env, config, &NoPublish));
+  QCHECK(boots == 1);  // the refused start tells the feed nothing
+  lines = env.EventsNamed("cdn_start");
+  QCHECK(!lines.empty() && cdn_test::FakeEnv::Value(lines.back(), "role") == "server" &&
+         cdn_test::FakeEnv::Value(lines.back(), "result") == "refused" &&
+         cdn_test::FakeEnv::Value(lines.back(), "reason") == "already_started");
+}
+
 void EventsAreOneParsableSentinelLineEachWithTypedFields() {
   ClearLog();
   nc::PosixEnv env(nullptr);
@@ -572,6 +596,7 @@ int main() {
   EventsAreOneParsableSentinelLineEachWithTypedFields();
   TheSettingsAreTheCodesDefaultsChangedByTheFile();
   StartIsOneShotAndOffWithoutACacheDirectory();
+  StartServerRunsTheBootHalfOnceAndRefusesASecondStart();
   TheFirstLaunchOnRealFilesPublishesAShadowWhoseHandleReadsTheStoredBytes();
   TheSecondLaunchMountsFromTheStoreAndMakesNoBlobRequest();
   ACdnWithNoV2KeyServesV1sLabelsAndLogsTheFallbackOnce();

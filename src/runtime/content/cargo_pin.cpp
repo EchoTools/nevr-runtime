@@ -19,6 +19,7 @@ struct Edge {
   nevr_cdn::Env* env = nullptr;
   std::string marker;
   bool boot_state = false;
+  bool server = false;  // BindServerFeed: B is also the server's cargo pin
   Sha256HexFn sha256_hex;
 };
 
@@ -74,6 +75,7 @@ void Arm(const nevr_cdn::RunConfig& config, nevr_cdn::Env* env) {
     edge.env = env;
     edge.marker = nevr_cdn::BootRefetchPath(config.dir);
     edge.boot_state = config.boot_state;
+    edge.server = false;
     edge.sha256_hex = HasherOf(env);
     edge.feed = std::make_unique<CargoFeed>(config.platform, config.policy);
   }
@@ -82,8 +84,17 @@ void Arm(const nevr_cdn::RunConfig& config, nevr_cdn::Env* env) {
 
 void SetBootSet(const nevr_cdn::BootMount& boot) {
   Edge& edge = State();
-  std::lock_guard<std::mutex> lock(edge.mutex);
-  if (edge.feed) edge.feed->OnBoot(boot, edge.sha256_hex);
+  bool server = false;
+  std::uint64_t pin = kCargoPinNone;
+  {
+    std::lock_guard<std::mutex> lock(edge.mutex);
+    if (!edge.feed) return;
+    edge.feed->OnBoot(boot, edge.sha256_hex);
+    server = edge.server;
+    pin = edge.feed->View().local;
+  }
+  // The server's B is the pin its tick writes into the lobby; the session pin takes its own lock, so it is set outside this one.
+  if (server) nevr_map_session_pin::SetCargoServerPin(pin);
 }
 
 void SetManifestPin(const nevr_cdn::Manifest& manifest) {
@@ -103,6 +114,17 @@ void BindFeed(nevr_cdn::RunConfig& config, nevr_cdn::Env* env) {
   config.on_boot = [](const nevr_cdn::BootMount& boot) { SetBootSet(boot); };
   config.on_manifest = [](const nevr_cdn::Manifest& manifest) { SetManifestPin(manifest); };
   config.on_end = [](const char* cause) { SetFetchState(cause); };
+}
+
+void BindServerFeed(nevr_cdn::RunConfig& config, nevr_cdn::Env* env) {
+  Edge& edge = State();
+  {
+    std::lock_guard<std::mutex> lock(edge.mutex);
+    edge.server = true;
+    edge.sha256_hex = HasherOf(env);
+    edge.feed = std::make_unique<CargoFeed>(config.platform, config.policy);
+  }
+  config.on_boot = [](const nevr_cdn::BootMount& boot) { SetBootSet(boot); };
 }
 
 }  // namespace nevr_cargo_pin

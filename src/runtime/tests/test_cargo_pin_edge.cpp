@@ -92,6 +92,12 @@ class FakeClient : public sp::GameAccess {
   void Event(const sp::PinEvent& event) override { events.push_back(event); }
 };
 
+// The game behind the tick on a dedicated server: a lobby whose owner JSON the tick writes the server's cargo pin to.
+class FakeServer : public FakeClient {
+ public:
+  bool IsServer() override { return true; }
+};
+
 nc::Entry Ent(std::uint64_t type, std::uint64_t name, char fill) {
   nc::Entry e;
   e.label = kLabel;
@@ -269,5 +275,62 @@ TEST_F(CargoPinEdge, BindFeedBindsTheThreeSeamsInTheBootFetchOrder) {
   EXPECT_EQ(skew->reason, kReasonUndeliverable);
   EXPECT_TRUE(skew->manifest_known);
   EXPECT_EQ(skew->manifest, golden);
+  EXPECT_TRUE(env.atomic_writes.empty());
+}
+
+// The server's feed (PLAN-v7 5.5 "Feed", "Server"): BindServerFeed binds on_boot only, and the boot set's pin is what the server's tick
+// writes to the lobby's owner JSON. A whole set is its pin, with the run's hasher.
+TEST_F(CargoPinEdge, TheServersBootSetIsThePinItsTickWritesToTheLobby) {
+  CountingEnv env;
+  nc::RunConfig config;
+  config.dir = kDir;
+  config.platform = nc::kWindowsX64;
+  config.policy = PolicyOn();
+  ncp::BindServerFeed(config, &env);
+  ASSERT_TRUE(config.on_boot);
+  EXPECT_FALSE(config.on_manifest);
+  EXPECT_FALSE(config.on_end);
+  config.on_boot(BootWith(Golden(), Whole(), kCauseNone));
+  const std::uint64_t expected = ncp::CargoPinOf(Golden(), nc::kWindowsX64, PolicyOn(), Sha);
+  ASSERT_NE(expected, ncp::kCargoPinNone);
+
+  FakeServer game;
+  game.owner["level"] = kLevel;
+  Tick(game);
+  EXPECT_EQ(game.owner[sp::kOwnerCargoPinKey], expected);
+}
+
+// A server that holds no whole set (its boot set is empty, or the wait ran out) writes kCargoPinNone, not 0: "this server has no set" is a
+// fact a client acts on, and 0 stays "this server predates the pin".
+TEST_F(CargoPinEdge, AServerWithNoWholeSetWritesNone) {
+  CountingEnv env;
+  nc::RunConfig config;
+  config.dir = kDir;
+  config.platform = nc::kWindowsX64;
+  config.policy = PolicyOn();
+  ncp::BindServerFeed(config, &env);
+  config.on_boot(nc::BootMount());
+
+  FakeServer game;
+  game.owner["level"] = kLevel;
+  Tick(game);
+  EXPECT_EQ(game.owner[sp::kOwnerCargoPinKey], ncp::kCargoPinNone);
+}
+
+// The server's feed arms no client decision: a client tick after it makes no cargo decision (no leave, no marker write).
+TEST_F(CargoPinEdge, TheServersFeedArmsNoClientDecision) {
+  CountingEnv env;
+  nc::RunConfig config;
+  config.dir = kDir;
+  config.platform = nc::kWindowsX64;
+  config.policy = PolicyOn();
+  config.boot_state = true;
+  ncp::BindServerFeed(config, &env);
+  config.on_boot(BootWith(Golden(), Whole(), kCauseNone));
+
+  FakeClient game = ClientAt(kServer);
+  Tick(game);
+  EXPECT_EQ(CargoSkews(game, kReasonUnchecked), std::size_t{0});
+  EXPECT_TRUE(game.notices.empty());
   EXPECT_TRUE(env.atomic_writes.empty());
 }

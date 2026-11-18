@@ -1944,6 +1944,212 @@ void AnUndeliverableObjectSettlesAcrossTwoStarts() {
   QCHECK(refused.requests.size() > n);
 }
 
+// ── the dedicated server's boot half (PLAN-v7 5.4 "Server"; ServerBoot) ─────────────────────────────────────────────────────────────
+constexpr std::uint64_t kServerWaitOvershootMs = 5000;  // one chunk of the slow object: 4000 bytes in 97-byte chunks outlast the wait
+constexpr std::size_t kSlowObjectFrameBytes = 4000;
+
+// A server's config as the PC edge gives it: neither the boot-only list nor the boot-state switch set for it (ServerBoot owns both), with the
+// switch left on to show that the server never writes the client's files.
+nc::RunConfig ServerConfig(const World& w) {
+  nc::RunConfig c = w.config;
+  c.boot_state = true;
+  return c;
+}
+
+const cdn_test::Record* ServerRecord(const FakeEnv& env, const std::string& result) {
+  for (const cdn_test::Record& r : env.records) {
+    if (r.name == "cdn_start" && r.Get("role") == "server" && r.Get("result") == result) return &r;
+  }
+  return nullptr;
+}
+
+// A cold server, the CDN serving B and a `game` label beside it: the pin label is fetched before the one boot publish, the `game` label is
+// not (a session's game data is the demand resolve's), on_boot is called once, and neither client file is written.
+void AColdServerFetchesItsPinLabelBeforeTheOneBootPublish() {
+  FakeEnv env;
+  World b(4);
+  b.label = kCombat;
+  b.other_label = "game";
+  b.other_objs = WithObjects(1, 800, 150, 'q', 400).objs;
+  b.Serve(env);
+  nc::RunConfig c = ServerConfig(b);
+  int boots = 0;
+  bool bootedPublished = false;
+  c.on_boot = [&](const nc::BootMount& boot) {
+    ++boots;
+    bootedPublished = boot.published;
+  };
+  std::size_t getsAtPublish = 0;
+  std::vector<const nc::Mounted*> sets;
+  const nc::BootMount bm = nc::ServerBoot(env, c, [&](std::unique_ptr<nc::Mounted> m) {
+    getsAtPublish = GetsOfBlobs(env);
+    sets.push_back(m.release());
+  });
+  QCHECK(boots == 1 && bootedPublished && bm.published);
+  QCHECK(sets.size() == 1 && getsAtPublish == 4 && GetsOfBlobs(env) == 4);
+  QCHECK(RequestsOf(env, BlobUrl(b.other_objs[0])) == 0);
+  QCHECK(sets.size() == 1 && sets[0]->records == 4 && sets[0]->labels == std::vector<std::string>{kCombat});
+  QCHECK(bm.boot_fetch == "none" && !bm.boot.entries.empty());
+  const cdn_test::Record* ok = ServerRecord(env, "ok");
+  QCHECK(ok != nullptr && ok->level == nc::EventLevel::kInfo && ok->Get("bytes") != "0" && !ok->Get("fetch_ms").empty());
+  QCHECK(!Exists(env, kStampPath) && !Exists(env, kMarkerPath));
+}
+
+// The wait runs out with a set in the cache: the fetch is `deadline`, the cache's set is the one boot publish, and on_boot is called once.
+void AServerWhoseWaitRunsOutMountsTheCacheSet() {
+  World a(4);
+  a.label = kCombat;
+  FakeEnv env;
+  a.Serve(env);
+  Captured earlier;
+  nc::FetchAndMount(env, a.config, earlier.Sink(), kGo);  // the cache holds A whole, and the saved manifest is A
+  World slow = a;
+  slow.Add(300, kSlowObjectFrameBytes, 'z', kArchive, "0x999");  // B: A plus one object that outlasts the wait
+  slow.Serve(env);
+  env.chunk_ms[BlobUrl(slow.objs.back())] = kServerWaitOvershootMs;
+  int boots = 0;
+  nc::RunConfig c = ServerConfig(a);
+  c.on_boot = [&boots](const nc::BootMount&) { ++boots; };
+  Captured cap;
+  const nc::BootMount bm = nc::ServerBoot(env, c, cap.Sink());
+  const cdn_test::Record* deadline = ServerRecord(env, "deadline");
+  QCHECK(deadline != nullptr && deadline->level == nc::EventLevel::kWarn);
+  QCHECK(deadline != nullptr && deadline->Get("consequence").find("cache holds") != std::string::npos);
+  QCHECK(cap.sets.size() == 1 && cap.sets[0]->records == 4 && boots == 1 && bm.published);
+  QCHECK(deadline != nullptr && std::stoull(deadline->Get("fetch_ms")) >= nc::kServerBootFetchMs);
+}
+
+// The wait runs out and the cache holds nothing: nothing is published, on_boot is still called once, and the Warning says the server states
+// no EchoCombat (F7).
+void AColdServerWhoseWaitRunsOutPublishesNothingAndSaysSo() {
+  World w(4);
+  w.label = kCombat;
+  w.objs.clear();
+  w.Add(300, kSlowObjectFrameBytes, 'a', kArchive, "0x100");
+  FakeEnv env;
+  w.Serve(env);
+  env.chunk_ms[BlobUrl(w.objs[0])] = kServerWaitOvershootMs;
+  int boots = 0;
+  bool bootedPublished = true;
+  nc::RunConfig c = ServerConfig(w);
+  c.on_boot = [&](const nc::BootMount& boot) {
+    ++boots;
+    bootedPublished = boot.published;
+  };
+  Captured cap;
+  nc::ServerBoot(env, c, cap.Sink());
+  const cdn_test::Record* deadline = ServerRecord(env, "deadline");
+  QCHECK(deadline != nullptr && deadline->level == nc::EventLevel::kWarn);
+  QCHECK(deadline != nullptr && deadline->Get("consequence").find("states no EchoCombat") != std::string::npos);
+  QCHECK(cap.sets.empty() && boots == 1 && !bootedPublished);
+}
+
+// The CDN is down: `failed`, and the cache's set is the one boot publish; a cold server publishes nothing and says so.
+void AServerWhoseCdnIsDownMountsTheCacheSetOrNothing() {
+  World w(4);
+  w.label = kCombat;
+  FakeEnv warm;
+  w.Serve(warm);
+  Captured earlier;
+  nc::FetchAndMount(warm, w.config, earlier.Sink(), kGo);
+  warm.server[ManifestUrl()] = Response{503, std::string(), std::string::npos, std::string()};
+  Captured cap;
+  nc::ServerBoot(warm, ServerConfig(w), cap.Sink());
+  const cdn_test::Record* failed = ServerRecord(warm, "failed");
+  QCHECK(failed != nullptr && failed->level == nc::EventLevel::kWarn && failed->Get("reason") == "failed");
+  QCHECK(cap.sets.size() == 1 && cap.sets[0]->records == 4);
+
+  FakeEnv cold;
+  cold.server[ManifestUrl()] = Response{503, std::string(), std::string::npos, std::string()};
+  Captured none;
+  nc::ServerBoot(cold, ServerConfig(w), none.Sink());
+  const cdn_test::Record* coldFailed = ServerRecord(cold, "failed");
+  QCHECK(none.sets.empty() && coldFailed != nullptr);
+  QCHECK(coldFailed != nullptr && coldFailed->Get("consequence").find("states no EchoCombat") != std::string::npos);
+}
+
+// X7: a server whose manifest is unchanged and whose objects are all stored makes no object request and publishes the cache's set once.
+void AServerWithAWholeCacheAndAnUnchangedManifestPublishesTheCacheSetOnce() {
+  World w(4);
+  w.label = kCombat;
+  FakeEnv env;
+  w.Serve(env);
+  Captured earlier;
+  nc::FetchAndMount(env, w.config, earlier.Sink(), kGo);
+  const std::size_t blobsBefore = GetsOfBlobs(env);
+  Captured cap;
+  nc::ServerBoot(env, ServerConfig(w), cap.Sink());
+  QCHECK(cap.sets.size() == 1 && cap.sets[0]->records == 4);
+  QCHECK(GetsOfBlobs(env) == blobsBefore);
+  QCHECK(ServerRecord(env, "ok") != nullptr);
+}
+
+// An object the CDN answers 404 for: the fetch is `failed` with the reason `undeliverable`, the partial set is not whole (so the server holds
+// no set), the feed is told `undeliverable`, and the client's stamp is not written even though the run's config asks for boot state.
+void AServerWithAnUndeliverableObjectHoldsNoSetAndWritesNoStamp() {
+  World w(4);
+  w.label = kCombat;
+  FakeEnv env;
+  w.Serve(env);
+  env.server[BlobUrl(w.objs[0])] = Response{404, std::string(), std::string::npos, std::string()};
+  std::string fetchState;
+  nc::RunConfig c = ServerConfig(w);
+  c.on_boot = [&fetchState](const nc::BootMount& boot) { fetchState = boot.boot_fetch; };
+  Captured cap;
+  nc::ServerBoot(env, c, cap.Sink());
+  const cdn_test::Record* failed = ServerRecord(env, "failed");
+  QCHECK(failed != nullptr && failed->Get("reason") == "undeliverable" && failed->level == nc::EventLevel::kWarn);
+  QCHECK(failed != nullptr && failed->Get("consequence").find("states no EchoCombat") != std::string::npos);
+  QCHECK(fetchState == "undeliverable");
+  QCHECK(Exists(env, kSavedPath) && !Exists(env, kStampPath) && !Exists(env, kMarkerPath));
+}
+
+// A pin label the run turns off is not fetched: no request, one Info line that says why, and on_boot is still called once.
+void AServerWithThePinLabelOffMakesNoRequest() {
+  World w(4);
+  w.label = kCombat;
+  FakeEnv env;
+  w.Serve(env);
+  nc::RunConfig c = ServerConfig(w);
+  c.policy.overrides[kCombat] = nc::LabelState::kOff;
+  int boots = 0;
+  c.on_boot = [&boots](const nc::BootMount&) { ++boots; };
+  Captured cap;
+  nc::ServerBoot(env, c, cap.Sink());
+  QCHECK(env.requests.empty() && cap.sets.empty() && boots == 1);
+  const cdn_test::Record* none = nullptr;
+  for (const cdn_test::Record& r : env.records) {
+    if (r.name == "cdn_start" && r.Get("role") == "server" && r.Get("fetch") == "none") none = &r;
+  }
+  QCHECK(none != nullptr && none->Get("reason") == "label_off" && none->level == nc::EventLevel::kInfo);
+}
+
+class NoDirFakeEnv : public FakeEnv {
+ public:
+  bool MakeDirs(const std::string&) override { return false; }
+};
+
+// A cache directory that cannot be made: no request, one Warning, and on_boot is still called once with nothing mounted.
+void AServerWithNoCacheDirectoryTellsTheFeedOnceWithNothing() {
+  NoDirFakeEnv env;
+  World w(4);
+  w.label = kCombat;
+  w.Serve(env);
+  int boots = 0;
+  bool bootedPublished = true;
+  nc::RunConfig c = ServerConfig(w);
+  c.on_boot = [&](const nc::BootMount& boot) {
+    ++boots;
+    bootedPublished = boot.published;
+  };
+  Captured cap;
+  nc::ServerBoot(env, c, cap.Sink());
+  const cdn_test::Record* off = ServerRecord(env, "off");
+  QCHECK(off != nullptr && off->Get("reason") == "no_cache_dir" && off->level == nc::EventLevel::kWarn);
+  QCHECK(off != nullptr && off->Get("consequence").find("states no EchoCombat") != std::string::npos);
+  QCHECK(env.requests.empty() && cap.sets.empty() && boots == 1 && !bootedPublished);
+}
+
 std::size_t CountRecords(const FakeEnv& env, const std::string& name, const std::string& key, const std::string& value) {
   std::size_t n = 0;
   for (const cdn_test::Record& r : env.records) {
@@ -2175,6 +2381,14 @@ int main() {
   ARefusedLabelWritesNoMarkerWhileTheCdnServesTheSavedSet();
   AnUndeliverableObjectSettlesAcrossTwoStarts();
   AStoreOnlyFetchSavesAndPublishesNothing();
+  AColdServerFetchesItsPinLabelBeforeTheOneBootPublish();
+  AServerWhoseWaitRunsOutMountsTheCacheSet();
+  AColdServerWhoseWaitRunsOutPublishesNothingAndSaysSo();
+  AServerWhoseCdnIsDownMountsTheCacheSetOrNothing();
+  AServerWithAWholeCacheAndAnUnchangedManifestPublishesTheCacheSetOnce();
+  AServerWithAnUndeliverableObjectHoldsNoSetAndWritesNoStamp();
+  AServerWithThePinLabelOffMakesNoRequest();
+  AServerWithNoCacheDirectoryTellsTheFeedOnceWithNothing();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "cdn_run_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

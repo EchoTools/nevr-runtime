@@ -97,9 +97,13 @@ process.
    `required` labels still never block a level load or a match. Not guarded: a lobby whose players hold different combat sets, and a
    custom combat map (`docs/adr/0048-custom-maps-channel.md`), whose level is none of the six. Falsifier for the scope: a session on a
    level outside the six that reads `combat_content` records, played by a client on another set.
-   Status on this tree: the session pin's inputs exist (`src/core/map_session_pin.cpp`), but no production code calls
-   `SetCargoServerPin` or `SetCargoDecide` yet, so no server writes the cargo pin and no client leaves on it until the PC binding lands.
-10. **Client textures; server game data on demand.** A dedicated server fetches no texture cargo. When it learns a session's game mode,
+   Status on this tree: a PC client arms the decision (`src/runtime/content/cargo_pin.cpp`, `Arm`) and a PC server writes its boot set's
+   pin (`BindServerFeed`, `SetCargoServerPin`). The features a server states do not yet follow its set (tracker #2242).
+10. **Client textures; server game data on demand.** A dedicated server fetches no texture cargo. At boot it fetches only the boot-only
+    labels (`combat_content`, `kBootOnlyLabels`, `src/cdn/cdn_run.h`) before its one boot set, stored and then mounted once from the cache,
+    bounded by `kServerBootFetchMs`; a fetch that ends at the bound or fails leaves the cache's set, and a server with no whole set states
+    no pin (`nevr_cdn::StartServer`, `ServerBoot`). It makes no background fetch, and its boot set does not change in the run.
+    When it learns a session's game mode,
     and its map when the session names one, it takes the objects they need across every level the mode can load from the manifest, in
     every label its defaults turn on, `game` included, and resolves each in this order: the nEVR cache, then the game's installed files
     when the manifest names the object's content hash, then the CDN. An object is accepted only when it is the manifest's, checked once
