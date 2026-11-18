@@ -73,3 +73,22 @@ nevr_ht_test(map_mount_test GROUP shared NOEXC PTHREAD DL ENV ${_shared_env} INC
       src/core/map_fetch_queue.cpp src/core/map_session_pin.cpp src/core/map_server_hold.cpp src/quest/sentinel/hook_log.cpp
       src/core/script_image_rules_elf.cpp ${_maps_mount_core}
   LIBS ${NEVR_ZSTD_LIB})
+
+# The Quest's map service (quest/cdn/map_service.cpp; ADR 0048 decisions 8 and 16): the config and clock, the wait for the game's manifest
+# and the first and later mounts over the real registry, and Start's refusals. The libr15 half of the pin and the resource request
+# hook are the stand-ins of quest/tests/map_service_stubs.cpp; the service's production start (map_start.cpp) is not linked.
+set(_maps_service_core
+  src/quest/cdn/map_service.cpp src/quest/cdn/map_mount.cpp src/quest/tests/map_service_stubs.cpp src/quest/sentinel/map_sets.cpp
+  src/quest/plugin/script_redirect.cpp src/quest/plugin/map_scripts.cpp src/core/resource_set_registry.cpp src/core/resource_shadow.cpp
+  src/core/config_alias.cpp src/core/map_channel.cpp src/core/map_request.cpp src/core/map_fetch_queue.cpp src/core/map_session_pin.cpp
+  src/core/map_server_hold.cpp src/quest/sentinel/hook_log.cpp src/core/script_image_rules_elf.cpp src/cdn/posix_map_fs.cpp
+  ${_maps_mount_core})
+nevr_ht_test(map_service_test GROUP shared NOEXC PTHREAD DL ENV ${_shared_env} INCS ${_maps_sent} sdk/include src third_party/monocypher/src
+  OBJS o_map_monocypher
+  SRC src/quest/tests/map_service_test.cpp ${_maps_service_core}
+  LIBS ${NEVR_ZSTD_LIB})
+# Start with a channel that runs: its own program, because the service starts once per process.
+nevr_ht_test(map_service_start_test GROUP shared NOEXC PTHREAD DL ENV ${_shared_env} INCS ${_maps_sent} sdk/include src third_party/monocypher/src
+  OBJS o_map_monocypher
+  SRC src/quest/tests/map_service_start_test.cpp ${_maps_service_core}
+  LIBS ${NEVR_ZSTD_LIB})
