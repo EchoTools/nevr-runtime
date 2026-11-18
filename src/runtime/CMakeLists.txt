@@ -1731,6 +1731,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_cdn_config PRIVATE GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp)
     gtest_discover_tests(test_cdn_config DISCOVERY_MODE PRE_TEST)
 
+    # The plugin SDK's YAML subset parser (sdk/include/nevr/yaml_config.h): header-only, so it needs only the SDK target.
+    add_executable(test_yaml_config tests/test_yaml_config.cpp)
+    set_source_files_properties(tests/test_yaml_config.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_yaml_config PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_yaml_config PRIVATE GTest::gtest GTest::gtest_main nevr::plugin_sdk)
+    gtest_discover_tests(test_yaml_config DISCOVERY_MODE PRE_TEST)
+
     # Stable C-string storage and direct config-accessor failure-boundary tests.
     add_executable(test_service_config
       tests/test_service_config.cpp
