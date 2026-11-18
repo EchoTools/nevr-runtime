@@ -754,6 +754,35 @@ func TestGoTestGetsTheCallersPathFromTheGetenvItWasGivenAndGOFLAGSCount1(t *test
 	}
 }
 
+// #2242: the stock PC data folder is the one caller variable the hermetic environment forwards: the tests that read it (tools/cmd/
+// content-pack-build, tools/internal/radpack) skip without it, and a run of `just test-tools` must reach them when the caller set it.
+func TestTheStockDataFolderReachesGoTestWhenTheCallerSetsIt(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.env = append(r.env, "NEVR_STOCK_DATA=/fixture/stock-data")
+	r.run()
+	calls := r.fake.Calls(t)
+	if len(calls) != 1 {
+		t.Fatalf("go was called %d times, want 1", len(calls))
+	}
+	if got, ok := calls[0].Env["NEVR_STOCK_DATA"]; !ok || got != "/fixture/stock-data" {
+		t.Errorf("go test saw NEVR_STOCK_DATA=%q (present %v), want the caller's folder", got, ok)
+	}
+}
+
+func TestTheStockDataFolderIsNotInventedWhenTheCallerDoesNotSetIt(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, passingStream(), 0)
+	r.run()
+	calls := r.fake.Calls(t)
+	if len(calls) != 1 {
+		t.Fatalf("go was called %d times, want 1", len(calls))
+	}
+	if got, ok := calls[0].Env["NEVR_STOCK_DATA"]; ok {
+		t.Errorf("go test saw NEVR_STOCK_DATA=%q with no caller value", got)
+	}
+}
+
 func TestTheScratchHomeOfGoTestIsRemovedWhenTheRunEnds(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, passingStream(), 0)

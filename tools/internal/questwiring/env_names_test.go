@@ -117,3 +117,75 @@ func contains(list []string, s string) bool {
 	}
 	return false
 }
+
+// #2242: the stock PC data folder (NEVR_STOCK_DATA, docs/reference/content-packs.md) is a per-machine input. The justfile reads it
+// from the environment with no default path (AGENTS.md, "Nothing that only one machine has"), the recipes whose test runs reach a
+// test that reads the folder pass it on, and .env.example lists it empty. The tests that need the folder skip without it
+// (tools/cmd/content-pack-build, tools/internal/radpack). These checks pin that wiring, which the tests themselves cannot see.
+
+const (
+	stockDataDeclaration = `stock_data := env("NEVR_STOCK_DATA", "")`
+	stockDataPassThrough = `NEVR_STOCK_DATA="{{ stock_data }}"`
+)
+
+// stockDataRecipes are the recipes that run a Go test reading the folder: test-changed (the map's Go packages), test-tools (the
+// tool suite's Go half) and verify (its unittest line runs the same Go half).
+var stockDataRecipes = []string{"test-changed", "test-tools", "verify"}
+
+var stockDataDeclarationLine = regexp.MustCompile(`(?m)^stock_data\s*:=.*$`)
+
+func TestTheStockDataVariableIsReadFromTheEnvironmentWithNoDefaultPath(t *testing.T) {
+	t.Parallel()
+	text := read(t, "justfile")
+	decls := stockDataDeclarationLine.FindAllString(text, -1)
+	if len(decls) != 1 || decls[0] != stockDataDeclaration {
+		t.Errorf("justfile declares stock_data as %q, want exactly %q (an environment read with an empty default)", decls, stockDataDeclaration)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "NEVR_STOCK_DATA=") && !strings.Contains(line, stockDataPassThrough) {
+			t.Errorf("justfile sets NEVR_STOCK_DATA other than through the variable: %s", strings.TrimSpace(line))
+		}
+	}
+}
+
+func TestTheRecipesThatRunTheStockDataTestsPassTheVariableThrough(t *testing.T) {
+	t.Parallel()
+	text := read(t, "justfile")
+	for _, name := range stockDataRecipes {
+		if body := stockDataRecipeBody(t, text, name); !strings.Contains(body, stockDataPassThrough) {
+			t.Errorf("recipe %s does not pass NEVR_STOCK_DATA on to the tests it runs", name)
+		}
+	}
+}
+
+func TestEnvExampleListsTheVariableEmpty(t *testing.T) {
+	t.Parallel()
+	found := false
+	for _, line := range strings.Split(read(t, ".env.example"), "\n") {
+		if line == "NEVR_STOCK_DATA=" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error(".env.example does not list NEVR_STOCK_DATA= (empty: the stock-data tests skip)")
+	}
+}
+
+// stockDataRecipeBody is the text of the recipe named name: its header and the lines below it that are indented or blank.
+func stockDataRecipeBody(t *testing.T, text, name string) string {
+	t.Helper()
+	header := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + `(\s[^\n]*)?:[^\n]*$`)
+	loc := header.FindStringIndex(text)
+	if loc == nil {
+		t.Fatalf("justfile has no recipe %s", name)
+	}
+	lines := strings.Split(text[loc[1]:], "\n")
+	var body []string
+	for _, line := range lines[1:] {
+		if line != "" && line[0] != ' ' && line[0] != '\t' {
+			break
+		}
+		body = append(body, line)
+	}
+	return strings.Join(body, "\n")
+}
