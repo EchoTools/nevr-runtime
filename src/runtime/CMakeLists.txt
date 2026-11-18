@@ -1223,6 +1223,28 @@ if(BUILD_TESTING)
     target_link_libraries(test_server_log PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_server_log DISCOVERY_MODE PRE_TEST)
 
+    # The stub LibOVRPlatform64_1.dll (src/libovr-stub): loaded under Wine, its export table held to exports.def (copied beside the test)
+    # and the answers pnsovr.dll branches on.
+    add_executable(test_libovr_stub tests/test_libovr_stub.cpp)
+    set_source_files_properties(tests/test_libovr_stub.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_libovr_stub PRIVATE -Werror)
+    target_link_libraries(test_libovr_stub PRIVATE GTest::gtest GTest::gtest_main)
+    add_dependencies(test_libovr_stub LibOVRPlatform64_1)
+    add_custom_command(TARGET test_libovr_stub POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/src/libovr-stub/exports.def
+        $<TARGET_FILE_DIR:test_libovr_stub>/libovr_stub_exports.def)
+    gtest_discover_tests(test_libovr_stub DISCOVERY_MODE PRE_TEST WORKING_DIRECTORY $<TARGET_FILE_DIR:test_libovr_stub>)
+
+    # core/update/core_ffi.cpp with the install core's C ABI replaced by recording fakes (the Rust core is not linked here):
+    # which entry point each wrapper calls, the error text it reports, and what it frees and closes.
+    add_executable(test_core_ffi tests/core_ffi_test.cpp ../core/update/core_ffi.cpp)
+    set_source_files_properties(tests/core_ffi_test.cpp ../core/update/core_ffi.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_core_ffi PRIVATE -Werror)
+    target_compile_definitions(test_core_ffi PRIVATE NEVR_UPDATE_CORE_LINKED=1)
+    target_include_directories(test_core_ffi PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR})
+    target_link_libraries(test_core_ffi PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_core_ffi DISCOVERY_MODE PRE_TEST)
+
     # The server launcher's helpers (launcher/launcher_core.h, header-only): the argument quoting held to CommandLineToArgvW,
     # the logs folder listing and the run-log follower. main() stays in the launcher; this is the part that decides.
     add_executable(test_launcher_core tests/test_launcher_core.cpp)

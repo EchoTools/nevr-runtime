@@ -1,2 +1,2 @@
 {"component":"installer/include","dir":"installer/include"}
-{"file":"installer/include/nevr_install.h","tests":["build","gtest:test_update_core_link","just:test-android","just:test-installer","go:internal/updatewiring"]}
+{"file":"installer/include/nevr_install.h","tests":["build","gtest:test_core_ffi","gtest:test_update_core_link","just:test-android","just:test-installer","go:internal/updatewiring"]}
