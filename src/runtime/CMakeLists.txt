@@ -1290,6 +1290,23 @@ if(BUILD_TESTING)
     target_include_directories(test_join_hold PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_join_hold PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_join_hold DISCOVERY_MODE PRE_TEST)
+    # The dedicated server's maps hold: map_hold.cpp and join_hold.cpp run for real, with a fake clock and broadcaster send. The hooks
+    # are never installed; join_hold.cpp's two game-facing symbols are stubbed in the test.
+    set(_map_hold_test_sources tests/test_map_hold.cpp server/map_hold.cpp server/join_hold.cpp hook/hook_guard.cpp
+      "${CMAKE_SOURCE_DIR}/src/core/map_server_hold.cpp")
+    add_executable(test_map_hold ${_map_hold_test_sources})
+    set_source_files_properties(${_map_hold_test_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_map_hold PRIVATE NEVR_USE_MINHOOK NEVR_TEST_HOOKS)
+    target_include_directories(test_map_hold PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_map_hold PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core nevr::plugin_sdk)
+    gtest_discover_tests(test_map_hold DISCOVERY_MODE PRE_TEST)
+    # The PC map channel's own decisions (content/map_channel_rules.h) over the real fetch queue.
+    set(_map_channel_rules_test_sources tests/test_map_channel_rules.cpp "${CMAKE_SOURCE_DIR}/src/core/map_fetch_queue.cpp")
+    add_executable(test_map_channel_rules ${_map_channel_rules_test_sources})
+    set_source_files_properties(${_map_channel_rules_test_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_map_channel_rules PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_map_channel_rules PRIVATE GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json nevr::plugin_sdk)
+    gtest_discover_tests(test_map_channel_rules DISCOVERY_MODE PRE_TEST)
     # PLAN-v5 R6-a-2b: the session-start hold's rules (server/session_demand_rules.h) and the frame reader they read (game_type_table.h).
     add_executable(test_session_demand_rules tests/test_session_demand_rules.cpp)
     set_source_files_properties(tests/test_session_demand_rules.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

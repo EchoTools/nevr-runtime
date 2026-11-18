@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include "runtime/content/map_channel.h"
+#include "runtime/content/map_channel_rules.h"
 
 #include <algorithm>
 #include <atomic>
@@ -201,54 +202,24 @@ struct State {
   std::atomic<FetchWorker*> worker_ptr{nullptr};      // the worker a request wakes; set once it starts, cleared when the stop begins
   bool root_locked = false;                           // this process holds the cache root's lock (TryLockRoot): its worker may run
   bool server = false;                                // a dedicated server: its fetches are the groups its sessions name
-  std::mutex granted_mutex;                           // guards granted and holds: the mount observer takes them on the thread that mounts
-  std::vector<std::string> granted;                   // the owners the grants since the last mount made ("map:<id>"): the next mount's decision covers them
-  // A server's fetched groups whose maps the registry has not mounted yet: the join hold is released from the mount observer, once the
-  // mount that takes them has run, never from the worker's grant (the sets mount on the game's thread).
-  std::vector<std::pair<std::string, nevr_maps::MountReport>> holds;
+  // The owners the grants since the last mount made ("map:<id>": the next mount's decision covers them), and a server's fetched groups
+  // whose maps the registry has not mounted yet: the join hold is released from the mount observer, once the mount that takes them has
+  // run, never from the worker's grant (the sets mount on the game's thread).
+  GrantLedger ledger;
 };
 State* g_state = nullptr;
 // The state StopFetch reads from a shutdown thread (a console handler, the watchdog): published once StartFetch has started a
 // worker, so every field the stop reads was written before it. Null while no worker runs.
 std::atomic<State*> g_running{nullptr};
 
-// The mounted owners and their levels, from the registry's report: the entries whose plugin is "map:<id>".
-nevr_config_alias::OwnerLevels MountedOwners(const std::string& report_json) {
-  nevr_config_alias::OwnerLevels owners;
-  const nlohmann::json doc = nlohmann::json::parse(report_json, nullptr, false);
-  if (!doc.is_array()) return owners;
-  for (const nlohmann::json& set : doc) {
-    if (!set.is_object()) continue;
-    const auto plugin = set.find("plugin");
-    if (plugin == set.end() || !plugin->is_string()) continue;
-    const std::string owner = plugin->get<std::string>();
-    if (owner.rfind(nevr_resource_sets::kMapOwnerPrefix, 0) != 0) continue;
-    std::vector<std::uint64_t> levels;
-    const auto listed = set.find("levels");
-    if (listed != set.end() && listed->is_array()) {
-      for (const nlohmann::json& level : *listed) {
-        if (level.is_string()) levels.push_back(std::strtoull(level.get<std::string>().c_str(), nullptr, 16));
-      }
-    }
-    owners.emplace_back(owner, std::move(levels));
-  }
-  return owners;
-}
-
 // The mount observer: the core's decision, with the PC's withdraw and alias record type. Runs on the mounting thread.
 void OnMount(const nevr_resource_sets::MountReport&) {
   State* st = g_state;
   if (st == nullptr) return;
   // Each mount decides only the grants made since the one before it: a map an earlier mount took is not decided again.
-  std::vector<std::string> granted;
-  std::vector<std::pair<std::string, nevr_maps::MountReport>> holds;
-  {
-    std::lock_guard<std::mutex> lock(st->granted_mutex);
-    granted.swap(st->granted);
-    holds.swap(st->holds);
-  }
+  GrantLedger::Taken taken = st->ledger.Take();
   const MountDecision decision = DecideMount(
-      granted, MountedOwners(nevr_resource_sets::ReportJson()),
+      taken.granted, MountedOwners(nevr_resource_sets::ReportJson()),
       [](const std::string& owner) {
         nevr_map_scripts::Withdraw(owner);
         nevr_config_alias::Unstage(owner);
@@ -262,7 +233,7 @@ void OnMount(const nevr_resource_sets::MountReport&) {
       "[NEVR.MAPS] map_summary stage=mount mounted=%zu withdrawn=%s armed=%zu", decision.mounted.size(),
       Join(decision.withdrawn).c_str(), decision.armed);
   // The maps these groups granted are mounted (or withdrawn) now: the server's join hold hears of it.
-  for (const auto& hold : holds) nevr_map_hold::NoteGroupMounted(hold.first, hold.second);
+  for (const auto& hold : taken.holds) nevr_map_hold::NoteGroupMounted(hold.first, hold.second);
 }
 
 // The root lock: the name's existence is the lock (one process per cache root). The handle is never closed, so the name lives as long
@@ -286,10 +257,7 @@ std::vector<std::string> Ask(const std::function<std::vector<std::string>()>& se
 }
 
 // Records the owners a mount granted, so the mount observer knows which withdrawals it must check (any thread).
-void GrantMounted(State* st, const nevr_maps::MountReport& report) {
-  std::lock_guard<std::mutex> lock(st->granted_mutex);
-  for (const std::string& id : report.mounted) st->granted.push_back(std::string(nevr_resource_sets::kMapOwnerPrefix) + id);
-}
+void GrantMounted(State* st, const nevr_maps::MountReport& report) { st->ledger.Grant(report); }
 
 // After a mount's grants: the owners go to the mount observer's next decision, the script rewriter and the alias hook go in when a grant
 // needs them, and the registry is asked to mount the sets on the game's thread (MountLaterSets). Worker thread.
@@ -321,25 +289,16 @@ nevr_maps::FetchReport FetchServerGroup(State* st, const std::string& group, con
   scope.in_use = st->channel->MountedIds();
   const nevr_maps::FetchReport report = nevr_maps::FetchGroup(*st->env, *st->fs, st->channel->config(), group, st->channel->TakeDeferred(),
                                                               st->deriver.get(), now, keep_going, progress, scope);
-  if (report.outcome == nevr_maps::FetchOutcome::kFailed) {
-    nevr_map_hold::NoteFetchFailed(group);
-    return report;
-  }
-  const nevr_maps::MountReport mounted = st->channel->MountGroups({group}, now);
-  {
-    std::lock_guard<std::mutex> lock(st->granted_mutex);
-    st->holds.emplace_back(group, mounted);
-  }
-  InstallGrantedMap(st, mounted);
-  return report;
+  return FinishServerGroup(
+      group, report, st->ledger, [](const std::string& failed) { nevr_map_hold::NoteFetchFailed(failed); },
+      [&](const std::string& mounting) { return st->channel->MountGroups({mounting}, now); },
+      [&](const nevr_maps::MountReport& mounted) { InstallGrantedMap(st, mounted); });
 }
 
 // A dedicated server's worker: it waits for a group the join hold requested and fetches it, until the worker is stopped.
 void ServerPass(State* st, const std::function<bool()>& keep_going) {
-  while (keep_going()) {
-    if (!st->queue->WaitForRequest(kServerQueueWaitMs)) continue;
-    st->queue->RunNext([st, &keep_going](const std::string& group) { return FetchServerGroup(st, group, keep_going); });
-  }
+  RunServerPass(*st->queue, keep_going, kServerQueueWaitMs,
+                [st, &keep_going](const std::string& group) { return FetchServerGroup(st, group, keep_going); });
 }
 
 // Starts a dedicated server's worker and sets the request entry the join hold calls (the entry is set last, once the worker can take it).
@@ -390,18 +349,19 @@ void BootUnguarded(std::uintptr_t game_base, bool is_server) {
   const std::wstring root = nevr_root::RootW();
   const Settings settings = ReadSettings([](const char* key) { return Flat(key); },
                                          [](const char* key) { return FlatList(key); }, CompiledOfficialKeys());
-  if (DecideStart(settings) == Start::kRun) {
-    // Every map hook (the script rewriter, the config alias, the registry's observer) is for one build: the runtime's guard.
-    if (!nevr_game_image_guard::IsSupportedGameModule(reinterpret_cast<const void*>(game_base))) {
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.MAPS] map_start reason=unsupported_game_build (echovr.exe is not the build the map hooks are for; no map is mounted or "
-          "fetched)");
-      return;
-    }
-    if (root.empty()) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.MAPS] map_start reason=no_root (LOCALAPPDATA unset or too long)");
-      return;
-    }
+  // Every map hook (the script rewriter, the config alias, the registry's observer) is for one build: the runtime's guard.
+  const BootRefusal refusal = PreflightRefusal(
+      DecideStart(settings),
+      [&] { return nevr_game_image_guard::IsSupportedGameModule(reinterpret_cast<const void*>(game_base)); }, root.empty());
+  if (refusal == BootRefusal::kUnsupportedGameBuild) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MAPS] map_start reason=unsupported_game_build (echovr.exe is not the build the map hooks are for; no map is mounted or "
+        "fetched)");
+    return;
+  }
+  if (refusal == BootRefusal::kNoRoot) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.MAPS] map_start reason=no_root (LOCALAPPDATA unset or too long)");
+    return;
   }
 
   State* const st = new State();

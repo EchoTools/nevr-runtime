@@ -69,4 +69,12 @@ void MapsNoteUpdated(const std::string& group, const std::vector<std::string>& i
 /// mounted); a group never mounted keeps its hold to the timeout. Any thread.
 void MapsNoteCheckFailed(const std::string& group);
 
+#ifdef NEVR_TEST_HOOKS
+// Host-test seams (the test_map_hold build defines NEVR_TEST_HOOKS; the shipped runtime does not): a clock in place of
+// GetTickCount64, a reset of the whole state, and the lock-free flag ReleaseDue reads.
+void SetClockForTest(std::uint64_t (*clock)());
+void ResetForTest();
+bool MapsHoldingForTest();
+#endif
+
 }  // namespace nevr_join_hold

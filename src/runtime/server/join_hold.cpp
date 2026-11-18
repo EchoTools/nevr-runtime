@@ -46,7 +46,15 @@ std::atomic<bool> g_mapsHolding{false};  // the maps hold stands (ReleaseDue rea
 std::set<std::string> g_mountedGroups;   // the groups whose maps mounted in this process, under g_mutex
 std::string g_sessionId;                 // for the detours' lines, under g_mutex
 
+#ifdef NEVR_TEST_HOOKS
+std::atomic<std::uint64_t (*)()> g_clockForTest{nullptr};  // a host test's clock (SetClockForTest); null reads the system's
+std::uint64_t NowMs() {
+  const auto clock = g_clockForTest.load(std::memory_order_acquire);
+  return clock != nullptr ? clock() : GetTickCount64();
+}
+#else
 std::uint64_t NowMs() { return GetTickCount64(); }
+#endif
 
 const char* Show(const char* sessionId) { return sessionId != nullptr && sessionId[0] != '\0' ? sessionId : "none"; }
 
@@ -327,5 +335,21 @@ void MapsNoteCheckFailed(const std::string& group) {
   }
   Log(EchoVR::LogLevel::Warning, "%s", nevr_maps::MapCheckFailedLine(group).c_str());
 }
+
+#ifdef NEVR_TEST_HOOKS
+void SetClockForTest(std::uint64_t (*clock)()) { g_clockForTest.store(clock, std::memory_order_release); }
+
+void ResetForTest() {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_gate = Gate();
+  g_mountedGroups.clear();
+  g_sessionId.clear();
+  g_queued.store(0, std::memory_order_release);
+  g_mapsHolding.store(false, std::memory_order_release);
+  g_active.store(false, std::memory_order_release);
+}
+
+bool MapsHoldingForTest() { return g_mapsHolding.load(std::memory_order_acquire); }
+#endif
 
 }  // namespace nevr_join_hold
