@@ -996,6 +996,13 @@ scenario-all *ARGS:
     just preset=mingw-scenario build
     python3 tools/scenario/run_all.py "$@"
 
+# The custom-map probe package (docs/reference/maps-channel.md, "Owner probes"): the probe build (the mingw-map-probes preset, never
+# shipped), the windows installer tool and nevr-probes-<date>.zip, made under build/mingw-map-probes/package.
+probe-package: go-tools
+    just preset=mingw-map-probes build
+    GOOS=windows GOARCH=amd64 go -C tools build -trimpath -o ../build/go-tools-windows/maps-probe.exe ./cmd/maps-probe
+    build/go-tools/maps-probe package -build-dir build/mingw-map-probes -tool build/go-tools-windows/maps-probe.exe -out build/mingw-map-probes/package
+
 # Run plugin ground truth tests (no game binary needed)
 test-plugins-groundtruth:
     cd tests/plugins && go test -timeout {{ test_ceiling_s }}s -v -run "TestGroundTruth" ./...
