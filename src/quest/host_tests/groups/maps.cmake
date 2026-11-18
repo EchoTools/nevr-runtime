@@ -60,4 +60,4 @@ nevr_ht_test(map_request_drain_test GROUP shared NOEXC PTHREAD INCS src third_pa
 # granted to the mounter. Over the map run fixture, which signs the group and fakes the cache.
 nevr_ht_test(map_list_groups_test GROUP shared NOEXC PTHREAD INCS src third_party/monocypher/src OBJS o_map_monocypher
   SRC src/quest/tests/map_list_groups_test.cpp src/core/map_channel.cpp src/core/map_local_precedence.cpp src/core/config_alias.cpp
-      ${_maps_mount_core})
+      src/core/map_request.cpp src/core/map_fetch_queue.cpp src/core/map_session_pin.cpp src/core/map_server_hold.cpp ${_maps_mount_core})

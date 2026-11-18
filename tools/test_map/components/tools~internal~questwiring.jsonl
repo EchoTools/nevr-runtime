@@ -9,6 +9,7 @@
 {"file":"tools/internal/questwiring/gun_bots_test.go","tests":["go:internal/questwiring"]}
 {"file":"tools/internal/questwiring/headset_gates_test.go","tests":["go:internal/questwiring"]}
 {"file":"tools/internal/questwiring/levelname_test.go","tests":["go:internal/questwiring"]}
+{"file":"tools/internal/questwiring/map_fetch_stop_wiring_test.go","tests":["go:internal/questwiring"]}
 {"file":"tools/internal/questwiring/map_session_pin_wiring_test.go","tests":["go:internal/questwiring"]}
 {"file":"tools/internal/questwiring/mutants_harness_test.go","tests":["go:internal/questwiring"]}
 {"file":"tools/internal/questwiring/new_unlocks_clear_test.go","tests":["go:internal/questwiring"]}

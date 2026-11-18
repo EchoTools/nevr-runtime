@@ -13,6 +13,7 @@
  */
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -27,6 +28,11 @@
 namespace nevr_quest::maps {
 
 inline constexpr const char* kDefaultCacheDir = "/data/data/com.readyatdawn.r15/files/nevr/cache/maps";
+// How long the process end (OnGameProcessEnd, production_steps.cpp) waits for the fetch worker's pass. The map stop aborts no transfer
+// (it waits for the pass to see the stop), and the process-end callback runs inside the hook's before-exit budget
+// (sentinel/process_end_hook.h kFlushBudgetMs, checked in map_service.cpp): the plugin records come before it, the report after it.
+inline constexpr std::chrono::milliseconds kProcessEndStopWait{100};
+
 // How long the mount waits for the game's first resource request before it gives the run up (map_sets::Abandon).
 inline constexpr std::uint32_t kManifestWaitMs = 120000;
 
@@ -52,6 +58,11 @@ bool MountLaterNow(std::uint64_t (*records)(), bool (*has)(std::uint64_t type, s
 // `deriver` (null: no recipe rebuild) outlive the process. False when the channel does not run (its refusal or not_configured is
 // logged by the core) or when it was started before.
 bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_maps::Deriver* deriver) noexcept;
+
+// Stops the request entry and the background fetch at process end, waiting at most `wait` for the worker's pass (the PC's StopFetch,
+// through the same core StopChannel; the Quest passes less than the PC's kStopWait, since its process end has a budget of its own).
+// Safe when the channel never ran. A pass that outlasts `wait` writes the sentinel `map_stop` record.
+void Stop(std::chrono::milliseconds wait) noexcept;
 
 // Production (map_start.cpp; production_steps.cpp calls it beside the cargo start): the core's settings from the Quest config's maps
 // section, then, only when the channel runs, the libcurl transport, the POSIX env, the stock source over the game's data root and the

@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "core/map_groups.h"
+#include "core/map_request.h"
 
 namespace nevr_map_channel {
 
@@ -532,6 +533,14 @@ bool FetchWorker::Stop(std::chrono::milliseconds wait) {
     thread_.detach();
   }
   return done;
+}
+
+bool StopChannel(nevr_maps::MapRequests* requests, FetchWorker* worker, std::atomic<FetchWorker*>* worker_ptr,
+                 std::chrono::milliseconds wait) {
+  if (requests != nullptr) requests->Stop();  // first: a waiting request is answered cancelled, not left for a pass that never runs
+  if (worker_ptr != nullptr) worker_ptr->store(nullptr);
+  if (worker == nullptr) return true;
+  return worker->Stop(wait);
 }
 
 }  // namespace nevr_map_channel

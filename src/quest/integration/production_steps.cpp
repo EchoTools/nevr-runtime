@@ -455,6 +455,7 @@ void OnGameProcessEnd() noexcept {
   nevr_quest::plugin::FinishPlugins(nevr_quest::plugin::reason::kGameExitedFirst);
   nevr_quest::integration::NoteCombatNotStarted(nevr_quest::plugin::reason::kGameExitedFirst);  // writes nothing unless combat runs here and its step never ran
   nevr_quest::integration::NoteCombatProcessEnd();  // the combat modules' final counts; nothing unless combat runs here and its step ran
+  nevr_quest::maps::Stop(nevr_quest::maps::kProcessEndStopWait);  // the map worker, bounded within the hook's budget
   ReportAndroidMainReturned();
 }
 

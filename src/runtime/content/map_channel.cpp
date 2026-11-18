@@ -46,7 +46,6 @@ namespace {
 constexpr const char* kEnvTag = "[NEVR.MAPS]";  // the tag the PC env writes its records under
 constexpr const char* kRekeyCopyDir = "rekeyed";  // below a version folder: the copies of the player's stock scripts served as rekeys
 constexpr std::size_t kLockNameHexDigits = 16;  // the root lock's name: the first digits of sha256(root)
-constexpr std::uint32_t kStopWaitMs = 2000;     // the fetch's stop waits this long, then detaches (the fetch ends at its next transfer)
 constexpr std::uint32_t kServerQueueWaitMs = 500;  // a dedicated server's worker checks for a stop this often while no group is requested
 
 std::string Flat(const char* key) {
@@ -209,6 +208,9 @@ struct State {
   std::vector<std::pair<std::string, nevr_maps::MountReport>> holds;
 };
 State* g_state = nullptr;
+// The state StopFetch reads from a shutdown thread (a console handler, the watchdog): published once StartFetch has started a
+// worker, so every field the stop reads was written before it. Null while no worker runs.
+std::atomic<State*> g_running{nullptr};
 
 // The mounted owners and their levels, from the registry's report: the entries whose plugin is "map:<id>".
 nevr_config_alias::OwnerLevels MountedOwners(const std::string& report_json) {
@@ -495,6 +497,7 @@ void StartFetchUnguarded() {
   }
   if (st->server) {
     StartServerWorker(st);
+    g_running.store(st);
     return;
   }
   st->worker = std::make_unique<FetchWorker>(
@@ -520,6 +523,7 @@ void StartFetchUnguarded() {
   // its wake reaches a started worker. Set after Start, a request in between would wait for a pass that never comes.
   st->worker_ptr.store(st->worker.get());
   st->worker->Start();
+  g_running.store(st);
 }
 
 }  // namespace
@@ -545,12 +549,10 @@ void StartFetch() {
 }
 
 void StopFetch() {
-  State* const st = g_state;
+  State* const st = g_running.load();
   if (st == nullptr) return;
-  if (st->requests) st->requests->Stop();  // later requests are refused and the waiting ones answered cancelled, before the worker stops
-  if (!st->worker) return;
-  st->worker_ptr.store(nullptr);
-  if (!st->worker->Stop(std::chrono::milliseconds(kStopWaitMs))) {
+  // The core's stop, shared with the Quest (core/map_channel.h StopChannel): the requests first, then the worker, waiting kStopWait.
+  if (!nevr_map_channel::StopChannel(st->requests.get(), st->worker.get(), &st->worker_ptr, nevr_map_channel::kStopWait)) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.MAPS] map_stop reason=join_timeout (the fetch ends at its next transfer bound)");
   }
 }

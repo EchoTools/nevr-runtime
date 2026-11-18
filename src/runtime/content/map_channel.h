@@ -14,7 +14,8 @@ void Boot(std::uintptr_t game_base, bool is_server);
 // The boot thread, after Boot: the background fetch. A no-op unless the channel runs and the cache root's lock is taken.
 void StartFetch();
 
-// Stops the background fetch with a bounded wait. Safe when the channel never ran. Not yet called from the shutdown path (report).
+// Stops the background fetch with a bounded wait (nevr_map_channel::kStopWait). Safe from any thread, and when no worker runs. Called on a client's normal exit and from
+// PerformGracefulShutdown (runtime/lifecycle/crash_recovery.cpp).
 void StopFetch();
 
 }  // namespace nevr_map_channel::pc

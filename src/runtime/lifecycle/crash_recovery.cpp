@@ -40,6 +40,7 @@
 #include "runtime/hook/addresses.h"
 #include "runtime/hook/dll_load_hook.h"
 #include "runtime/hook/export_tracer.h"
+#include "runtime/content/map_channel.h"
 #include "runtime/patch/invite_service.h"
 #include "runtime/patch/binary_bug_fixes.h"
 #include "runtime/patch/resource_override.h"
@@ -166,6 +167,7 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] game loop returned: the client is exiting (no server hold outside server mode)");
     nevr_invite_service::Shutdown();  // aborts a request in flight and joins the worker thread
+    nevr_map_channel::pc::StopFetch();  // the custom-map fetch worker, the same way (a no-op when the channel never ran)
     nevr_export_tracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
     nevr_quit_check::OnGameLoopReturned(gameResult);  // self-check "pc_quit" (#392): sent now, nothing runs later
     return gameResult;
@@ -1498,6 +1500,11 @@ void PerformGracefulShutdown(unsigned int exitCode) {
 
   // 2b. Write any DLL-hook line a load under the loader lock left waiting (#688); outside the lock here.
   nevr_dll_load_hook::FlushPendingLines();
+
+  // 2c. Stop the custom-map fetch worker before the exit kills it (a no-op when the channel never ran). It waits up to
+  //     nevr_map_channel::kStopWait, then detaches; a pass it cuts short keeps its verified pieces for the next pass to resume from, and never
+  //     leaves a partial version in the cache, since each version directory is renamed into place.
+  nevr_map_channel::pc::StopFetch();
 
   // 3. Force exit (bypasses server-mode ExitProcess suppression).
   //    ForceFatalExit sets g_forceExitInProgress, then calls

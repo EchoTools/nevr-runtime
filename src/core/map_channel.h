@@ -33,6 +33,10 @@
 #include "core/map_run.h"
 #include "core/map_types.h"
 
+namespace nevr_maps {
+class MapRequests;  // core/map_request.h
+}  // namespace nevr_maps
+
 namespace nevr_map_channel {
 
 // The keys compiled into this build as official (ADR 0048 decision 12). Empty until the official key is chosen.
@@ -249,5 +253,15 @@ class FetchWorker {
   std::atomic<std::size_t> passes_{0};
   std::thread thread_;
 };
+
+// How long a platform's stop of the channel at process exit waits for the worker's pass to end before it detaches the thread.
+inline constexpr std::chrono::milliseconds kStopWait{2000};
+
+// The channel's stop at process exit, the same on every platform (the PC's StopFetch, the Quest's maps::Stop): `requests` refuses later
+// requests and answers the waiting ones, `worker_ptr` (the wakes' view of the worker) is cleared so no later wake reaches the worker,
+// then the worker is stopped with `wait`. Any pointer may be null (the channel never ran, or ran with no worker). False only when the
+// worker did not finish within `wait`: its thread is detached and keeps the objects it references, which the platform never frees.
+bool StopChannel(nevr_maps::MapRequests* requests, FetchWorker* worker, std::atomic<FetchWorker*>* worker_ptr,
+                 std::chrono::milliseconds wait);
 
 }  // namespace nevr_map_channel

@@ -19,7 +19,13 @@
 #include "quest/cdn/map_pin_game.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/map_sets.h"
+#include "quest/sentinel/process_end_hook.h"
 #include "quest/sentinel/resource_request_hook.h"
+
+// The process end's map stop runs inside the hook's before-exit budget; a wait as long as the budget would let the hook's _exit cut the
+// report that follows it and the stop's own map_stop record.
+static_assert(nevr_quest::maps::kProcessEndStopWait.count() < nevr_quest::process_end::kFlushBudgetMs,
+              "the process end's map stop must leave the before-exit budget room for the report");
 
 namespace nevr_quest::maps {
 
@@ -61,6 +67,9 @@ struct State {
   std::atomic<nevr_map_channel::FetchWorker*> worker_ptr{nullptr};  // set before the worker starts, so a request from then on wakes it
   bool manifest_waited = false;  // the first pass waits for the game's manifest once; only the worker's thread reads it
 };
+
+// The running channel's state for Stop: published by Start once its worker runs; null when the channel never ran.
+std::atomic<State*> g_state{nullptr};
 
 // A seam's answer, or none when the platform gave no such seam.
 std::vector<std::string> Ask(const std::function<std::vector<std::string>()>& seam) {
@@ -231,7 +240,18 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
   });
   state->worker_ptr.store(state->worker.get());
   state->worker->Start();
+  g_state.store(state);
   return true;
+}
+
+void Stop(std::chrono::milliseconds wait) noexcept {
+  State* const state = g_state.load();
+  if (state == nullptr) return;
+  // The core's stop, shared with the PC's StopFetch (core/map_channel.h StopChannel): the requests first, then the worker.
+  if (!nevr_map_channel::StopChannel(state->requests.get(), state->worker.get(), &state->worker_ptr, wait)) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "map_stop",
+                        {{"reason", "join_timeout"}, {"consequence", "the fetch ends at its next transfer bound"}});
+  }
 }
 
 }  // namespace nevr_quest::maps

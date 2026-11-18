@@ -605,6 +605,44 @@ void ALightRequestRunsInsideTheGapAndLeavesTheGapAlone() {
   QCHECK(passes.load() <= 2);  // the initial pass and the one accepted request; the light request ran no full pass
 }
 
+// The channel's stop (StopChannel, the PC's StopFetch and the Quest's maps::Stop): the request entry refuses later requests, the wakes'
+// view of the worker is cleared, and the worker's thread ends within the wait. Each pointer may be null.
+void TheChannelStopRefusesRequestsClearsTheWakeAndEndsTheWorker() {
+  FakeEnv env;
+  nevr_maps::MapRequests requests(env);
+  std::atomic<int> passes{0};
+  mc::FetchWorker worker([&passes](const std::function<bool()>&) { passes.fetch_add(1); }, [] { return std::uint64_t{0}; });
+  std::atomic<mc::FetchWorker*> worker_ptr{&worker};
+  worker.Start();
+  QCHECK(mc::StopChannel(&requests, &worker, &worker_ptr, mc::kStopWait));
+  QCHECK(requests.stopped());
+  QCHECK(worker_ptr.load() == nullptr);
+  QCHECK(!worker.Request());  // the worker is stopping or stopped: no pass is taken any more
+  QCHECK(mc::StopChannel(nullptr, nullptr, nullptr, mc::kStopWait));  // a channel that never ran
+}
+
+// How many 1 ms polls the slow-pass test waits for the pass to start, and then for the released pass to end.
+constexpr int kStopPolls = 2000;
+
+// A pass that outlasts the wait: the stop answers false (the platform logs map_stop join_timeout) and the thread is detached.
+void TheChannelStopAnswersFalseWhenThePassOutlastsTheWait() {
+  std::atomic<bool> release{false};
+  std::atomic<bool> running{false};
+  mc::FetchWorker* const worker = new mc::FetchWorker(  // never freed: the detached thread may still read it
+      [&release, &running](const std::function<bool()>&) {
+        running.store(true);
+        while (!release.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      },
+      [] { return std::uint64_t{0}; });
+  worker->Start();
+  for (int i = 0; i < kStopPolls && !running.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  QCHECK(running.load());
+  QCHECK(!mc::StopChannel(nullptr, worker, nullptr, std::chrono::milliseconds(1)));
+  release.store(true);
+  for (int i = 0; i < kStopPolls && !worker->Stop(std::chrono::milliseconds(1)); ++i) {
+  }
+}
+
 // ---- The session pin's group requests and the recorded groups (ADR 0048 decisions 15 and 16) -------------------------------------------
 
 // The armed request queues each group once, latest first, drops a path-unsafe id, and keeps the latest kRequestedGroupSlots (8).
@@ -688,6 +726,8 @@ int main() {
   AWorkerNeverStartedHasNoThread();
   AWorkerRefusesARequestInsideTheGap();
   ALightRequestRunsInsideTheGapAndLeavesTheGapAlone();
+  TheChannelStopRefusesRequestsClearsTheWakeAndEndsTheWorker();
+  TheChannelStopAnswersFalseWhenThePassOutlastsTheWait();
   TheMountDecisionWithdrawsTheUnmountedAndKeepsTheRest();
   TheGroupRequestsAreQueuedLatestFirstOnceAndBounded();
   TheRecordedGroupsAreTheRequestsThenTheCachedOnes();
