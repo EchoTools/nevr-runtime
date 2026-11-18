@@ -332,6 +332,48 @@ void MountGroupsIsEmptyUntilBootAndMountsNothingUncached() {
   QCHECK(env.requests.empty());
 }
 
+// A listing (ListGroups) names every map it reads and grants none: after Boot over an empty cache it lists nothing, mounts nothing,
+// registers nothing and reaches no network. Before Boot there is no run to fold into, so the answer is empty.
+void ListGroupsGrantsNothingAndListsNothingWithoutACache() {
+  FakeEnv env;
+  FakeMapFs fs(env);
+  CountingMounter mounter;
+  const mc::Settings s = mc::ReadSettings(Scalars(ConfiguredValues()), Items({}), mc::CompiledOfficialKeys());
+  mc::Channel channel(PlatformConfig(), s);
+  QCHECK(channel.ListGroups({kGroup}, kNow).listed.empty());  // before Boot: no mount object exists
+  channel.Boot(env, fs, mounter, nullptr, kNow, {});
+  const nevr_maps::MountReport listed = channel.ListGroups({kGroup}, kNow);
+  QCHECK(listed.listed.empty());
+  QCHECK(listed.mounted.empty());
+  QCHECK(mounter.calls == 0);  // a listing never calls the mounter: nothing is granted
+  QCHECK(env.requests.empty());
+}
+
+// The fold a listing applies to the run's report: an id the listing names replaces its earlier row, the rows of other ids stay, and
+// a map this run has mounted never gains a not_mounted row (the listing is what plays after the next start, not a claim about a held map).
+void FoldListingReplacesTheListedIdsAndKeepsTheRestOfTheRun() {
+  nevr_maps::MountReport run;
+  run.mounted = {"a"};
+  run.listed = {{1, "a"}, {2, "b"}};
+  run.not_mounted = {{"b", "not_asked"}, {"z", "not_cached"}};
+  nevr_maps::MountReport listing;
+  listing.listed = {{2, "b"}, {3, "c"}};
+  listing.not_mounted = {{"b", "stale"}, {"c", "not_asked"}, {"a", "not_asked"}};
+  mc::FoldListing(&run, listing);
+  QCHECK(run.mounted == std::vector<std::string>{"a"});  // the run's mounts are not changed by a listing
+  QCHECK(run.listed.size() == 3);                        // a's row, b's row once, c's row
+  QCHECK(run.not_mounted.size() == 3);                   // z's old row, b's new row, c's row; a (mounted) gets none
+  bool b_stale = false, z_kept = false, a_listed = false;
+  for (const auto& row : run.not_mounted) {
+    if (row.first == "b" && row.second == "stale") b_stale = true;
+    if (row.first == "z" && row.second == "not_cached") z_kept = true;
+    if (row.first == "a") a_listed = true;
+  }
+  QCHECK(b_stale);   // the listing's token for b replaced the earlier one
+  QCHECK(z_kept);    // an id the listing does not name keeps its row
+  QCHECK(!a_listed);  // a mounted map is never listed as not mounted
+}
+
 // ---- The mount observer's decision (both platforms call it) ------------------------------------------------------------------
 
 // An expected owner no mounted set belongs to is withdrawn; a mounted owner is kept and not withdrawn.
@@ -446,6 +488,8 @@ int main() {
   ASecondBootIsIdempotent();
   TheFetchRunsOnlyOnTheWorkerAfterBoot();
   MountGroupsIsEmptyUntilBootAndMountsNothingUncached();
+  ListGroupsGrantsNothingAndListsNothingWithoutACache();
+  FoldListingReplacesTheListedIdsAndKeepsTheRestOfTheRun();
   AWorkerNeverStartedHasNoThread();
   AWorkerRefusesARequestInsideTheGap();
   TheMountDecisionWithdrawsTheUnmountedAndKeepsTheRest();

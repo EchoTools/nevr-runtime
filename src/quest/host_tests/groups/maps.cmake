@@ -49,3 +49,15 @@ nevr_ht_test(map_channel_test GROUP shared NOEXC PTHREAD INCS sdk/include src th
       src/cdn/cdn_validate.cpp src/cdn/cdn_limits.cpp src/core/device_memory.cpp src/quest/data/sha256.cpp
       src/core/script_image_rules.cpp src/core/script_image_rules_elf.cpp src/core/config_alias.cpp
       third_party/monocypher/src/monocypher.c third_party/monocypher/src/monocypher-ed25519.c)
+
+# The Quest's session request pass (quest/cdn/map_request_drain.h; ADR 0048 decision 16): a queued group is fetched on demand and then
+# listed, a requested map is fetched alone, and a stopping worker serves nothing. Over the core's request queue and the fake Env.
+nevr_ht_test(map_request_drain_test GROUP shared NOEXC PTHREAD INCS src third_party/monocypher/src OBJS o_map_monocypher
+  SRC src/quest/tests/map_request_drain_test.cpp src/core/map_request.cpp src/core/map_fetch_queue.cpp src/core/map_session_pin.cpp
+      ${_maps_mount_core})
+
+# The channel's listing (core/map_channel.h ListGroups; K6): a map a request fetched after the boot is listed as not_asked and is never
+# granted to the mounter. Over the map run fixture, which signs the group and fakes the cache.
+nevr_ht_test(map_list_groups_test GROUP shared NOEXC PTHREAD INCS src third_party/monocypher/src OBJS o_map_monocypher
+  SRC src/quest/tests/map_list_groups_test.cpp src/core/map_channel.cpp src/core/map_local_precedence.cpp src/core/config_alias.cpp
+      ${_maps_mount_core})

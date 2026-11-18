@@ -10,8 +10,13 @@
 #include <vector>
 
 #include "core/config_alias.h"
+#include "core/map_channel.h"
+#include "core/map_request.h"
+#include "core/map_session_pin.h"
 #include "core/resource_set_registry.h"
 #include "cdn/posix_map_fs.h"
+#include "quest/cdn/map_pin_game.h"
+#include "quest/cdn/map_request_drain.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/map_sets.h"
 #include "quest/sentinel/resource_request_hook.h"
@@ -49,6 +54,11 @@ struct State {
   PosixMapFs fs;
   std::unique_ptr<nevr_map_channel::Channel> channel;
   std::unique_ptr<QuestMounter> mounter;  // the boot's cache mount keeps a reference to it, so it lives as long as the state
+  std::vector<std::string> deferred;      // the boot's deferred maps: a request's fetch hashes them again, as the pass does
+  std::unique_ptr<nevr_maps::MapRequests> requests;  // the sessions' requests (core/map_request.h); the seams call into it for the process
+  std::unique_ptr<nevr_map_channel::FetchWorker> worker;  // one pass, then parked until a request (core/map_channel.h)
+  std::atomic<nevr_map_channel::FetchWorker*> worker_ptr{nullptr};  // set before the worker starts, so a request from then on wakes it
+  bool manifest_waited = false;  // the first pass waits for the game's manifest once; only the worker's thread reads it
 };
 
 // A seam's answer, or none when the platform gave no such seam.
@@ -107,7 +117,7 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
                         {{"result", "refused"}, {"reason", env == nullptr ? "no_env" : "already_started"}});
     return false;
   }
-  // Never freed: the thread below and the mounted sets outlive every caller.
+  // Never freed: the worker below and the mounted sets outlive every caller.
   State* const state = new State();
   state->env = env;
   state->channel = std::make_unique<nevr_map_channel::Channel>(MakeChannelConfig(), settings);
@@ -120,22 +130,48 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
     return false;  // the core logged why (not_configured or the refusal); nothing was granted, no thread starts
   }
   for (const std::string& id : boot.report.mounted) g_granted_owners().push_back(std::string(nevr_resource_sets::kMapOwnerPrefix) + id);
-  nevr_map_channel::ArmSessionGroupRequest();  // a session success now queues its group for the worker (ADR 0048 decision 15)
+  state->deferred = boot.report.deferred;
+  // A session success asks for its group, and the session pin for a map of it the Quest lacks: both land in the request entry, which
+  // the worker serves below (core/map_request.h, the PC's InstallClientRequests). The pin reads the boot's view until a pass lists more.
+  state->requests = std::make_unique<nevr_maps::MapRequests>(*env);
+  nevr_maps::InstallRequestSeams(state->requests.get());
+  nevr_map_session_pin::SetChannelView(nevr_map_session_pin::ViewFromMount(boot.report));
+  pin::InstallTick();
   map_sets::SetMountObserver(&OnMount);
   nevr_config_alias::InstallIfStaged();
   sentinel::LogFields(sentinel::LogLevel::kInfo, "maps_start",
                       {{"result", "started"},
                        {"mounted", boot.report.mounted.size()},
                        {"deferred", boot.report.deferred.size()}});
-  std::thread([state, deriver]() {
-    const auto always = [] { return true; };
-    MountWhenManifestReady(&resource_request::GameManifestRecords, &resource_request::GameManifestHolds,
-                           &resource_request::PublishMapSets, kManifestWaitMs, always);
-    // The groups to fetch: this run's session requests merged with the cache index's groups (RecordedGroupSeams), filtered by FetchGroups.
+  // The worker's pass: the manifest wait (once), the session requests, then the background pass over the groups the cache holds.
+  // A request's fetch is on demand (only the map it asked for, and the held maps are updated), and its group is listed after it, so the
+  // pin's view names what arrived and what plays after the next start (the map sets mount once per run: quest/sentinel/map_sets.h).
+  // Like the PC's, the worker keeps the core's gap between extra passes (kExtraFetchGapMs).
+  nevr_map_channel::FetchWorker::Pass pass = [state, deriver](const std::function<bool()>& keep_going) {
+    if (!state->manifest_waited) {
+      state->manifest_waited = true;
+      MountWhenManifestReady(&resource_request::GameManifestRecords, &resource_request::GameManifestHolds,
+                             &resource_request::PublishMapSets, kManifestWaitMs, keep_going);
+    }
+    const GroupFetch fetch = [state, deriver, &keep_going](const std::string& group, const nevr_maps::FetchScope& scope) {
+      return nevr_maps::FetchGroup(*state->env, state->fs, state->channel->config(), group, state->deferred, deriver, NowUtc(),
+                                   keep_going, nullptr, scope);
+    };
+    const GroupAfter after = [state](const std::string& group) {
+      nevr_map_session_pin::SetChannelView(nevr_map_session_pin::ViewFromMount(state->channel->ListGroups({group}, NowUtc())));
+    };
+    ServeSessionRequests(*state->requests, fetch, after, keep_going);
     const nevr_map_channel::Seams seams = nevr_map_channel::RecordedGroupSeams(*state->env, state->channel->config().dir);
     state->channel->FetchPass(*state->env, state->fs, deriver, nevr_map_channel::FetchGroups(Ask(seams.recorded_groups)), NowUtc(),
-                              always);
-  }).detach();
+                              keep_going);
+  };
+  state->worker = std::make_unique<nevr_map_channel::FetchWorker>(std::move(pass), [state] { return state->env->NowMs(); });
+  // The wake is set before the worker starts: a request queued from here on is taken by the first pass, or its wake reaches a started worker.
+  state->requests->SetWake([state] {
+    if (nevr_map_channel::FetchWorker* const worker = state->worker_ptr.load()) worker->Request();  // a refused one still gets a pass when the gap ends
+  });
+  state->worker_ptr.store(state->worker.get());
+  state->worker->Start();
   return true;
 }
 

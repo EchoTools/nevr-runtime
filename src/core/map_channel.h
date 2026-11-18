@@ -139,6 +139,12 @@ class Channel {
                                                 const std::vector<std::string>& groups, const std::string& now_utc,
                                                 const std::function<bool()>& keep_going);
 
+  // Lists the given groups' cached maps for the session pin without granting any of them: each map is reported (listed, and
+  // not_mounted as not_asked) and none is mounted or registered, so a platform that mounts once per run (the Quest) can ask for a
+  // map mid-run. Returns the run's report with every earlier listing folded in (FoldListing), the view the session pin reads.
+  // Before Boot the report is empty. Worker thread only, after Boot.
+  nevr_maps::MountReport ListGroups(const std::vector<std::string>& groups, const std::string& now_utc);
+
   // Mounts the given groups' cached maps now, in this process, through the boot's own CacheMount (one per process, so a map Boot
   // mounted at a version is not granted again). A server mounts the group it fetched this way, at once (ADR 0048 decision 13).
   // Empty when Boot did not run the channel. Worker thread only, after Boot.
@@ -155,7 +161,12 @@ class Channel {
   std::unique_ptr<nevr_maps::CacheMount> mount_;  // made by Boot once the channel runs; its references live as long as the channel
   bool booted_ = false;
   BootResult result_;
+  nevr_maps::MountReport run_;  // the boot's report with every ListGroups listing folded in (FoldListing)
 };
+
+// Folds one listing (ListGroups) into the run's report: every id the listing names replaces its earlier listed and not_mounted rows,
+// the rows of other ids stay, and a map the run has mounted gets no not_mounted row (it is held, not waiting for a fetch).
+void FoldListing(nevr_maps::MountReport* run, const nevr_maps::MountReport& listing);
 
 // The gap between two extra passes a request may start (the worker's own limit on a request storm).
 inline constexpr std::uint64_t kExtraFetchGapMs = 10ull * 60 * 1000;

@@ -265,6 +265,7 @@ const BootResult& Channel::Boot(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_m
   // The cache index's groups, latest first: the mount reads them, and hashes nothing it has stamped (decision 4, ADR 0045 decision 7).
   mount_ = std::make_unique<nevr_maps::CacheMount>(env, fs, config_, mounter, deriver);
   result_.report = mount_->Mount(nevr_maps::CachedGroupIds(env, config_.dir), now_utc);
+  run_ = result_.report;
   result_.reason = "ok";
   env.Event(nevr_cdn::EventLevel::kInfo, "map_start",
             {{"reason", "ok"},
@@ -272,6 +273,34 @@ const BootResult& Channel::Boot(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_m
              {"deferred", result_.report.deferred.size()},
              {"local", config_.local_maps.size()}});
   return result_;
+}
+
+nevr_maps::MountReport Channel::ListGroups(const std::vector<std::string>& groups, const std::string& now_utc) {
+  if (start_ != Start::kRun || !booted_ || !mount_) return run_;
+  // An empty `only` grants no id: every cached map of the groups is listed and skipped (not_asked), so the listing registers nothing.
+  const std::vector<std::string> none;
+  FoldListing(&run_, mount_->Mount(groups, now_utc, &none));
+  return run_;
+}
+
+void FoldListing(nevr_maps::MountReport* run, const nevr_maps::MountReport& listing) {
+  std::set<std::string> listed_ids, named;  // the ids the listing lists, and every id it names (listed or not)
+  for (const auto& row : listing.listed) {
+    listed_ids.insert(row.second);
+    named.insert(row.second);
+  }
+  for (const auto& row : listing.not_mounted) named.insert(row.first);
+  std::set<std::string> mounted(run->mounted.begin(), run->mounted.end());
+  run->listed.erase(std::remove_if(run->listed.begin(), run->listed.end(),
+                                   [&listed_ids](const auto& row) { return listed_ids.count(row.second) != 0; }),
+                    run->listed.end());
+  run->not_mounted.erase(std::remove_if(run->not_mounted.begin(), run->not_mounted.end(),
+                                        [&named](const auto& row) { return named.count(row.first) != 0; }),
+                         run->not_mounted.end());
+  run->listed.insert(run->listed.end(), listing.listed.begin(), listing.listed.end());
+  for (const auto& row : listing.not_mounted) {
+    if (mounted.count(row.first) == 0) run->not_mounted.push_back(row);
+  }
 }
 
 std::vector<nevr_maps::FetchReport> Channel::FetchPass(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_maps::Deriver* deriver,
