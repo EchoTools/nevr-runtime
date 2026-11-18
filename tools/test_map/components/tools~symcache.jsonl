@@ -8,6 +8,7 @@
 {"file":"tools/symcache/diff_test.go","tests":["go:symcache"]}
 {"file":"tools/symcache/generated_test.go","tests":["go:symcache"]}
 {"file":"tools/symcache/main.go","tests":["go:symcache"]}
+{"file":"tools/symcache/main_test.go","tests":["go:symcache"]}
 {"file":"tools/symcache/merge.go","tests":["go:symcache"]}
 {"file":"tools/symcache/merge_test.go","tests":["go:symcache"]}
 {"file":"tools/symcache/prcleanup.go","tests":["go:symcache"]}
