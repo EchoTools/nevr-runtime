@@ -1,6 +1,7 @@
 #pragma once
 
 // NAMED DEBT (PLAN-v7 section 16): reconstruct through nevr-giveyouup after the release.
+// KNOWN-WRONG #2760: the named debt above is open and tracked by #2760.
 //
 // The two barrier copies behind EchoCombat's UMBRAL VEIL (mp_combat_ability_smoke, 94ba7ca09dcf7b0b, from the stock
 // barrier b87ba2039b049d5e; his fix_smoke.py:22, :374-377) and NEUTRON (mp_combat_ability_point, 94ba7ca39fc97e1a,

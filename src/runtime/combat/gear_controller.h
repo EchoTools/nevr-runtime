@@ -17,7 +17,7 @@
 // the equip cell through the pointer it is given; RecordQuery writes the cell's two words. No hook is installed and
 // nothing is registered with the script hook table, so the module changes nothing in a running game by itself.
 //
-// NOT DONE (PLAN-v7 section 16, named debt; the three rows of his controller that need code). KNOWN-WRONG #TBD: the controller
+// NOT DONE (PLAN-v7 section 16, named debt; the three rows of his controller that need code). KNOWN-WRONG #2760: the controller
 // runs stock until the cave pattern is decided and these rows are written.
 //   * The new node 0x5613C5A9 (fix_smoke.py: a copy of the barrier's call node with its script hash and flag re-aimed, 851
 //     bytes, eleven references re-aimed). "New id enables its copy" needs the engine calls that node makes. The tree names

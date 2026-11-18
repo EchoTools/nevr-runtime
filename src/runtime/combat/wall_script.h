@@ -9,8 +9,8 @@
 // NAMED DEBT (PLAN-v7 section 16): the sites below are NOT installed by this module. Cat's tool reaches them with code
 // caves (new executable sections and jumps into them), and a cave needs new executable memory this tree has no pattern
 // for; his stub bytes are his output and are not copied. The debt is paid by reconstructing FUN_180006D30 and
-// FUN_180007190 through nevr-giveyouup after the release, then hooking them (PLAN-v7 4.3 and 8). KNOWN-WRONG #TBD: the
-// issue number for this marker is owed by the dispatcher.
+// FUN_180007190 through nevr-giveyouup after the release, then hooking them (PLAN-v7 4.3 and 8). KNOWN-WRONG #2760: the
+// named debt above is open and tracked by #2760.
 //
 // Sites (veil_fx.py, the line numbers are his tool's):
 //   0x5CC0  global data length, `mov eax,158h; ret` -> `mov eax,160h; ret` (:140, :195). PORTED here as PatchGlobalLen,
