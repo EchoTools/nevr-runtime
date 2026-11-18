@@ -11,7 +11,16 @@ namespace nevr_maps {
 std::string RequestConsequence(const FetchReport& report, bool named_map) {
   const std::string& reason = report.reason;
   if (report.outcome != FetchOutcome::kFailed) {
-    if (report.maps_updated > 0) return "the map is stored and mounts during this run: join the session again when it is ready";
+    // What this request's mount did (report.mounted_now, report.superseded): a map that mounts now, and a map this run already mounts at
+    // another version, which keeps that version until the game starts again.
+    const bool mounts_now = !report.mounted_now.empty();
+    const bool at_next_start = !report.superseded.empty();
+    if (mounts_now && at_next_start) {
+      return "a new map mounts during this run: join the session again when it is ready; an update to a map you already have applies "
+             "the next time you start the game";
+    }
+    if (mounts_now) return "the map is stored and mounts during this run: join the session again when it is ready";
+    if (at_next_start) return "the update is stored and applies the next time you start the game";
     if (!named_map) return "the maps you hold of this group are the current versions";
     return "your copy is the current version";
   }

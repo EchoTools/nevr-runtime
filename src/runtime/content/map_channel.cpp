@@ -449,7 +449,9 @@ void DrainRequests(State* st, const std::function<bool()>& keep_going) {
   // The mount of a served group is decided by the core (ServeSessionRequests: a fetch that did not fail mounts, ADR 0048 decision 16);
   // this edge only grants the mount's maps and registers them on the game's thread (InstallGrantedMap).
   const auto mount = [st](const std::string& group, const std::vector<std::string>& asked) {
-    InstallGrantedMap(st, st->channel->MountGroups({group}, NowUtc(), asked));
+    const nevr_maps::MountReport mounted = st->channel->MountGroups({group}, NowUtc(), asked);
+    InstallGrantedMap(st, mounted);
+    return mounted;
   };
   const auto list = [st](const std::string& group) { return st->channel->ListGroups({group}, NowUtc()); };
   nevr_map_channel::ServeSessionRequests(*st->requests, fetch, list, &nevr_map_session_pin::SetChannelView, keep_going, mount);

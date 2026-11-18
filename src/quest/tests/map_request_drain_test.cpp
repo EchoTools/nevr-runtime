@@ -14,7 +14,7 @@ constexpr const char* kGroup = "0b6e4c1a-7f3d-4e2a-9c5b-8d1e2f3a4b5c";
 constexpr const char* kMap = "arena_c";
 constexpr auto kAlways = [] { return true; };
 // The edge's mount is not under test in these checks: it does nothing.
-constexpr auto kNoMount = [](const std::string&, const std::vector<std::string>&) {};
+constexpr auto kNoMount = [](const std::string&, const std::vector<std::string>&) { return nevr_maps::MountReport{}; };
 
 // One fetch of a request: its group and the ids its scope asked for, in order of calls.
 struct Trace {
@@ -100,6 +100,7 @@ void ServePass(nevr_maps::MapRequests& requests, nevr_maps::FetchOutcome outcome
         std::string line = group;
         for (const std::string& id : asked) line += ":" + id;
         mounts->push_back(line);
+        return nevr_maps::MountReport{};
       });
 }
 

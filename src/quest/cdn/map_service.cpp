@@ -133,7 +133,7 @@ bool MountLaterNow(std::uint64_t (*records)(), bool (*has)(std::uint64_t type, s
 // The worker's mount of the groups a pass or a request stored (ADR 0048 decision 16), on this thread: the cache mount grants each map's
 // set, the registry mounts it beside the earlier ones and the resolver is given the one new shadow. `asked` limits the mount under
 // mount_on_demand (ChannelConfig), as on the PC.
-void MountGranted(State* state, const std::vector<std::string>& groups, const std::vector<std::string>& asked) {
+nevr_maps::MountReport MountGranted(State* state, const std::vector<std::string>& groups, const std::vector<std::string>& asked) {
   const nevr_maps::MountReport mounted = state->channel->MountGroups(groups, NowUtc(), asked);
   g_granted_owners().clear();  // the observer decides the grants of this mount only
   for (const std::string& id : mounted.mounted) {
@@ -141,6 +141,7 @@ void MountGranted(State* state, const std::vector<std::string>& groups, const st
   }
   nevr_config_alias::InstallIfStaged();
   MountLaterNow(&resource_request::GameManifestRecords, &resource_request::GameManifestHolds, &resource_request::PublishMapSets);
+  return mounted;
 }
 
 bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_maps::Deriver* deriver) noexcept {
@@ -193,7 +194,7 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
     // A map a request fetched mounts in this run (the core decides it, ServeSessionRequests), through the same MountGranted as the
     // post-pass block below.
     const nevr_map_channel::GroupMount mount = [state](const std::string& group, const std::vector<std::string>& asked) {
-      MountGranted(state, {group}, asked);
+      return MountGranted(state, {group}, asked);
     };
     const nevr_map_channel::GroupListing list = [state](const std::string& group) {
       return state->channel->ListGroups({group}, NowUtc());

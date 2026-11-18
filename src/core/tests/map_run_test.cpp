@@ -1510,6 +1510,55 @@ class OnDemandTest : public MapRunTest {
     return FetchGroup(env, fs, config, kGroup, {}, nullptr, kNow, keep_going, nullptr, scope);
   }
   std::size_t IndexGets(const std::string& id) { return GetsOf(std::string(kBase) + "blobs/sha256/" + channel.IndexSha(id)); }
+  // The request pass with the launch's mount. `unscoped` is production's route: MountScope is null (no platform sets mount_on_demand),
+  // so the mount grants and reports every map of the group. Otherwise the mount is scoped to the ids the requests asked for.
+  void ServeWithLaunchMount(MapRequests& requests, CacheMount& launch, bool unscoped) {
+    nevr_map_channel::ServeSessionRequests(
+        requests,
+        [this](const std::string& group, const FetchScope& scope) {
+          return FetchGroup(env, fs, config, group, {}, nullptr, kNow, keep_going, nullptr, scope);
+        },
+        [](const std::string&) { return MountReport{}; }, [](nevr_map_session_pin::ChannelView) {}, keep_going,
+        [&launch, unscoped](const std::string& group, const std::vector<std::string>& asked) {
+          return launch.Mount({group}, kNow, unscoped ? nullptr : &asked);
+        });
+  }
+  // A map this launch mounted at 1.0.0, updated to 1.1.0 by a fetch; the request for it is served with the launch's mount.
+  void SupersededRequestCase(bool unscoped) {
+    channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+    channel.Sign(1);
+    ASSERT_EQ(FetchOnDemand({"beta"}).maps_updated, 1u);  // the launch has beta to mount
+    CacheMount launch(env, fs, config, mounter, nullptr);
+    ASSERT_TRUE(Mounted(launch.Mount({kGroup}, kNow), "beta"));
+    channel.Publish("beta", "1.1.0", MakeSet(4, 'c'));
+    channel.Sign(2);
+    MapRequests requests(env);
+    std::string reason;
+    ASSERT_TRUE(requests.RequestGroup(kGroup, &reason)) << reason;
+    ASSERT_TRUE(requests.RequestMap("beta", &reason)) << reason;
+    ServeWithLaunchMount(requests, launch, unscoped);
+    const Record* answer = env.FindRecord("map_request", "id", "beta");
+    ASSERT_NE(answer, nullptr);
+    EXPECT_EQ(answer->Get("outcome"), "fetched");
+    EXPECT_EQ(answer->Get("consequence"), "the update is stored and applies the next time you start the game");
+  }
+  // A map this launch did not have: the fetch stores it and the request's mount grants it, so it mounts in this run.
+  void NewMapRequestCase(bool unscoped) {
+    channel.Sign(1);
+    CacheMount launch(env, fs, config, mounter, nullptr);
+    EXPECT_TRUE(launch.Mount({kGroup}, kNow).mounted.empty());
+    channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+    channel.Sign(2);
+    MapRequests requests(env);
+    std::string reason;
+    ASSERT_TRUE(requests.RequestGroup(kGroup, &reason)) << reason;
+    ASSERT_TRUE(requests.RequestMap("beta", &reason)) << reason;
+    ServeWithLaunchMount(requests, launch, unscoped);
+    const Record* answer = env.FindRecord("map_request", "id", "beta");
+    ASSERT_NE(answer, nullptr);
+    EXPECT_EQ(answer->Get("outcome"), "fetched");
+    EXPECT_EQ(answer->Get("consequence"), "the map is stored and mounts during this run: join the session again when it is ready");
+  }
   // The worker: runs each queued request with the fetch its scope asks for, until none waits.
   void Serve(MapRequests& requests) {
     while (requests.RunNext([this](const std::string& group, const FetchScope& scope) {
@@ -1625,6 +1674,91 @@ TEST_F(OnDemandTest, ASessionSuccessDownloadsNoMapOfItsGroup) {
   EXPECT_EQ(IndexGets("arena_c"), 0u);
   EXPECT_EQ(IndexGets("beta"), 0u);
   EXPECT_NE(env.FindRecord("map_request", "outcome", "cached"), nullptr);
+}
+
+// One launch's request pass (ServeSessionRequests) for a map the launch already mounted: the request's fetch stores a newer version,
+// and its mount, the launch's own CacheMount, finds the map mounted at the old one. The answer says the update waits for the next start.
+TEST_F(OnDemandTest, ARequestForAMapMountedAtAnOlderVersionSaysTheUpdateWaitsForTheNextStart) {
+  SupersededRequestCase(/*unscoped=*/false);
+}
+
+TEST_F(OnDemandTest, ARequestForAMapMountedAtAnOlderVersionSaysTheUpdateWaitsForTheNextStartOnTheUnscopedMount) {
+  SupersededRequestCase(/*unscoped=*/true);
+}
+
+// The same pass for a map this launch did not have: the fetch stores it and the request's mount grants it, so it mounts in this run.
+TEST_F(OnDemandTest, ARequestForANewMapSaysItMountsDuringThisRun) {
+  NewMapRequestCase(/*unscoped=*/false);
+}
+
+TEST_F(OnDemandTest, ARequestForANewMapSaysItMountsDuringThisRunOnTheUnscopedMount) {
+  NewMapRequestCase(/*unscoped=*/true);
+}
+
+// Production's route mounts and reports the whole group. A named request for a map that is current must not be told about a sibling
+// the mount found mounted at another version: alpha's copy is the current version, and beta's update is the one that waits.
+TEST_F(OnDemandTest, ACurrentMapIsNotToldOfASiblingSupersededByTheMount) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+  channel.Sign(1);
+  ASSERT_EQ(FetchOnDemand({"alpha", "beta"}).maps_updated, 2u);
+  CacheMount launch(env, fs, config, mounter, nullptr);
+  const MountReport boot = launch.Mount({kGroup}, kNow);
+  ASSERT_TRUE(Mounted(boot, "alpha"));
+  ASSERT_TRUE(Mounted(boot, "beta"));
+  channel.Publish("beta", "1.1.0", MakeSet(4, 'c'));
+  channel.Sign(2);
+  ASSERT_EQ(FetchOnDemand({"beta"}).maps_updated, 1u);  // beta 1.1.0 is stored; the launch still holds beta 1.0.0
+  MapRequests requests(env);
+  std::string reason;
+  ASSERT_TRUE(requests.RequestGroup(kGroup, &reason)) << reason;
+  ASSERT_TRUE(requests.RequestMap("alpha", &reason)) << reason;
+  ServeWithLaunchMount(requests, launch, /*unscoped=*/true);
+  const Record* answer = env.FindRecord("map_request", "id", "alpha");
+  ASSERT_NE(answer, nullptr);
+  EXPECT_EQ(answer->Get("outcome"), "cached");
+  EXPECT_EQ(answer->Get("consequence"), "your copy is the current version");
+}
+
+// Production's route again, with the sibling the other way round: beta is stored but not yet mounted, and the request's mount grants it
+// in this run. A named request for alpha, which is current, must not be told that alpha mounts during this run.
+TEST_F(OnDemandTest, ACurrentMapIsNotToldOfASiblingGrantedByTheMount) {
+  channel.Publish("alpha", "1.0.0", MakeSet(4, 'a'));
+  channel.Sign(1);
+  ASSERT_EQ(FetchOnDemand({"alpha"}).maps_updated, 1u);
+  CacheMount launch(env, fs, config, mounter, nullptr);
+  ASSERT_TRUE(Mounted(launch.Mount({kGroup}, kNow), "alpha"));
+  channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+  channel.Sign(2);
+  ASSERT_EQ(FetchOnDemand({"beta"}).maps_updated, 1u);  // beta is stored, not mounted by this launch
+  MapRequests requests(env);
+  std::string reason;
+  ASSERT_TRUE(requests.RequestGroup(kGroup, &reason)) << reason;
+  ASSERT_TRUE(requests.RequestMap("alpha", &reason)) << reason;
+  ServeWithLaunchMount(requests, launch, /*unscoped=*/true);
+  EXPECT_TRUE(mounter.Called("set map:beta"));  // the request's mount did grant beta in this run
+  const Record* answer = env.FindRecord("map_request", "id", "alpha");
+  ASSERT_NE(answer, nullptr);
+  EXPECT_EQ(answer->Get("outcome"), "cached");
+  EXPECT_EQ(answer->Get("consequence"), "your copy is the current version");
+}
+
+// A group request names no map, so its answer keeps everything its mount did: beta, stored and granted in this run, is told.
+TEST_F(OnDemandTest, AGroupRequestKeepsEveryMapItsMountGrants) {
+  channel.Sign(1);
+  CacheMount launch(env, fs, config, mounter, nullptr);
+  EXPECT_TRUE(launch.Mount({kGroup}, kNow).mounted.empty());
+  channel.Publish("beta", "1.0.0", MakeSet(4, 'b'));
+  channel.Sign(2);
+  ASSERT_EQ(FetchOnDemand({"beta"}).maps_updated, 1u);  // beta is stored, not mounted by this launch
+  MapRequests requests(env);
+  std::string reason;
+  ASSERT_TRUE(requests.RequestGroup(kGroup, &reason)) << reason;
+  ServeWithLaunchMount(requests, launch, /*unscoped=*/true);
+  EXPECT_TRUE(mounter.Called("set map:beta"));
+  const Record* answer = env.FindRecord("map_request", "id", "-");
+  ASSERT_NE(answer, nullptr);
+  EXPECT_EQ(answer->Get("consequence"), "the map is stored and mounts during this run: join the session again when it is ready");
 }
 
 TEST_F(OnDemandTest, ARequestedMapIsFetchedAndTheOthersAreNot) {
@@ -1847,7 +1981,7 @@ TEST(ServeSessionView, AServedGroupIsFetchedThenListedAndItsListingIsPublished) 
         return listing;
       },
       [&published](nevr_map_session_pin::ChannelView view) { published.push_back(std::move(view)); }, [] { return true; },
-      [](const std::string&, const std::vector<std::string>&) {});
+      [](const std::string&, const std::vector<std::string>&) { return MountReport{}; });
   EXPECT_EQ(trace, (std::vector<std::string>{std::string("fetch:") + kServeGroup, std::string("list:") + kServeGroup}));
   ASSERT_EQ(published.size(), 1u);
   ASSERT_EQ(published[0].listed.size(), kLevelNamesPerMap);
@@ -1919,7 +2053,7 @@ TEST(ServeSessionView, NothingWaitingPublishesNothing) {
   nevr_map_channel::ServeSessionRequests(
       requests, [](const std::string&, const FetchScope&) { return FetchReport{}; },
       [](const std::string&) { return MountReport{}; }, [&published](nevr_map_session_pin::ChannelView) { ++published; },
-      [] { return true; }, [](const std::string&, const std::vector<std::string>&) {});
+      [] { return true; }, [](const std::string&, const std::vector<std::string>&) { return MountReport{}; });
   EXPECT_EQ(published, 0);
 }
 
@@ -1932,7 +2066,7 @@ TEST(ServeSessionView, AStoppingPassServesNothingAndPublishesNothing) {
   nevr_map_channel::ServeSessionRequests(
       requests, [](const std::string&, const FetchScope&) { return FetchReport{}; },
       [](const std::string&) { return MountReport{}; }, [&published](nevr_map_session_pin::ChannelView) { ++published; },
-      [] { return false; }, [](const std::string&, const std::vector<std::string>&) {});
+      [] { return false; }, [](const std::string&, const std::vector<std::string>&) { return MountReport{}; });
   EXPECT_EQ(published, 0);
   EXPECT_EQ(requests.Waiting(), 1u);  // still waiting for a pass that runs
 }
@@ -1971,7 +2105,7 @@ TEST(ServeSessionView, EveryWaitingGroupIsServedAndListedInThePass) {
         trace.push_back("list:" + group);
         return MountReport{};
       },
-      [&published](nevr_map_session_pin::ChannelView) { ++published; }, [] { return true; }, [](const std::string&, const std::vector<std::string>&) {});
+      [&published](nevr_map_session_pin::ChannelView) { ++published; }, [] { return true; }, [](const std::string&, const std::vector<std::string>&) { return MountReport{}; });
   EXPECT_EQ(trace, (std::vector<std::string>{std::string("fetch:") + kServeGroup, std::string("list:") + kServeGroup,
                                               std::string("fetch:") + kOtherGroup, std::string("list:") + kOtherGroup}));
   EXPECT_EQ(published, kTwoGroups);

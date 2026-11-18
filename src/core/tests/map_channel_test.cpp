@@ -401,14 +401,55 @@ void ALaterMountsRefusalsAreAddedToTheRunReport() {
   QCHECK(run.refused.size() == 1 && run.refused[0].first == "x");
 }
 
-// A map a request stored mounts during the run, so the player is told to join again, not to restart.
+// A map a request stored and its mount granted mounts during the run, so the player is told to join again, not to restart.
 void ARequestThatStoredAMapPromisesAMountThisRunNotARestart() {
   nevr_maps::FetchReport report;
   report.outcome = nevr_maps::FetchOutcome::kFetched;
   report.maps_updated = 1;
+  report.mounted_now = {"m"};
   const std::string said = nevr_maps::RequestConsequence(report, /*named_map=*/true);
-  QCHECK(said.find("mounts during this run") != std::string::npos);
+  QCHECK(said == "the map is stored and mounts during this run: join the session again when it is ready");
   QCHECK(said.find("launch") == std::string::npos);
+}
+
+// A map this run already mounts at another version (the mount skipped it as mounted_other_version) keeps that version until the game
+// starts again, so the request says that, and not that the map mounts now.
+void ARequestForAMapMountedAtAnotherVersionSaysTheUpdateWaitsForTheNextStart() {
+  nevr_maps::FetchReport report;
+  report.outcome = nevr_maps::FetchOutcome::kFetched;
+  report.maps_updated = 1;
+  report.superseded = {"m"};
+  const std::string said = nevr_maps::RequestConsequence(report, /*named_map=*/true);
+  QCHECK(said == "the update is stored and applies the next time you start the game");
+  QCHECK(said.find("mounts during this run") == std::string::npos);
+}
+
+// A group request that mounts a new map and updates one this run already mounts names both, each with its real timing.
+void ARequestThatMountsANewMapAndUpdatesAMountedOneSaysBoth() {
+  nevr_maps::FetchReport report;
+  report.outcome = nevr_maps::FetchOutcome::kFetched;
+  report.maps_updated = 2;
+  report.mounted_now = {"new"};
+  report.superseded = {"old"};
+  const std::string said = nevr_maps::RequestConsequence(report, /*named_map=*/false);
+  QCHECK(said.find("a new map mounts during this run") != std::string::npos);
+  QCHECK(said.find("an update to a map you already have applies the next time you start the game") != std::string::npos);
+}
+
+// A cached map the request's mount grants now mounts during the run, although the fetch stored nothing (the notice follows the mount).
+void ACachedMapTheRequestMountsNowMountsDuringTheRun() {
+  nevr_maps::FetchReport report;
+  report.outcome = nevr_maps::FetchOutcome::kCached;
+  report.mounted_now = {"m"};
+  QCHECK(nevr_maps::RequestConsequence(report, /*named_map=*/true) ==
+         "the map is stored and mounts during this run: join the session again when it is ready");
+}
+
+// A kept map (mounted at its own version, nothing stored, nothing granted) is the current version, as before.
+void AKeptMapIsTheCurrentVersion() {
+  nevr_maps::FetchReport report;
+  report.outcome = nevr_maps::FetchOutcome::kCached;
+  QCHECK(nevr_maps::RequestConsequence(report, /*named_map=*/true) == "your copy is the current version");
 }
 
 // The switch is read in one place: on demand a mount is limited to the ids asked for, else it grants everything cached.
@@ -584,6 +625,10 @@ int main() {
   ALaterMountsRefusalsAreAddedToTheRunReport();
   TheMountScopeIsTheAskedIdsOnlyUnderMountOnDemand();
   ARequestThatStoredAMapPromisesAMountThisRunNotARestart();
+  ARequestForAMapMountedAtAnotherVersionSaysTheUpdateWaitsForTheNextStart();
+  ARequestThatMountsANewMapAndUpdatesAMountedOneSaysBoth();
+  ACachedMapTheRequestMountsNowMountsDuringTheRun();
+  AKeptMapIsTheCurrentVersion();
   AWorkerNeverStartedHasNoThread();
   AWorkerRefusesARequestInsideTheGap();
   TheMountDecisionWithdrawsTheUnmountedAndKeepsTheRest();

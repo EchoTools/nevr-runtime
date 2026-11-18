@@ -104,7 +104,10 @@ Downloaded maps live in `<nEVR root>\cache\maps\` (`MapsCacheDir`, `src/core/nev
   that mount's own report (`MountReport::earlier_sets` says how many sets came before). The map channel's observer grants the
   maps that mount took and, on a dedicated server, releases the join hold for the groups that mount covered: the hold is
   released from the observer, never from the worker that fetched.
-- The request entry's download notice reads "join again when it is ready": the map mounts during this run.
+- The request entry's download notice follows what its mount did (`FetchReport::mounted_now`, `FetchReport::superseded`, set by
+  `ServeSessionRequests`): a map the mount grants reads "join again when it is ready" and mounts during this run; a map this run
+  already mounts at another version (`mounted_other_version`) reads "the update ... applies the next time you start the game", since
+  the mounted version stays until the game starts again. A group request that does both says both.
 - The session pin (`SetChannelView`, `SetMountedPins`) has no production caller on the PC, so a client does not yet
   decide a version skew from the mounted pins. KNOWN-WRONG #TBD (K6).
 

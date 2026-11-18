@@ -186,6 +186,9 @@ struct FetchReport {
   std::string reason;  // "" unless the outcome is kFailed
   std::size_t maps_updated = 0, pieces_fetched = 0, pieces_reused = 0;
   std::uint64_t set_bytes = 0, bytes_to_fetch = 0, bytes_fetched = 0, elapsed_ms = 0;
+  // Set by the request pass after its mount (core/map_request_serve.h), never by FetchGroup: the maps that mount granted in this run,
+  // and the maps the mount found mounted at another version (kMountedOtherVersionToken), whose stored version applies at the next start.
+  std::vector<std::string> mounted_now, superseded;
 };
 
 // Which of a group's listed maps one fetch stores. By default every listed map (a dedicated server's group, ADR 0048 decision 13).

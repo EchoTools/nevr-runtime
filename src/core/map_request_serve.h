@@ -7,6 +7,7 @@
 // the decisions of when and what to publish are here, and the host test drives them over the shared fake Env
 // (src/core/tests/map_run_test.cpp, ServeSessionView). Platform-free: no PCH, no Log().
 
+#include <algorithm>
 #include <functional>
 #include <string>
 #include <vector>
@@ -22,8 +23,25 @@ using GroupFetch = std::function<nevr_maps::FetchReport(const std::string& group
 using GroupListing = std::function<nevr_maps::MountReport(const std::string& group)>;
 using ViewSink = std::function<void(nevr_map_session_pin::ChannelView)>;
 // The mount of a served group, which the edge supplies: MountGroups for the group with the ids its fetch asked for (`asked`), then the
-// platform's grant. Called on the worker thread, after a fetch that did not fail (see ServeSessionRequests).
-using GroupMount = std::function<void(const std::string& group, const std::vector<std::string>& asked)>;
+// platform's grant, and its report back (the answer's consequence reads it). Called on the worker thread, after a fetch that did not
+// fail (see ServeSessionRequests).
+using GroupMount = std::function<nevr_maps::MountReport(const std::string& group, const std::vector<std::string>& asked)>;
+
+// Records on the request's answer what its mount did for the maps the request asked for: the maps it granted in this run, and the maps it
+// found mounted at another version. The mount may report its whole group (production's route: MountScope is null, so no id is scoped),
+// and a sibling the request did not name is not this answer's to tell, so a named request keeps only its asked ids. A group request
+// names none (empty `asked`) and keeps everything its mount did.
+inline void RecordMount(nevr_maps::FetchReport* report, const nevr_maps::MountReport& mounted, const std::vector<std::string>& asked) {
+  const auto kept = [&asked](const std::string& id) {
+    return asked.empty() || std::find(asked.begin(), asked.end(), id) != asked.end();
+  };
+  for (const std::string& id : mounted.mounted) {
+    if (kept(id)) report->mounted_now.push_back(id);
+  }
+  for (const auto& row : mounted.not_mounted) {
+    if (row.second == nevr_maps::kMountedOtherVersionToken && kept(row.first)) report->superseded.push_back(row.first);
+  }
+}
 
 // The boot's view: the report the boot mount returned, published before any request is served.
 inline void PublishBootView(const nevr_maps::MountReport& report, const ViewSink& publish) {
@@ -38,7 +56,7 @@ inline void ServeSessionRequests(nevr_maps::MapRequests& requests, const GroupFe
                                  const ViewSink& publish, const std::function<bool()>& keep_going, const GroupMount& mount) {
   const auto served = [&fetch, &list, &publish, &mount](const std::string& group, const nevr_maps::FetchScope& scope) {
     nevr_maps::FetchReport report = fetch(group, scope);
-    if (report.outcome != nevr_maps::FetchOutcome::kFailed) mount(group, scope.ids);
+    if (report.outcome != nevr_maps::FetchOutcome::kFailed) RecordMount(&report, mount(group, scope.ids), scope.ids);
     publish(nevr_map_session_pin::ViewFromMount(list(group)));
     return report;
   };
