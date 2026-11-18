@@ -6,6 +6,7 @@
 #include "runtime/content/map_channel.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -23,6 +24,7 @@
 #include "core/map_channel.h"
 #include "core/map_fetch_queue.h"
 #include "core/map_manifest.h"
+#include "core/map_request.h"
 #include "core/nevr_root.h"
 #include "core/resource_set_registry.h"
 #include "runtime/cargo/stock_source.h"
@@ -193,6 +195,8 @@ struct State {
   std::unique_ptr<FetchWorker> worker;
   std::unique_ptr<PcMounter> mounter;
   std::unique_ptr<nevr_maps::GroupFetchQueue> queue;  // a dedicated server's requests: the groups its sessions name
+  std::unique_ptr<nevr_maps::MapRequests> requests;   // a client's request entry (ADR 0048 decision 16): the session asks for its group and map here
+  std::atomic<FetchWorker*> worker_ptr{nullptr};      // the worker a request wakes; set once it starts, cleared when the stop begins
   bool server = false;                                // a dedicated server: its fetches are the groups its sessions name
   std::vector<std::string> deferred;                  // the maps the boot mount deferred: the worker hashes them
   std::mutex granted_mutex;                           // guards granted: the mount observer reads it on the thread that mounts
@@ -326,6 +330,16 @@ void StartServerWorker(State* st) {
   st->worker->Start();
 }
 
+// A client's request entry: a session success queues its group, and the session pin asks for the map it lacks (both through the
+// core's seams). The queued requests run on the fetch worker (DrainRequests), so a request made before the worker starts waits there.
+void InstallClientRequests(State* st) {
+  st->requests = std::make_unique<nevr_maps::MapRequests>(*st->env);
+  st->requests->SetWake([st] {
+    if (FetchWorker* const worker = st->worker_ptr.load()) worker->Request();  // refused inside the worker's gap: the next pass runs it
+  });
+  nevr_maps::InstallRequestSeams(st->requests.get());
+}
+
 void BootUnguarded(std::uintptr_t game_base, bool is_server) {
   const std::wstring root = nevr_root::RootW();
   const Settings settings = ReadSettings([](const char* key) { return Flat(key); },
@@ -373,12 +387,23 @@ void BootUnguarded(std::uintptr_t game_base, bool is_server) {
       st->channel->Boot(*st->env, *st->fs, *st->mounter, st->deriver.get(), NowUtc(), Ask(seams.local_map_ids));
   if (boot.start != Start::kRun) return;  // the core wrote why (not_configured, or the refusal)
   ArmSessionGroupRequest();  // a session success now queues its group for the fetch worker (ADR 0048 decision 15)
+  if (!st->server) InstallClientRequests(st);  // and the request entry replaces that seam for a client (ADR 0048 decision 16)
 
   st->deferred = boot.report.deferred;
   GrantMounted(st, boot.report);
   if (st->mounter->any_script()) nevr_map_scripts::InstallMapScriptsRewriter();
   nevr_resource_sets::SetMountObserver(&OnMount);
   nevr_config_alias::InstallIfStaged();
+}
+
+// The worker's request pass: runs each queued group on demand with the scope its requests asked for. Stops when keep_going turns false.
+void DrainRequests(State* st, const std::function<bool()>& keep_going) {
+  const auto fetch = [st, &keep_going](const std::string& group, const nevr_maps::FetchScope& scope) {
+    return nevr_maps::FetchGroup(*st->env, *st->fs, st->channel->config(), group, st->deferred, st->deriver.get(), NowUtc(), keep_going,
+                                 nullptr, scope);
+  };
+  while (keep_going() && st->requests->RunNext(fetch)) {
+  }
 }
 
 void StartFetchUnguarded() {
@@ -396,6 +421,7 @@ void StartFetchUnguarded() {
   st->worker = std::make_unique<FetchWorker>(
       [st](const std::function<bool()>& keep_going) {
         try {
+          DrainRequests(st, keep_going);
           const Seams seams = RecordedGroupSeams(*st->env, st->channel->config().dir);
           st->channel->FetchPass(*st->env, *st->fs, st->deriver.get(), FetchGroups(Ask(seams.recorded_groups)), NowUtc(),
                                  keep_going);
@@ -406,6 +432,7 @@ void StartFetchUnguarded() {
       },
       [st] { return st->env->NowMs(); });
   st->worker->Start();
+  st->worker_ptr.store(st->worker.get());
 }
 
 }  // namespace
@@ -432,7 +459,10 @@ void StartFetch() {
 
 void StopFetch() {
   State* const st = g_state;
-  if (st == nullptr || !st->worker) return;
+  if (st == nullptr) return;
+  if (st->requests) st->requests->Stop();  // later requests are refused and the waiting ones answered cancelled, before the worker stops
+  if (!st->worker) return;
+  st->worker_ptr.store(nullptr);
   if (!st->worker->Stop(std::chrono::milliseconds(kStopWaitMs))) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.MAPS] map_stop reason=join_timeout (the fetch ends at its next transfer bound)");
   }

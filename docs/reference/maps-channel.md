@@ -60,12 +60,37 @@ Downloaded maps live in `<nEVR root>\cache\maps\` (`MapsCacheDir`, `src/core/nev
   pass starts (`StartFetch`), both from `src/runtime/lifecycle/boot.cpp`. The boot mount reads the cache index and mounts
   cached groups with no network.
 - The background pass fetches the groups `RecordedGroupSeams` names (`src/runtime/content/map_channel.cpp`): this run's
-  session requests, merged with the groups the cache index holds, filtered by `FetchGroups`.
-- A lobby session success queues its group for that pass. `ArmSessionGroupRequest` (`src/core/map_channel.cpp`) sets
-  `SetSessionGroupRequest` to `RecordRequestedGroup` once the boot returns a running channel. The session logs
-  `session group requested group=<id>`; without a running channel it logs `no_channel`.
-- `StopFetch` (`src/runtime/content/map_channel.cpp`) has no caller, so the PC shutdown path does not stop the fetch.
+  session requests, merged with the groups the cache index holds, filtered by `FetchGroups`. Each group is fetched on
+  demand (see the next section).
+- Before that pass, the worker drains the request entry (`DrainRequests`): each queued group runs with the scope its
+  requests asked for. A lobby session success queues its group, and the session pin asks for a map it lacks. Both go
+  through `InstallClientRequests` (`src/runtime/content/map_channel.cpp`), which installs `nevr_maps::MapRequests`
+  (`src/core/map_request.h`) on the two core seams and replaces the session-group seam that `ArmSessionGroupRequest`
+  (`src/core/map_channel.cpp`) set. Each request is written as a `map_request` record (`docs/standards/logging.md`).
+  Without a running channel the session logs `no_channel`.
+- A request wakes the worker through `FetchWorker::Request`, which refuses a request made within `kExtraFetchGapMs`
+  (10 minutes) of the last extra pass. A refused request waits in the queue until a later pass runs it, and no later
+  pass is scheduled by the worker itself. KNOWN-WRONG #TBD: a second request inside that gap is not fetched until
+  the next worker pass, which only a further request starts.
+- `StopFetch` (`src/runtime/content/map_channel.cpp`) stops the request entry first, so later requests are refused and
+  the waiting ones are answered `cancelled`. It has no caller, so the PC shutdown path does not stop the fetch.
   KNOWN-WRONG #TBD.
+
+### On-demand fetch and the request entry (ADR 0048 decision 16)
+
+- A client's pass is on demand. `Channel::FetchPass` (`src/core/map_channel.cpp`) and every request set
+  `FetchScope::on_demand`. A map the cache holds is refreshed when its listed version is newer, and a map the cache does
+  not hold is downloaded only when a request names it. A map that is neither held nor requested is recorded as
+  `map_plan reason=not_needed` and not fetched.
+- A request that names a map the group's signed manifest does not list is refused with `map_plan reason=not_listed`.
+- A cached copy whose version no verified manifest lists is refused: the cache is not mounted in its place. The copy is
+  recorded as `map_mounted refused=stale` (Warning), the listed version is fetched when a session asks for it, and the
+  session pin's decision for a stale copy is a download notice (`src/core/map_session_pin.cpp`).
+- `ChannelConfig::mount_on_demand` (`src/core/map_run.h`) defaults to `false`. The mount grants every cached map its
+  groups list. With the flag on, the mount grants only the ids the caller names, and an unasked map is recorded as
+  `map_skipped reason=not_asked` (Info). No production caller sets the flag yet. KNOWN-WRONG #TBD (K3: the mid-run mount
+  that would grant a fetched map). No config key sets it (ADR 0048 decision 16).
+- The request entry's download notice reads "plays after your next launch": the map mounts at the next launch, not mid-run.
 
 ### Quest client
 
@@ -75,6 +100,9 @@ Downloaded maps live in `<nEVR root>\cache\maps\` (`MapsCacheDir`, `src/core/nev
 - `Start` arms the session request (`ArmSessionGroupRequest`) and its background pass fetches the same
   `RecordedGroupSeams` groups as the PC.
 - The Quest's mounter is built with `signed_only` false (`src/quest/cdn/map_service.cpp`).
+- The Quest's pass is the core's on-demand `FetchPass`, so it refreshes held maps and downloads only what its groups ask
+  for, as the PC does. It has no request entry: a session's group is recorded for the pass, and a map the session pin
+  lacks is not requested. KNOWN-WRONG #TBD (K6: the Quest request entry).
 
 ### Local copies (ADR 0048 decision 8)
 
@@ -156,6 +184,10 @@ Map file contents are never logged. A script's bytes are never logged. A path or
 Every `KNOWN-WRONG #TBD` on this page marks a part the code states is not wired yet:
 
 - `StopFetch` has no caller, so the PC shutdown path does not stop the background fetch.
+- A second request inside `kExtraFetchGapMs` of the last extra pass waits for a later pass (see the PC client section).
+- `mount_on_demand` is read only by the core and no production caller sets it, so a fetched map is not mounted mid-run
+  (K3).
+- The Quest has no request entry (K6).
 - `RegistrationEntries` has no caller, so a server does not report its pin at registration.
 - The Quest's `InstallTick` has no caller, so the Quest does not run the pin's tick.
 - No local level name or local map id is supplied on either platform, so local precedence does not skip any CDN map.
