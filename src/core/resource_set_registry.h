@@ -8,8 +8,9 @@
 // The life of a set: Add (parsed and checked, held for its plugin), then Commit when the plugin's init returns 0, or
 // Drop when it fails; then one Mount for the run, which refuses a set that names a key the game already has or a level
 // whose archives (its own and every archive it depends on, through the sets and down to the game's) list a resource
-// nothing serves, and builds the shadow from the rest. A set registered after the mount is refused (kTooLate). A set's
-// overrides are held with it and handed to the override registry by the caller for mounted sets only.
+// nothing serves, and builds the shadow from the rest. A plugin's set registered after the mount is refused (kTooLate). A map's
+// set (AddMapFile) registered after it is held for MountLater, which mounts it and builds the run's next shadow (ADR 0048 decision
+// 16). A set's overrides are held with it and handed to the override registry by the caller for mounted sets only.
 
 #include <atomic>
 #include <cstddef>
@@ -136,6 +137,7 @@ struct MountReport {
   std::size_t refused = 0;        // sets refused at the mount
   std::size_t records = 0;
   std::size_t levels = 0;
+  std::size_t earlier_sets = 0;   // the sets mounted before this call (0 for the run's first mount): MountedSets() lists them first
   std::uint32_t chunk_base = 0;   // the shadow's first chunk index (0 when nothing was mounted)
   std::uint64_t stock_records = 0;
   nevr_shadow::Status shadow_status = nevr_shadow::Status::kOk;
@@ -179,6 +181,15 @@ class Registry {
   // goes to the report for the caller to close: after the mount the registry holds the mounted sets only, so a key of
   // a refused set is free (Holds). Builds the one shadow from the rest.
   MountReport Mount(const StockView& stock);
+  // A later mount of the run (a map fetched after the first mount, ADR 0048 decision 16): mounts the map sets registered since the last
+  // mount, with Mount's checks against `stock` and against every set already mounted, and then builds ONE new shadow of every mounted
+  // set, earlier and new, on fresh chunk indices. The resolver is given that shadow in place of the earlier one, so a request is still
+  // answered by one lookup in one shadow however many mounts the run has made. A mounted set is never replaced or withdrawn: the
+  // earlier shadow is kept (retired_shadows) for the process, because a request in flight may still read from it. The report counts
+  // this call's sets (earlier_sets says how many came before). Nothing changes, and shadow() stays the same, when no set is pending,
+  // when every pending set is refused, or when the shadow cannot be built (a kIndexSpace is the usual cause; each pending set is then
+  // refused). Empty before the first Mount and after Abandon.
+  MountReport MountLater(const StockView& stock);
   // Ends the run's registration without serving anything (the resolver hook could not be installed): every held set
   // is dropped, later Adds are kTooLate. Returns the sets' handles for the caller to close.
   std::vector<std::int64_t> Abandon();
@@ -186,16 +197,23 @@ class Registry {
   std::size_t held() const { return sets_.size(); }
 
   bool mounted() const { return mounted_; }
+  // True once Abandon ended the run's registration: no set of any kind is accepted from then on.
+  bool abandoned() const { return abandoned_; }
+  // The map sets held but not yet mounted: registered after the first mount and waiting for MountLater. 0 before the first mount.
+  std::size_t pending() const;
+  // The shadows the later mounts replaced, kept for the process.
+  std::size_t retired_shadows() const { return retired_.size(); }
   // The shadow the resolver hook uses, or null before the mount or when no set was mounted.
   const nevr_shadow::Shadow* shadow() const { return shadow_.get(); }
   // The level names of the mounted sets, in set order.
   std::vector<std::uint64_t> MountedLevels() const;
   // True when a held set holds (type, name): before the mount any set registered (committed or not), after it a
-  // mounted set.
+  // mounted set or a map's set waiting for the next mount.
   bool Holds(std::uint64_t type, std::uint64_t name) const;
   // The mounted sets, for the log and the login report.
   std::vector<const Set*> MountedSets() const;
-  // Every set held, in the order registered: before the mount committed or not, after it the mounted ones.
+  // Every set held, in the order registered: before the mount committed or not, after it the mounted ones and a map's set that
+  // waits for MountLater.
   std::vector<const Set*> HeldSets() const;
   // The set a shadow record's user tag names, or null.
   const Set* SetForUser(std::uint32_t user) const;
@@ -205,9 +223,13 @@ class Registry {
                      std::int64_t handle, std::uint64_t fileOffset, bool mapFile);
   // Drops every set the mount did not mount (its handle is already in the report).
   void KeepOnlyMounted();
+  // The checks and the shadow of Mount and MountLater, over the sets no mount has taken yet.
+  void MountPending(const StockView& stock, MountReport* report);
+  bool IsMountedSet(const Set* set) const;
 
   std::vector<std::unique_ptr<Set>> sets_;
   std::unique_ptr<nevr_shadow::Shadow> shadow_;
+  std::vector<std::unique_ptr<nevr_shadow::Shadow>> retired_;  // the shadows MountLater replaced; never freed before the Registry
   std::vector<const Set*> mountedOrder_;
   std::uint64_t indexSpace_;
   ResourceTypes types_;
@@ -215,6 +237,7 @@ class Registry {
   // kTooLate).
   std::uint64_t heldChunks_ = 0;
   bool mounted_ = false;
+  bool abandoned_ = false;
 };
 
 // Map scripts (docs/adr/0048, decision 6): while a waiver is set, a kScriptType record of a map's set (IsMapOwner)
@@ -271,18 +294,19 @@ class HeldMapFile {
   virtual void Unmap(const void* view, std::uint64_t size) = 0;
 };
 
-// One map's set, registered: the request's rules (CheckMapFileRequest), kTooLate once `mounted()` is true, the file's size (an empty
+// One map's set, registered: the request's rules (CheckMapFileRequest), kTooLate once `closed()` is true (Registry::abandoned(): a map's set is still taken after the first mount, for MountLater), the file's size (an empty
 // file is kFormat "empty_file"), the re-hash when the request asks for it (kHash "sha256 <file's>, pinned <pin>" when they differ;
 // kFormat "hash_read: ..." when the file cannot be read to its size), the view, and then `add` with the view, whose outcome is
 // returned. `add` takes the platform's lock and calls Registry::AddMapFile, which copies what it keeps of the set (its records, chunks
 // and archives; a map's set carries no override, whose bytes would point into the view). So the view is released before this returns,
 // whatever the outcome: the game reads a mounted set through the held handle, never through the view. On a refusal the caller keeps
 // the handle; on ok() the registry owns it.
-Outcome RegisterMapFile(const MapFileRequest& request, HeldMapFile& file, const std::function<bool()>& mounted,
+Outcome RegisterMapFile(const MapFileRequest& request, HeldMapFile& file, const std::function<bool()>& closed,
                         const std::function<Outcome(const void* view, std::uint64_t size)>& add);
 
-// The mount observer both platforms offer: the map channel's code is told which sets the run's one mount mounted and refused, after
-// Registry::Mount and before the first request is answered from the shadow, with none of the platform's locks held. A run whose
+// The mount observer both platforms offer: the map channel's code is told which sets the run's first mount mounted and refused, after
+// Registry::Mount and before the first request is answered from the shadow, with none of the platform's locks held (a later mount,
+// Registry::MountLater, is told through NotifyLater). A run whose
 // registration ends without a mount (the resolver hook missing, a mount that failed) calls it with an empty report. Thread-safe.
 class MountObserver {
  public:
@@ -291,6 +315,8 @@ class MountObserver {
   bool Armed() const { return fn_.load() != nullptr; }
   // Calls the observer once per run: true when it was called now, false when none is set or it was already called.
   bool Notify(const MountReport& report);
+  // Calls the observer for a later mount of the run (Registry::MountLater), every time: false when none is set. Call it after Notify.
+  bool NotifyLater(const MountReport& report);
   // Test support: no observer, never called.
   void Reset();
 

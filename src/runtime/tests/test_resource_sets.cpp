@@ -555,6 +555,162 @@ TEST(ResourceSetRegistry, NothingIsTakenAfterTheMount) {
   EXPECT_EQ(registry.Add("p", "l", bytes.data(), bytes.size(), 1, 0).refusal, Refusal::kTooLate);
 }
 
+// ---- a later mount (ADR 0048 decision 16): a map fetched after the run's first mount -----------------------------------
+
+constexpr std::uint64_t kFirstMesh = 0x3333333333333333ULL;
+constexpr std::uint64_t kSecondMesh = 0x7777777777777777ULL;
+
+// A map's set registered under "map:<id>" (the shared rules' owner); no script, so no waiver is needed.
+nevr_resource_sets::Outcome AddMap(Registry& registry, const char* id, const std::vector<unsigned char>& bytes, std::int64_t handle) {
+  return registry.AddMapFile(std::string("map:") + id, std::string("map:") + id + "@1", bytes.data(), bytes.size(), handle);
+}
+
+TEST(ResourceSetRegistryLater, ALaterMountPutsEveryMountedSetInOneNewShadowAndKeepsTheEarlierOneAlive) {
+  nevr_shadow::Shadow::ResetChunkCounterForTest();
+  const std::vector<unsigned char> first = LevelSet(kLevel, kFirstMesh).Build();
+  const std::vector<unsigned char> second = LevelSet(kLevel + 1, kSecondMesh).Build();
+  Registry registry;
+  FakeStock stock;
+  ASSERT_TRUE(AddMap(registry, "a", first, 1).ok());
+  ASSERT_EQ(registry.Mount(stock.View()).sets, 1u);
+  const nevr_shadow::Shadow* const before = registry.shadow();
+  ASSERT_NE(before, nullptr);
+
+  ASSERT_TRUE(AddMap(registry, "b", second, 2).ok()) << "a map's set registered after the first mount is held for the next one";
+  EXPECT_EQ(registry.pending(), 1u);
+  const nevr_resource_sets::MountReport later = registry.MountLater(stock.View());
+  EXPECT_EQ(later.sets, 1u);
+  EXPECT_EQ(later.earlier_sets, 1u);
+  EXPECT_EQ(registry.pending(), 0u);
+  EXPECT_TRUE(later.refusals.empty());
+
+  // One shadow answers both maps: the resolver asks it once, however many mounts the run has made.
+  const nevr_shadow::Shadow* const after = registry.shadow();
+  ASSERT_NE(after, nullptr);
+  EXPECT_NE(after, before);
+  nevr_shadow::Found found;
+  std::uint32_t user = 99;
+  EXPECT_TRUE(after->Find(kLevelRootType, kLevel, &found, &user));
+  EXPECT_EQ(user, 0u);
+  EXPECT_TRUE(after->Find(kLevelRootType, kLevel + 1, &found, &user));
+  EXPECT_EQ(user, 1u) << "the later set's index follows the earlier one's, so a set's index never changes";
+  ASSERT_NE(registry.SetForUser(1), nullptr);
+  EXPECT_EQ(registry.SetForUser(1)->plugin, "map:b");
+  EXPECT_EQ(registry.MountedLevels(), (std::vector<std::uint64_t>{kLevel, kLevel + 1}));
+
+  // The earlier shadow is untouched and kept: a request in flight may still read from it.
+  EXPECT_TRUE(before->Find(kLevelRootType, kLevel, &found));
+  EXPECT_FALSE(before->Find(kLevelRootType, kLevel + 1, &found));
+  EXPECT_EQ(registry.retired_shadows(), 1u);
+  // Fresh chunk indices: a block the engine cached under the earlier index is never read as the new shadow's.
+  EXPECT_GE(after->chunk_base(), before->chunk_base() + before->chunk_count());
+  EXPECT_EQ(later.chunk_base, after->chunk_base());
+}
+
+TEST(ResourceSetRegistryLater, AMountedMapIsNeverReplacedASetThatNamesItsKeyIsRefusedAtRegistration) {
+  const std::vector<unsigned char> first = LevelSet(kLevel, kFirstMesh).Build();
+  const std::vector<unsigned char> clash = LevelSet(kLevel, 0x8888888888888888ULL).Build();  // the level the first mount serves
+  Registry registry;
+  FakeStock stock;
+  ASSERT_TRUE(AddMap(registry, "a", first, 1).ok());
+  registry.Mount(stock.View());
+  const nevr_resource_sets::Outcome outcome = AddMap(registry, "c", clash, 3);
+  EXPECT_EQ(outcome.refusal, Refusal::kCollides);
+  EXPECT_EQ(registry.pending(), 0u);
+}
+
+TEST(ResourceSetRegistryLater, ALaterSetThatNamesAKeyTheGameHasIsRefusedAndTheShadowStays) {
+  const std::vector<unsigned char> first = LevelSet(kLevel, kFirstMesh).Build();
+  const std::vector<unsigned char> stockKey = LevelSet(kLevel + 1, kStockMesh).Build();  // carries the stock mesh
+  Registry registry;
+  FakeStock stock;
+  ASSERT_TRUE(AddMap(registry, "a", first, 1).ok());
+  registry.Mount(stock.View());
+  const nevr_shadow::Shadow* const before = registry.shadow();
+  ASSERT_TRUE(AddMap(registry, "b", stockKey, 2).ok());
+  const nevr_resource_sets::MountReport later = registry.MountLater(stock.View());
+  EXPECT_EQ(later.sets, 0u);
+  ASSERT_EQ(later.refusals.size(), 1u);
+  EXPECT_EQ(later.refusals[0].plugin, "map:b");
+  EXPECT_EQ(later.refusals[0].outcome.refusal, Refusal::kStockKey);
+  EXPECT_EQ(later.handles_to_close, std::vector<std::int64_t>{2});
+  EXPECT_EQ(registry.shadow(), before) << "nothing mounted, so the shadow the resolver holds is the one still answering";
+  EXPECT_EQ(registry.retired_shadows(), 0u);
+  EXPECT_EQ(registry.pending(), 0u);
+  EXPECT_FALSE(registry.Holds(kLevelRootType, kLevel + 1)) << "a refused set's keys are free again";
+}
+
+TEST(ResourceSetRegistryLater, ALaterLevelResolvesWhatAnEarlierMountServesAndRefusesWhatNothingServes) {
+  const std::vector<unsigned char> first = LevelSet(kLevel, kFirstMesh).Build();
+  SetBuilder uses;  // its archive lists the first map's mesh
+  const std::uint32_t c = uses.AddChunk();
+  uses.AddRecord(kLevelRootType, 0x6161ULL, Bytes(8, 1), c);
+  uses.AddRecord(kArchiveType, 0x6161ULL, Archive({}, {{kMeshType, kFirstMesh}}), c);
+  SetBuilder lost;  // its archive lists a mesh no mount serves
+  const std::uint32_t d = lost.AddChunk();
+  lost.AddRecord(kLevelRootType, 0x7171ULL, Bytes(8, 1), d);
+  lost.AddRecord(kArchiveType, 0x7171ULL, Archive({}, {{kMeshType, 0x9999ULL}}), d);
+  const std::vector<unsigned char> usesBytes = uses.Build();
+  const std::vector<unsigned char> lostBytes = lost.Build();
+  Registry registry;
+  FakeStock stock;
+  ASSERT_TRUE(AddMap(registry, "a", first, 1).ok());
+  registry.Mount(stock.View());
+  ASSERT_TRUE(AddMap(registry, "uses", usesBytes, 2).ok());
+  ASSERT_TRUE(AddMap(registry, "lost", lostBytes, 3).ok());
+  const nevr_resource_sets::MountReport later = registry.MountLater(stock.View());
+  EXPECT_EQ(later.sets, 1u);
+  ASSERT_EQ(later.refusals.size(), 1u);
+  EXPECT_EQ(later.refusals[0].plugin, "map:lost");
+  EXPECT_EQ(later.refusals[0].outcome.refusal, Refusal::kUnresolved);
+  EXPECT_EQ(registry.MountedLevels(), (std::vector<std::uint64_t>{kLevel, 0x6161ULL}));
+}
+
+TEST(ResourceSetRegistryLater, AShadowThatCannotBeBuiltRefusesTheLaterSetsAndTheEarlierShadowServesOn) {
+  // One index is left after the first shadow; the later shadow holds both maps' chunks, so it needs two.
+  nevr_shadow::Shadow::ResetChunkCounterForTest(static_cast<std::uint32_t>(nevr_shadow::kChunkIndexLimit - 2));
+  const std::vector<unsigned char> first = LevelSet(kLevel, kFirstMesh).Build();
+  const std::vector<unsigned char> second = LevelSet(kLevel + 1, kSecondMesh).Build();
+  Registry registry;
+  FakeStock stock;
+  ASSERT_TRUE(AddMap(registry, "a", first, 1).ok());
+  ASSERT_EQ(registry.Mount(stock.View()).sets, 1u);
+  const nevr_shadow::Shadow* const before = registry.shadow();
+  ASSERT_TRUE(AddMap(registry, "b", second, 2).ok());
+  const nevr_resource_sets::MountReport later = registry.MountLater(stock.View());
+  EXPECT_EQ(later.shadow_status, nevr_shadow::Status::kIndexSpace);
+  EXPECT_EQ(later.sets, 0u);
+  ASSERT_EQ(later.refusals.size(), 1u);
+  EXPECT_EQ(later.refusals[0].outcome.refusal, Refusal::kFormat);
+  EXPECT_EQ(later.handles_to_close, std::vector<std::int64_t>{2});
+  EXPECT_EQ(registry.shadow(), before);
+  EXPECT_EQ(registry.MountedLevels(), std::vector<std::uint64_t>{kLevel});
+  EXPECT_EQ(registry.pending(), 0u);
+  nevr_shadow::Shadow::ResetChunkCounterForTest();
+}
+
+TEST(ResourceSetRegistryLater, OnlyASetNoMountHasTakenIsWithdrawnAndAnAbandonedRegistrationTakesNothing) {
+  const std::vector<unsigned char> first = LevelSet(kLevel, kFirstMesh).Build();
+  const std::vector<unsigned char> second = LevelSet(kLevel + 1, kSecondMesh).Build();
+  Registry registry;
+  FakeStock stock;
+  ASSERT_TRUE(AddMap(registry, "a", first, 1).ok());
+  registry.Mount(stock.View());
+  ASSERT_TRUE(AddMap(registry, "b", second, 2).ok());
+  EXPECT_TRUE(registry.DropMap("map:a").empty()) << "a mounted map is being served and is not withdrawn";
+  EXPECT_EQ(registry.DropMap("map:b"), std::vector<std::int64_t>{2});
+  EXPECT_EQ(registry.pending(), 0u);
+  EXPECT_EQ(registry.MountLater(stock.View()).sets, 0u);
+
+  Registry never;
+  ASSERT_TRUE(AddMap(never, "a", first, 1).ok());
+  EXPECT_EQ(never.MountLater(stock.View()).sets, 0u) << "no later mount before the first one";
+  EXPECT_EQ(never.shadow(), nullptr);
+  never.Abandon();
+  EXPECT_EQ(AddMap(never, "a", first, 1).refusal, Refusal::kTooLate);
+  EXPECT_TRUE(never.abandoned());
+}
+
 TEST(ResourceSetRegistry, AChunkWhoseFileOffsetDoesNotFitTheGamesU32IsRefused) {
   const std::vector<unsigned char> bytes = LevelSet().Build();
   Registry registry;
@@ -1013,6 +1169,19 @@ TEST(MapMountObserver, CalledOnceARunAndNotWithoutAnObserver) {
   observer.Set(&CountMount);
   EXPECT_TRUE(observer.Notify(report));
   EXPECT_EQ(g_observedCalls, 2);
+}
+
+TEST(MapMountObserver, ALaterMountIsToldEveryTimeAfterTheFirstOne) {
+  MountObserver observer;
+  g_observedCalls = 0;
+  nevr_resource_sets::MountReport report;
+  EXPECT_FALSE(observer.NotifyLater(report)) << "no observer set";
+  observer.Set(&CountMount);
+  EXPECT_TRUE(observer.Notify(report));
+  EXPECT_TRUE(observer.NotifyLater(report));
+  EXPECT_TRUE(observer.NotifyLater(report));
+  EXPECT_FALSE(observer.Notify(report)) << "the first mount is told once";
+  EXPECT_EQ(g_observedCalls, 3);
 }
 
 }  // namespace

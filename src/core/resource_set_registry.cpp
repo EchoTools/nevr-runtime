@@ -160,7 +160,9 @@ Outcome Registry::AddMapFile(const std::string& owner, const std::string& label,
 
 Outcome Registry::AddChecked(const std::string& plugin, const std::string& label, const void* bytes, std::uint64_t size,
                              std::int64_t handle, std::uint64_t fileOffset, bool mapFile) {
-  if (mounted_) return Refuse(Refusal::kTooLate, "the run's resource sets are already mounted");
+  // A plugin's set is held for the run's one mount. A map's set is also accepted after it, for MountLater (a map fetched mid-run,
+  // ADR 0048 decision 16), until the registration is abandoned.
+  if (mounted_ && (!mapFile || abandoned_)) return Refuse(Refusal::kTooLate, "the run's resource sets are already mounted");
   nevr_resource_set::View view;
   const nevr_resource_set::Result parsed = nevr_resource_set::Parse(bytes, size, &view);
   if (!parsed.ok()) {
@@ -316,10 +318,11 @@ std::vector<std::int64_t> Registry::Drop(const std::string& plugin) {
 
 std::vector<std::int64_t> Registry::DropMap(const std::string& owner) {
   std::vector<std::int64_t> handles;
-  if (mounted_ || !IsMapOwner(owner)) return handles;
+  if (!IsMapOwner(owner)) return handles;
   auto keep = sets_.begin();
   for (auto it = sets_.begin(); it != sets_.end(); ++it) {
-    if ((*it)->plugin == owner) {
+    // A mounted set is being served: only a set no mount has taken yet is dropped.
+    if ((*it)->plugin == owner && !IsMountedSet(it->get())) {
       handles.push_back((*it)->handle);
       heldChunks_ -= (*it)->chunks.size();
     } else {
@@ -331,16 +334,44 @@ std::vector<std::int64_t> Registry::DropMap(const std::string& owner) {
   return handles;
 }
 
+bool Registry::IsMountedSet(const Set* set) const {
+  return std::find(mountedOrder_.begin(), mountedOrder_.end(), set) != mountedOrder_.end();
+}
+
 MountReport Registry::Mount(const StockView& stock) {
   MountReport report;
   report.stock_records = stock.records;
   if (mounted_) return report;
   mounted_ = true;
+  MountPending(stock, &report);
+  return report;
+}
 
-  std::vector<Key> served;  // the keys of the sets mounted so far, sorted
+MountReport Registry::MountLater(const StockView& stock) {
+  MountReport report;
+  report.stock_records = stock.records;
+  if (!mounted_ || abandoned_) return report;
+  MountPending(stock, &report);
+  return report;
+}
+
+std::size_t Registry::pending() const { return mounted_ ? sets_.size() - mountedOrder_.size() : 0; }
+
+void Registry::MountPending(const StockView& stock, MountReport* out) {
+  MountReport& report = *out;
+  report.earlier_sets = mountedOrder_.size();
+  std::vector<Key> served;  // the keys of the sets mounted so far (by an earlier mount too), sorted
   std::vector<const Set*> servedSets;
+  for (const Set* earlier : mountedOrder_) {
+    servedSets.push_back(earlier);
+    const std::vector<Key> keys = SortedKeys(*earlier);
+    served.insert(served.end(), keys.begin(), keys.end());
+  }
+  std::sort(served.begin(), served.end());
+  std::vector<const Set*> accepted;  // the sets this call mounts, in set order
   for (const std::unique_ptr<Set>& owned : sets_) {
     Set& set = *owned;
+    if (IsMountedSet(&set)) continue;
     if (!set.committed) {
       report.handles_to_close.push_back(set.handle);
       continue;
@@ -399,15 +430,24 @@ MountReport Registry::Mount(const StockView& stock) {
       ++report.refused;
       continue;
     }
-    mountedOrder_.push_back(&set);
+    accepted.push_back(&set);
     servedSets.push_back(&set);
     served.insert(served.end(), own.begin(), own.end());
     std::sort(served.begin(), served.end());
   }
+  if (accepted.empty()) {
+    KeepOnlyMounted();
+    return;
+  }
 
+  // One shadow answers every request: the new shadow holds the earlier mounts' sets and this call's, so the resolver asks one
+  // shadow once per request however many mounts the run has made (the shadow's lookup is a binary search over one record array).
+  // Its chunks take fresh indices, so a block the engine cached under the earlier shadow's index is never read as this one's.
+  std::vector<const Set*> order = mountedOrder_;
+  order.insert(order.end(), accepted.begin(), accepted.end());
   nevr_shadow::Input input;
-  for (std::uint32_t i = 0; i < mountedOrder_.size(); ++i) {
-    const Set& set = *mountedOrder_[i];
+  for (std::uint32_t i = 0; i < order.size(); ++i) {
+    const Set& set = *order[i];
     const std::uint32_t chunkBase = static_cast<std::uint32_t>(input.chunks.size());
     input.handles.push_back(set.handle);
     for (nevr_shadow::Chunk chunk : set.chunks) {
@@ -421,28 +461,35 @@ MountReport Registry::Mount(const StockView& stock) {
     }
   }
   if (input.records.empty()) {
+    mountedOrder_ = order;
     KeepOnlyMounted();
-    return report;
+    return;
   }
-  report.shadow_status = nevr_shadow::Shadow::Build(input, &shadow_);
+  std::unique_ptr<nevr_shadow::Shadow> built;
+  report.shadow_status = nevr_shadow::Shadow::Build(input, &built);
   if (report.shadow_status != nevr_shadow::Status::kOk) {
-    for (const Set* set : mountedOrder_) {
+    // The sets this call would have mounted are refused; the earlier shadow keeps serving the earlier sets.
+    for (const Set* set : accepted) {
       report.refusals.push_back({set->plugin, set->label,
                                  Refuse(Refusal::kFormat, std::string("shadow build: ") +
                                                               nevr_shadow::StatusName(report.shadow_status))});
       report.handles_to_close.push_back(set->handle);
       ++report.refused;
     }
-    mountedOrder_.clear();
     KeepOnlyMounted();
-    return report;
+    return;
   }
+  // The shadow an earlier mount published is never freed while the process runs: a request in flight may still be filled from it.
+  if (shadow_) retired_.push_back(std::move(shadow_));
+  shadow_ = std::move(built);
+  mountedOrder_ = std::move(order);
   KeepOnlyMounted();
-  report.sets = mountedOrder_.size();
-  report.records = input.records.size();
-  for (const Set* set : mountedOrder_) report.levels += set->levels.size();
+  report.sets = accepted.size();
+  for (const Set* set : accepted) {
+    report.records += set->records.size();
+    report.levels += set->levels.size();
+  }
   report.chunk_base = shadow_->chunk_base();
-  return report;
 }
 
 void Registry::KeepOnlyMounted() {
@@ -462,6 +509,7 @@ std::vector<std::int64_t> Registry::Abandon() {
   shadow_.reset();
   heldChunks_ = 0;
   mounted_ = true;
+  abandoned_ = true;
   return handles;
 }
 
@@ -499,12 +547,12 @@ Outcome CheckMapFileRequest(const MapFileRequest& request) {
   return Outcome{};
 }
 
-Outcome RegisterMapFile(const MapFileRequest& request, HeldMapFile& file, const std::function<bool()>& mounted,
+Outcome RegisterMapFile(const MapFileRequest& request, HeldMapFile& file, const std::function<bool()>& closed,
                         const std::function<Outcome(const void* view, std::uint64_t size)>& add) {
   const Outcome checked = CheckMapFileRequest(request);
   if (!checked.ok()) return checked;
-  // Before the size, the hash and the view, which are wasted once the sets are mounted; `add` checks again under its lock.
-  if (mounted()) return Refuse(Refusal::kTooLate, "the run's resource sets are already mounted");
+  // Before the size, the hash and the view, which are wasted once the registry takes no more sets; `add` checks again under its lock.
+  if (closed()) return Refuse(Refusal::kTooLate, "the run's resource sets are already mounted");
   std::uint64_t size = 0;
   std::string problem;
   if (!file.Size(&size, &problem)) return Refuse(Refusal::kFormat, problem);
@@ -537,6 +585,13 @@ Outcome RegisterMapFile(const MapFileRequest& request, HeldMapFile& file, const 
 bool MountObserver::Notify(const MountReport& report) {
   const Fn fn = fn_.load();
   if (fn == nullptr || notified_.exchange(true)) return false;
+  fn(report);
+  return true;
+}
+
+bool MountObserver::NotifyLater(const MountReport& report) {
+  const Fn fn = fn_.load();
+  if (fn == nullptr) return false;
   fn(report);
   return true;
 }
