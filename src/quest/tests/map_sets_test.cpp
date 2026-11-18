@@ -20,12 +20,14 @@
 #include "quest/data/sha256.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/map_sets.h"
+#include "quest/tests/map_set_fixture.h"
 #include "quest/tests/test_check.h"
 
 namespace {
 
 namespace rs = nevr_resource_sets;
 namespace ms = nevr_quest::map_sets;
+using namespace map_set_fixture;
 
 constexpr char kAbcSha[] = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 constexpr mode_t kFileMode = 0600;
@@ -153,58 +155,6 @@ void Publish(const nevr_shadow::Shadow* shadow) {
   g_published = shadow;
 }
 
-void PutLe(std::string* out, std::size_t at, unsigned width, std::uint64_t value) {
-  for (unsigned i = 0; i < width; ++i) (*out)[at + i] = static_cast<char>(value >> (8 * i));
-}
-
-// A NEVRRES1 set, each record in its own zstd chunk (core/tests/map_derive_test.cpp BuildSet); records sorted by key.
-std::string BuildSet(const std::vector<std::pair<std::pair<std::uint64_t, std::uint64_t>, std::string>>& records) {
-  std::vector<std::string> frames;
-  for (const auto& r : records) {
-    std::string frame(ZSTD_compressBound(r.second.size()), '\0');
-    frame.resize(ZSTD_compress(&frame[0], frame.size(), r.second.data(), r.second.size(), 1));
-    frames.push_back(frame);
-  }
-  const std::size_t n = records.size();
-  std::string set(48 + n * 0x20 + n * 0x10, '\0');
-  std::memcpy(&set[0], "NEVRRES1", 8);
-  PutLe(&set, 8, 4, 48);
-  PutLe(&set, 0x0c, 4, n);
-  PutLe(&set, 0x10, 4, n);
-  PutLe(&set, 0x18, 8, 48);
-  PutLe(&set, 0x20, 8, 48 + n * 0x20);
-  PutLe(&set, 0x28, 8, set.size());
-  std::uint64_t at = set.size();
-  for (std::size_t i = 0; i < n; ++i) {
-    const std::size_t r = 48 + i * 0x20, c = 48 + n * 0x20 + i * 0x10;
-    PutLe(&set, r, 8, records[i].first.first);
-    PutLe(&set, r + 8, 8, records[i].first.second);
-    PutLe(&set, r + 0x10, 4, i);
-    PutLe(&set, r + 0x18, 4, records[i].second.size());
-    PutLe(&set, r + 0x1c, 4, 16);
-    PutLe(&set, c + 4, 4, at);
-    PutLe(&set, c + 8, 4, frames[i].size());
-    PutLe(&set, c + 12, 4, records[i].second.size());
-    at += frames[i].size();
-  }
-  for (const std::string& f : frames) set += f;
-  return set;
-}
-
-constexpr std::uint64_t kLevel = 0x7691d78d414c5701ULL;  // mpl_arena_a_lowspec
-constexpr std::uint64_t kComponent = 0x1111222233334444ULL, kPart = 0x55;
-
-// The valid-set fixture (synthetic): an Android level root, its archive listing one record, and that record.
-std::string ValidSet(std::uint64_t level = kLevel, std::uint64_t component = kComponent) {
-  std::string archive(4 + 4 + 16, '\0');
-  PutLe(&archive, 0, 4, 0);  // no dependencies
-  PutLe(&archive, 4, 4, 1);
-  PutLe(&archive, 8, 8, component);
-  PutLe(&archive, 16, 8, kPart);
-  return BuildSet({{{rs::kAndroidTypes.archive, level}, archive},
-                   {{component, kPart}, std::string(300, 'c')},
-                   {{rs::kAndroidTypes.level_root, level}, std::string(64, 'r')}});
-}
 
 void AnAndroidTypedMapSetMountsAndItsRecordsAreServed() {
   ms::ResetForTest();
