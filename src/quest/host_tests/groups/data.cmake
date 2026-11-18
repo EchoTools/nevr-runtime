@@ -50,8 +50,10 @@ nevr_ht_obj(o_cdn_cdn_demand GROUP data NOEXC HOST SRC src/cdn/cdn_demand.cpp)
 # The cargo pin (PLAN-v7 R7): CargoPinOf, which the boot fetch and the mount feed use; it needs the map pin's header.
 nevr_ht_obj(o_core_cargo_session_pin GROUP data NOEXC HOST INCS sdk/include src SRC src/core/cargo_session_pin.cpp)
 nevr_ht_obj(o_core_map_session_pin GROUP data NOEXC HOST INCS sdk/include src SRC src/core/map_session_pin.cpp)
+# The map pin's join hold sizes its wait with MapHoldTimeoutMs (core/map_server_hold.cpp), so every target that links the pin links it too.
+nevr_ht_obj(o_core_map_server_hold GROUP data NOEXC HOST INCS src SRC src/core/map_server_hold.cpp)
 # cdn_run.cpp's ClientBoot calls ResolveManifestPath (cdn_service.cpp), so every target that links cdn_run links the service too.
-set(_cdn_objs o_cdn_device_memory o_cdn_resource_shadow o_cdn_cdn_limits o_cdn_cdn_validate o_cdn_cdn_manifest o_cdn_cdn_plan o_cdn_cdn_script_gate o_cdn_cdn_scripts o_cdn_cdn_store o_cdn_cdn_run o_cdn_cdn_prefetch o_cdn_cdn_demand o_cdn_cdn_boot_fetch o_core_cargo_session_pin o_core_map_session_pin o_cdn_cdn_service o_data_sha256)
+set(_cdn_objs o_cdn_device_memory o_cdn_resource_shadow o_cdn_cdn_limits o_cdn_cdn_validate o_cdn_cdn_manifest o_cdn_cdn_plan o_cdn_cdn_script_gate o_cdn_cdn_scripts o_cdn_cdn_store o_cdn_cdn_run o_cdn_cdn_prefetch o_cdn_cdn_demand o_cdn_cdn_boot_fetch o_core_cargo_session_pin o_core_map_session_pin o_core_map_server_hold o_cdn_cdn_service o_data_sha256)
 nevr_ht_test(device_memory_test GROUP data HOST
   SRC src/quest/tests/device_memory_test.cpp OBJS o_cdn_device_memory)
 nevr_ht_test(cdn_limits_test GROUP data HOST
