@@ -140,7 +140,7 @@ void WriteEvent(const core::PinEvent& e) {
     case core::PinEventKind::kHoldReleased:
     case core::PinEventKind::kHoldDropped:
       // The core only holds a join when the access can skip the level load (CanHoldLoad), which this access does not say (the
-      // KNOWN-WRONG #TBD above), so these are not reached; if one is, it is written with the PC's keys.
+      // KNOWN-WRONG #2762 above), so these are not reached; if one is, it is written with the PC's keys.
       sentinel::LogFields(sentinel::LogLevel::kInfo, "join_hold",
                           {{"event", e.kind == core::PinEventKind::kHoldArmed      ? "armed"
                                      : e.kind == core::PinEventKind::kHoldReleased ? "released"
@@ -165,7 +165,7 @@ void WriteEvent(const core::PinEvent& e) {
   }
 }
 
-// KNOWN-WRONG #TBD (no open issue found; the gh API refused the search, so the issue is to be filed): this access does not override
+// KNOWN-WRONG #2762: this access does not override
 // CanHoldLoad/ReplayLoad, so the core's client join hold never arms on the Quest and a join to a map the device lacks leaves and
 // joins again, as before. The level load to skip is CR15NetGame::LoadMap, libr15.so 0x1360bbc (260 bytes, first bytes
 // ff c3 01 d1 e8 23 00 fd; searched 1041 of 1041 binaries for its "[NETGAME] Loading map" string, hits only echovr.exe and libr15.so);
