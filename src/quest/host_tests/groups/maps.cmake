@@ -50,6 +50,15 @@ nevr_ht_test(map_channel_test GROUP shared NOEXC PTHREAD INCS sdk/include src th
       src/core/script_image_rules.cpp src/core/script_image_rules_elf.cpp src/core/config_alias.cpp
       third_party/monocypher/src/monocypher.c third_party/monocypher/src/monocypher-ed25519.c)
 
+# The Quest's answers to the core's reads of the maps section (quest/cdn/map_config_lookup.h, which map_start.cpp calls) and the start decision
+# StartFromConfig takes from them. Links the core's settings reader as map_channel_test does; map_start.cpp itself (libcurl, sentinel hooks) is not linked.
+nevr_ht_test(map_config_lookup_test GROUP shared NOEXC PTHREAD INCS ${_maps_sent} sdk/include src third_party/monocypher/src
+  SRC src/quest/tests/map_config_lookup_test.cpp src/core/map_channel.cpp src/core/map_request.cpp src/core/map_fetch_queue.cpp src/core/map_session_pin.cpp src/core/map_server_hold.cpp src/core/map_run.cpp src/core/map_local_precedence.cpp src/core/map_manifest.cpp
+      src/core/map_index.cpp src/core/minisign_verify.cpp src/core/map_derive.cpp src/core/map_set_tables.cpp
+      src/cdn/cdn_validate.cpp src/cdn/cdn_limits.cpp src/core/device_memory.cpp src/quest/data/sha256.cpp
+      src/core/script_image_rules.cpp src/core/script_image_rules_elf.cpp src/core/config_alias.cpp
+      third_party/monocypher/src/monocypher.c third_party/monocypher/src/monocypher-ed25519.c)
+
 # The session request pass the Quest runs (core/map_request_serve.h, shared with the PC; ADR 0048 decision 16): a queued group is fetched on demand and then
 # listed, a requested map is fetched alone, and a stopping worker serves nothing. Over the core's request queue and the fake Env.
 nevr_ht_test(map_request_drain_test GROUP shared NOEXC PTHREAD INCS src third_party/monocypher/src OBJS o_map_monocypher
