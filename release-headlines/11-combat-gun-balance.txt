@@ -1,0 +1,1 @@
+Combat weapon damage, the translocator cooldown and arm grabbing now follow the gun patch balance.

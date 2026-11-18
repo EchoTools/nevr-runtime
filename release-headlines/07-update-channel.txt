@@ -1,0 +1,1 @@
+Updates now follow the stable channel unless you set update.channel to beta in config.yaml.

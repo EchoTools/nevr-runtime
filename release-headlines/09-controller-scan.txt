@@ -1,0 +1,1 @@
+On PC the game now scans for game controllers only in desktop mode, not in headset mode.

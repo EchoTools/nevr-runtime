@@ -1,1 +1,0 @@
-Quest now has an arena-only APK, with no combat, beside the combat one.

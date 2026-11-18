@@ -1,1 +1,0 @@
-Ping to a game server now shows its real distance.

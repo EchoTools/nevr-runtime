@@ -1,1 +1,0 @@
-On the Quest combat build, arena lobbies keep the game's own walls and tac mods.

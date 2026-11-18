@@ -1,0 +1,1 @@
+On PC, starting the game with -noaudio now also keeps the microphone off.

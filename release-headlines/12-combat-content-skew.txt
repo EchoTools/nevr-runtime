@@ -1,0 +1,1 @@
+On PC, a combat match whose server has different EchoCombat content now sends you back with a message saying why.

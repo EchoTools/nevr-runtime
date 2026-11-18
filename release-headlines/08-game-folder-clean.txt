@@ -1,0 +1,1 @@
+On PC the game's settings, logs and crash files now go to the nEVR folder instead of the game folder.
