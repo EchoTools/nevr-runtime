@@ -14,6 +14,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace nevr_maps {
 
@@ -48,7 +50,22 @@ std::uint64_t MapHoldTimeoutMs(const HoldPlan& plan);
 // `guilds: any`) is never an input, so no config key adds a group to the fetch. "" when the allocation names none.
 std::string GroupToFetch(const std::string& allocated);
 
-// The server's hold, for one session's group. Holding = joins wait. It is armed only for a group whose maps are not mounted.
+// What a session create does for its group (ADR 0048 decision 17, the check at every session create). A group this process never
+// mounted is fetched (kFetch). A group it already mounted is checked again (kRecheck): the channel may have published a newer
+// version since, and a server never hosts an old one, so the joins wait for the manifest check too. No group: nothing (kNone).
+enum class SessionCheck { kNone, kFetch, kRecheck };
+inline SessionCheck SessionCheckFor(const std::string& group, bool mountedInProcess) {
+  if (group.empty()) return SessionCheck::kNone;
+  return mountedInProcess ? SessionCheck::kRecheck : SessionCheck::kFetch;
+}
+
+// The check of a group this process mounted could not be made (its fetch failed): the session goes ahead on what is mounted, so an
+// unreachable channel never keeps a running server from hosting. A group never mounted has nothing to go ahead on: its hold
+// runs to its timeout (decision 17).
+inline bool FailedCheckGoesAhead(bool mountedInProcess) { return mountedInProcess; }
+
+// The server's hold, for one session's group. Holding = joins wait. It is armed at every session create that names a group: a
+// group mounted in this process is checked again, so an update the channel published since is never hidden behind the old version.
 class ServerMapHold {
  public:
   // Arms the hold for `group` at `nowMs`. False, and nothing held, for an empty group.
@@ -60,9 +77,16 @@ class ServerMapHold {
   // A progress note from the fetch of `group`. Ignored unless `group` is the held group.
   void Note(const std::string& group, const HoldPlan& plan);
 
-  // The group's maps mounted: lifts the hold. kMounted once when it lifted the hold, kNone otherwise.
+  // The group's maps mounted: lifts the hold. kMounted once when it lifted the hold, kNone otherwise. A hold that StandsForUpdate is
+  // never lifted here (nor by a failed check, which calls this too): the update's hold lasts until Clear.
   enum class Step { kNone, kMounted, kTimeout };
   Step Mounted(const std::string& group);
+
+  // The check found a new version of a map this process holds mounted at the old one (UpdatedWhileMounted). A mounted map is
+  // never replaced in the process, so the hold stands with no deadline: no join reaches the old version. It ends when the session
+  // does (Clear). True when `group` is the held group.
+  bool Updated(const std::string& group);
+  bool StandsForUpdate() const { return updated_; }
 
   // At the deadline (armed time plus the current timeout) lifts the hold: kTimeout once, with the timeout and the plan that
   // expired it in TimeoutMs() and Plan() until the next Poll. kNone while the hold stands or when nothing is held.
@@ -80,7 +104,12 @@ class ServerMapHold {
   std::uint64_t armedMs_ = 0;
   HoldPlan plan_;
   std::uint64_t timeoutMs_ = 0;
+  bool updated_ = false;
 };
+
+// The maps of a mount's `not_mounted` rows (core/map_run.h MountReport) that this process holds mounted at a version the channel
+// has moved past (mounted_other_version). The server cannot host the new version until it restarts, and never hosts the old one.
+std::vector<std::string> UpdatedWhileMounted(const std::vector<std::pair<std::string, std::string>>& not_mounted);
 
 // How a held join is released. A join waits for the maps hold and for the levels hold (network.join_hold_ms, its own settle
 // and timeout). It is released when neither holds it: the maps hold is lifted, and the levels hold is off, settled or timed out.
@@ -104,6 +133,16 @@ std::string MapHoldTimeoutLine(const std::string& group, const HoldPlan& plan, s
 
 // The Info line when a hold is armed: the group and the timeout it starts with.
 std::string MapHoldArmedLine(const std::string& group, std::uint64_t timeoutMs);
+
+// The Info line at a session create whose group is already mounted: the check that follows.
+std::string MapCheckLine(const std::string& group, const std::string& session);
+
+// The Warning when the check finds a new version of mounted maps: the group, the maps and what the server does (it hosts neither
+// version: the joins wait until the server is restarted).
+std::string MapUpdateLine(const std::string& group, const std::vector<std::string>& ids);
+
+// The Warning when the check of a mounted group could not be made: the session goes ahead on what is mounted.
+std::string MapCheckFailedLine(const std::string& group);
 
 // The Info line when a mount lifts the hold: the group and how long the joins waited.
 std::string MapHoldMountedLine(const std::string& group, std::uint64_t waitedMs);

@@ -161,6 +161,13 @@ for. That worker registers `SetRequestFetch`, so `OnSessionCreate` (`src/runtime
 `src/runtime/server/gameserver_callbacks.cpp`) arms the maps hold (`src/core/map_server_hold.h`, `src/runtime/server/join_hold.cpp`).
 The signed-only rule of decision 18 is `ServerMountsScripts`, which the mount calls (`src/core/map_run.cpp`).
 
+Every session create checks its group again, also when its maps are mounted (`SessionCheckFor`, `src/core/map_server_hold.h`: a
+mounted group is `kRecheck`, and the joins wait for the manifest check). A new version of a mounted map cannot be hosted in the
+process (a mounted set is never replaced: `mounted_other_version`), so the hold stands with no deadline until the session ends, and a
+`map update` Warning names the maps: the server hosts neither version. A failed check of a mounted group lifts the hold with a
+Warning (`FailedCheckGoesAhead`): the session goes ahead on what is mounted. The server does not exit on an update, and nothing
+restarts it by itself (KNOWN-WRONG #TBD).
+
 ## Consequences
 
 - With no `maps.base_url`, nevr starts no thread, makes no directory, installs no hook and writes one Info record,

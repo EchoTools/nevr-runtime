@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <limits>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "core/map_server_hold.h"
 #include "quest/tests/test_check.h"
@@ -126,6 +128,71 @@ void TestHoldLiftedByMountOrTimeout() {
   QCHECK(back.Holding());
 }
 
+// The check at every session create: a group this process mounted is checked again, never skipped; a group it never mounted is
+// fetched; no group is nothing. A "skip what is mounted" mutant answers kNone for the mounted group.
+void TestEverySessionCreateChecksItsGroup() {
+  using nevr_maps::SessionCheck;
+  QCHECK(nevr_maps::SessionCheckFor("grp", false) == SessionCheck::kFetch);
+  QCHECK(nevr_maps::SessionCheckFor("grp", true) == SessionCheck::kRecheck);
+  QCHECK(nevr_maps::SessionCheckFor("", true) == SessionCheck::kNone);
+  QCHECK(nevr_maps::SessionCheckFor("", false) == SessionCheck::kNone);
+  // A check that cannot be made goes ahead only for a group already mounted.
+  QCHECK(nevr_maps::FailedCheckGoesAhead(true));
+  QCHECK(!nevr_maps::FailedCheckGoesAhead(false));
+}
+
+// A new version of a mounted map cannot be hosted in the process and the old one is never hosted: the hold stands past every
+// deadline, for that group only, until the session ends (Clear). Only the mounted_other_version rows name the maps.
+void TestAnUpdateOfAMountedMapHoldsEveryJoinUntilTheSessionEnds() {
+  ServerMapHold hold;
+  // K5 review finding 1: after an update, neither a mount nor a failed check (both call Mounted) lifts the hold.
+  QCHECK(hold.Arm("grp", 0));
+  QCHECK(hold.Updated("grp"));
+  QCHECK(hold.Mounted("grp") == ServerMapHold::Step::kNone);  // a second fetch of the group mounts the old version: still held
+  QCHECK(hold.Holding());
+  QCHECK(hold.StandsForUpdate());
+  QCHECK(hold.Mounted("grp") == ServerMapHold::Step::kNone);  // and again, as after a failed check
+  QCHECK(hold.Holding());
+  hold.Clear();
+  QCHECK(!hold.Holding());
+  QCHECK(!hold.StandsForUpdate());
+  QCHECK(hold.Arm("grp", 0));  // the next session: a plain hold, lifted by its mount
+  QCHECK(hold.Mounted("grp") == ServerMapHold::Step::kMounted);
+  QCHECK(!hold.Holding());
+  QCHECK(hold.Arm("grp", 1000));
+  QCHECK(!hold.Updated("other"));  // another group's check does not change this hold
+  QCHECK(!hold.StandsForUpdate());
+  QCHECK(hold.Updated("grp"));
+  QCHECK(hold.StandsForUpdate());
+  QCHECK(hold.Poll(1000 + kCeiling * 10) == ServerMapHold::Step::kNone);  // no deadline
+  QCHECK(hold.Holding());
+  hold.Clear();  // the session ended
+  QCHECK(!hold.Holding());
+  QCHECK(!hold.StandsForUpdate());
+  QCHECK(hold.Arm("grp", 0));  // the next session's hold has its deadline again
+  QCHECK(hold.Poll(kCeiling) == ServerMapHold::Step::kTimeout);
+  QCHECK(!ServerMapHold().Updated("grp"));  // nothing held: nothing to hold for an update
+
+  const std::vector<std::pair<std::string, std::string>> rows = {
+      {"arena_c", "mounted_other_version"}, {"beta", "not_cached"}, {"gamma", "stale"}, {"delta", "mounted_other_version"}};
+  const std::vector<std::string> updated = nevr_maps::UpdatedWhileMounted(rows);
+  QCHECK(updated.size() == 2 && updated[0] == "arena_c" && updated[1] == "delta");
+  QCHECK(nevr_maps::UpdatedWhileMounted({{"beta", "not_cached"}}).empty());
+  QCHECK(nevr_maps::UpdatedWhileMounted({}).empty());
+}
+
+// The lines of the check: the Info names the group and session, the update Warning the maps and what the server does, the failure
+// Warning the consequence.
+void TestCheckLines() {
+  const std::string check = nevr_maps::MapCheckLine("grp", "sess");
+  QCHECK(check.find("[NEVR.MAPS] map check group=grp session=sess (") == 0);
+  QCHECK(nevr_maps::MapCheckLine("grp", "").find("session=none") != std::string::npos);
+  const std::string update = nevr_maps::MapUpdateLine("grp", {"arena_c", "delta"});
+  QCHECK(update.find("[NEVR.MAPS] map update group=grp ids=arena_c,delta reason=mounted_other_version") == 0);
+  QCHECK(update.find("the joins wait until the server is restarted") != std::string::npos);
+  QCHECK(nevr_maps::MapCheckFailedLine("grp").find("[NEVR.MAPS] map check failed group=grp (") == 0);
+}
+
 // A fetch that learns its size later moves the deadline: unknown at the ceiling, then the computed time, never past the ceiling.
 void TestDeadlineFollowsThePlanWithinTheCeiling() {
   ServerMapHold hold;
@@ -178,6 +245,9 @@ int main() {
   TestOnlyTheAllocatedGroupIsFetched();
   TestHoldLiftedByMountOrTimeout();
   TestDeadlineFollowsThePlanWithinTheCeiling();
+  TestEverySessionCreateChecksItsGroup();
+  TestAnUpdateOfAMountedMapHoldsEveryJoinUntilTheSessionEnds();
+  TestCheckLines();
   TestComposeJoinHold();
   TestSignedOnlyRule();
   TestLines();

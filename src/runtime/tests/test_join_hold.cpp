@@ -365,4 +365,32 @@ TEST(JoinHoldMaps, AJoinWaitsForBothHolds) {
   EXPECT_EQ(due.reason, ReleaseReason::kTimeout);
 }
 
+// A mounted map updated on the channel (ADR 0048 decision 17): the join waits past the maps hold's ceiling, never reaching the
+// old version, and the session's end drops the hold and the join with it.
+TEST(JoinHoldMaps, AnUpdateOfAMountedMapHoldsTheJoinPastTheCeilingUntilTheSessionEnds) {
+  Gate g;
+  g.Arm(0);
+  g.Maps().Arm("grp", 0);
+  EXPECT_TRUE(g.Admit(Accept(0, 4)));
+  EXPECT_TRUE(g.Maps().Updated("grp"));
+  EXPECT_EQ(g.Maps().Poll(nevr_maps::kMapHoldCeilingMs * 10), nevr_maps::ServerMapHold::Step::kNone);
+  EXPECT_EQ(g.TakeDue(nevr_maps::kMapHoldCeilingMs * 10).accepts.size(), 0u);
+  EXPECT_EQ(g.Clear(), 1u);
+  EXPECT_FALSE(g.Maps().Holding());
+}
+
+// K5 review finding 1: once an update is recorded, the mount that a second fetch of the group reports (and the failed check,
+// which takes the same path) does not release the join; only the session's end does.
+TEST(JoinHoldMaps, AMountOrFailedCheckDoesNotLiftAnUpdateHold) {
+  Gate g;
+  g.Arm(0);
+  g.Maps().Arm("grp", 0);
+  EXPECT_TRUE(g.Admit(Accept(0, 5)));
+  EXPECT_TRUE(g.Maps().Updated("grp"));
+  EXPECT_EQ(g.Maps().Mounted("grp"), nevr_maps::ServerMapHold::Step::kNone);
+  EXPECT_EQ(g.TakeDue(nevr_maps::kMapHoldCeilingMs * 10).accepts.size(), 0u);
+  EXPECT_TRUE(g.Maps().Holding());
+  EXPECT_EQ(g.Clear(), 1u);
+}
+
 }  // namespace

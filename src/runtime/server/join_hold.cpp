@@ -281,17 +281,14 @@ MapsArmResult MapsArm(const std::string& group) {
     g_mapsHolding.store(false, std::memory_order_release);
     return MapsArmResult::kNoGroup;
   }
-  if (g_mountedGroups.count(group) != 0) {
-    maps.Clear();
-    g_mapsHolding.store(false, std::memory_order_release);
-    return MapsArmResult::kMounted;
-  }
+  const nevr_maps::SessionCheck check = nevr_maps::SessionCheckFor(group, g_mountedGroups.count(group) != 0);
+  const MapsArmResult armed = check == nevr_maps::SessionCheck::kRecheck ? MapsArmResult::kRecheck : MapsArmResult::kArmed;
   // A hold already standing for this group keeps its deadline: a session both frames name arms it once.
-  if (maps.Holding() && maps.Group() == group) return MapsArmResult::kArmed;
+  if (maps.Holding() && maps.Group() == group) return armed;
   maps.Arm(group, NowMs());
   g_mapsHolding.store(true, std::memory_order_release);
   Log(EchoVR::LogLevel::Info, "%s", nevr_maps::MapHoldArmedLine(group, nevr_maps::kMapHoldCeilingMs).c_str());
-  return MapsArmResult::kArmed;
+  return armed;
 }
 
 void MapsNoteProgress(const std::string& group, const nevr_maps::HoldPlan& plan) {
@@ -309,6 +306,26 @@ void MapsNoteMounted(const std::string& group) {
   g_mapsHolding.store(false, std::memory_order_release);
   Log(EchoVR::LogLevel::Info, "%s",
       nevr_maps::MapHoldMountedLine(group, now >= armed ? now - armed : 0).c_str());
+}
+
+void MapsNoteUpdated(const std::string& group, const std::vector<std::string>& ids) {
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_mountedGroups.insert(group);
+    g_gate.Maps().Updated(group);
+  }
+  Log(EchoVR::LogLevel::Warning, "%s", nevr_maps::MapUpdateLine(group, ids).c_str());
+}
+
+void MapsNoteCheckFailed(const std::string& group) {
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!nevr_maps::FailedCheckGoesAhead(g_mountedGroups.count(group) != 0)) return;
+    if (g_gate.Maps().Mounted(group) == nevr_maps::ServerMapHold::Step::kMounted) {
+      g_mapsHolding.store(false, std::memory_order_release);
+    }
+  }
+  Log(EchoVR::LogLevel::Warning, "%s", nevr_maps::MapCheckFailedLine(group).c_str());
 }
 
 }  // namespace nevr_join_hold

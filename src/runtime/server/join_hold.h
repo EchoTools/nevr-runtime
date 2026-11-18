@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "core/map_server_hold.h"
 
@@ -42,15 +43,15 @@ void OnSessionEnd(const char* cause, const char* sessionId);
 // one more reason a join waits for, beside the levels hold above, and it does not depend on network.join_hold_ms: a join waits
 // for both (nevr_maps::ComposeJoinHold). The state sits behind the same mutex as the levels gate.
 
-enum class MapsArmResult { kArmed, kMounted, kNoGroup };
+enum class MapsArmResult { kArmed, kRecheck, kNoGroup };
 
 /// The channel is set (a server with a fetch channel): the gate is in use, with no game hook installed for the maps hold. A
 /// client does nothing here.
 void MapsEnable(bool isServer);
 
-/// A session's group: arms the maps hold for it when the group's maps are not mounted in this process (kArmed, and an Info line
-/// with the timeout it starts with); kMounted when they are (the hold is dropped); kNoGroup for "" (the hold is dropped). Any
-/// earlier maps hold is replaced. Game thread.
+/// A session's group: arms the maps hold for it (an Info line with the timeout it starts with): kArmed when the group's maps are
+/// not mounted in this process, kRecheck when they are (the fetch checks the group for an update before any join; nevr_maps::
+/// SessionCheckFor); kNoGroup for "" (the hold is dropped). Any earlier maps hold is replaced. Game thread.
 MapsArmResult MapsArm(const std::string& group);
 
 /// A fetch's plan or progress for `group`, from the channel's worker. Ignored unless `group` is the held group.
@@ -59,5 +60,13 @@ void MapsNoteProgress(const std::string& group, const nevr_maps::HoldPlan& plan)
 /// The group's maps are mounted in this process: remembered (a later session of the group does not hold for it), and a held
 /// group's hold is lifted with an Info line. Any thread.
 void MapsNoteMounted(const std::string& group);
+
+/// The check of a mounted group found a new version of `ids` (core/map_server_hold.h UpdatedWhileMounted): the hold stands with no
+/// deadline until the session ends, and a Warning says why. Any thread.
+void MapsNoteUpdated(const std::string& group, const std::vector<std::string>& ids);
+
+/// The fetch of `group` failed. A mounted group's check lifts the hold with a Warning (the session goes ahead on what is
+/// mounted); a group never mounted keeps its hold to the timeout. Any thread.
+void MapsNoteCheckFailed(const std::string& group);
 
 }  // namespace nevr_join_hold

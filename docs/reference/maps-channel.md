@@ -156,8 +156,13 @@ leave: a session that states no pin (`map_unpinned`), and a client with a local 
   instead of the background pass, and that worker fetches only the group the server is allocated for.
 - The session create arms the worker. `nevr_map_hold::OnSessionCreate` (called from `src/runtime/server/gameserver_callbacks.cpp`)
   takes the allocated group, arms the maps hold (`src/core/map_server_hold.h`, `src/runtime/server/map_hold.cpp`), and asks the
-  worker for the group through `RequestServerGroup`, which `SetRequestFetch` registers. A session with no group, or with a
-  group that is already mounted, logs `map hold off` and arms nothing.
+  worker for the group through `RequestServerGroup`, which `SetRequestFetch` registers. A session with no group logs `map hold
+  off` and arms nothing. A group already mounted in this process is checked again at every session create (`map check`): the
+  joins wait for its manifest check, so a version the channel published since is never hidden behind the old one.
+- A map found at a new version while its old one is mounted cannot be mounted in the process (a mounted map is never replaced):
+  a Warning `map update` names the maps, and the hold stands with no deadline until the session ends, so no join reaches the
+  old version. The server hosts the new version after it is restarted. A failed check of a mounted group (`map check failed`)
+  lifts the hold, and the session goes ahead on what is mounted. KNOWN-WRONG #TBD: nothing restarts the server by itself.
 - The hold lifts when the group mounts (`map hold released`) or times out (`map hold timeout`; the session then starts on
   stock content). It is separate from the levels hold (`network.join_hold_ms`, `docs/reference/join-hold.md`).
 - Without `maps.base_url` no request function is set, so no hold is armed.
@@ -199,6 +204,7 @@ All records carry the tag `[NEVR.MAPS]`. The full table, with each event's field
 | `map_pin status=off reason=<token>` | The session pin did not install; the token names the check that failed. |
 | `session group <outcome> group=<id>` | The lobby session's group, and whether a request was made. |
 | `map hold armed` / `map hold released` / `map hold timeout` | A server's maps hold: armed, lifted by the mount, or timed out. |
+| `map check group=<id>` / `map update group=<id> ids=<ids>` / `map check failed group=<id>` | A server's session create checks a mounted group: the check, a new version of mounted maps (joins wait until restart), a check that could not be made. |
 | `signed_only group=<id> scripts_refused=<n>` | Scripts refused under `-require-signed-plugins`. |
 
 Map file contents are never logged. A script's bytes are never logged. A path or an owner is a quoted field.

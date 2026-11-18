@@ -42,7 +42,9 @@ depend on `network.join_hold_ms`: a server with that key at 0 still holds. The h
 download rate, between a 5 s floor and a 120 s ceiling, and no config key sets it. The mount lifts it (an Info `map hold released`); the
 deadline lifts it with one Warning `map hold timeout` that names the group, the set's size, the bytes fetched, the timeout and the
 consequence: the session starts on stock content. A join waits for both holds: `nevr_maps::ComposeJoinHold` releases it when the maps hold
-is lifted and the levels hold is off, settled or timed out. Only the allocated group is fetched.
+is lifted and the levels hold is off, settled or timed out. Only the allocated group is fetched. A group already mounted is checked
+again at each session create (`map check`); when the check finds a new version of a mounted map, the hold has no deadline and
+stands until the session ends (a Warning `map update`), because the server hosts neither version.
 
 Both prologues are checked before either detour goes in. A mismatch on either logs `join hold not armed ... reason=prologue_mismatch`
 (Warning, expected and actual bytes), attaches nothing and leaves the game untouched. If a detour then fails to attach after its prologue
