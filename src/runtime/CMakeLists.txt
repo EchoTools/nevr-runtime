@@ -2090,6 +2090,21 @@ if(BUILD_TESTING)
     target_link_libraries(test_game_folder_redirect PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     gtest_discover_tests(test_game_folder_redirect DISCOVERY_MODE PRE_TEST)
 
+    # platform_compat's CreateDirectory hooks (the Wine _temp fix and the game folder redirect's folder creation), installed for real
+    # (MinHook on kernelbase.dll) in the test process, with the nEVR root of the test's own under the run root.
+    add_executable(test_platform_compat_createdir tests/test_platform_compat_createdir.cpp
+                   ${CMAKE_SOURCE_DIR}/src/modules/platform-compat/src/platform_compat.cpp
+                   ${CMAKE_SOURCE_DIR}/src/modules/platform-compat/src/game_folder_redirect.cpp hook/hook_guard.cpp)
+    # platform_compat.cpp includes <windows.h> first and relies on the module's precompiled header (src/core/pch.h), as the module does.
+    set_source_files_properties(tests/test_platform_compat_createdir.cpp
+                                ${CMAKE_SOURCE_DIR}/src/modules/platform-compat/src/game_folder_redirect.cpp hook/hook_guard.cpp
+                                PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_precompile_headers(test_platform_compat_createdir PRIVATE "${CMAKE_SOURCE_DIR}/src/core/pch.h")
+    target_compile_definitions(test_platform_compat_createdir PRIVATE NEVR_USE_MINHOOK NEVR_MODULE_EXPORTS)
+    target_include_directories(test_platform_compat_createdir PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_platform_compat_createdir PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core secur32 ole32)
+    gtest_discover_tests(test_platform_compat_createdir DISCOVERY_MODE PRE_TEST)
+
     # #906, docs/adr/0017: the client half of the invite codes (patch/invite_wizard.h): header only, pure.
     # It links the generated symbol cache: the map cards' level names are the cache's, and the test reads them from it.
     add_executable(test_invite_wizard tests/test_invite_wizard.cpp log/symcache_data.cpp)
