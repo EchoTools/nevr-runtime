@@ -1,7 +1,7 @@
 # Custom maps channel: what it does, how to configure it, what to look for
 
 The custom-map channel delivers a lobby group's maps: the client or the dedicated server fetches a signed manifest for its
-group, verifies it, and mounts the maps at the next launch. Maps only add resources; no game bytes come from the CDN. The
+group, verifies it, and mounts the maps: the cached ones at launch, and a map fetched during a session in the same run. Maps only add resources; no game bytes come from the CDN. The
 decisions are in `docs/adr/0048-custom-maps-channel.md`. This page states what the tree does today. Where the code says a
 part is not wired yet, the place is marked `KNOWN-WRONG #TBD`; an issue number is filed later.
 
@@ -86,11 +86,27 @@ Downloaded maps live in `<nEVR root>\cache\maps\` (`MapsCacheDir`, `src/core/nev
 - A cached copy whose version no verified manifest lists is refused: the cache is not mounted in its place. The copy is
   recorded as `map_mounted refused=stale` (Warning), the listed version is fetched when a session asks for it, and the
   session pin's decision for a stale copy is a download notice (`src/core/map_session_pin.cpp`).
-- `ChannelConfig::mount_on_demand` (`src/core/map_run.h`) defaults to `false`. The mount grants every cached map its
-  groups list. With the flag on, the mount grants only the ids the caller names, and an unasked map is recorded as
-  `map_skipped reason=not_asked` (Info). No production caller sets the flag yet. KNOWN-WRONG #TBD (K3: the mid-run mount
-  that would grant a fetched map). No config key sets it (ADR 0048 decision 16).
-- The request entry's download notice reads "plays after your next launch": the map mounts at the next launch, not mid-run.
+- `ChannelConfig::mount_on_demand` (`src/core/map_run.h`) defaults to `false`: the boot mount grants every cached map its
+  groups list. A map fetched during a session mounts in the same run: the fetch worker's request pass calls
+  `Channel::MountGroups` with `MountScope`, which grants only the ids the request named (`mount_on_demand` is the scope's
+  switch; an unasked map is recorded as `map_skipped reason=not_asked`, Info), registers each granted map's set, and calls
+  `nevr_resource_sets::MountLaterSets` (`src/runtime/patch/resource_sets.h`). The game's own thread then runs the later mount
+  on its next frame (`OnFrame`), once the game has asked its first resource; nothing waits for it, and a frame with no
+  later mount pending costs one atomic load. No config key sets `mount_on_demand` (ADR 0048 decision 16).
+- A later mount builds ONE new shadow of every mounted set, earlier and new, on fresh chunk indices (`Registry::MountLater`,
+  `src/core/resource_set_registry.h`), and the resolver is given it in place of the earlier one, so a request is still
+  answered by one lookup in one shadow. A mounted set is never replaced or withdrawn. Each later mount keeps the shadow it
+  replaces for the process (a request in flight may still read from it), so the process holds one retired shadow for each
+  later mount; the growth is bounded by the number of maps a run fetches. A map's set registered after the first mount is
+  held until the next later mount; a plugin's set registered after the first mount is still refused `too_late`, and so is
+  any set once the run's registration was abandoned (the resolver hook was never installed).
+- The mount observer is told of the run's first mount through `Notify` and of each later mount through `NotifyLater`, with
+  that mount's own report (`MountReport::earlier_sets` says how many sets came before). The map channel's observer grants the
+  maps that mount took and, on a dedicated server, releases the join hold for the groups that mount covered: the hold is
+  released from the observer, never from the worker that fetched.
+- The request entry's download notice reads "join again when it is ready": the map mounts during this run.
+- The session pin (`SetChannelView`, `SetMountedPins`) has no production caller on the PC, so a client does not yet
+  decide a version skew from the mounted pins. KNOWN-WRONG #TBD (K6).
 
 ### Quest client
 
@@ -103,6 +119,11 @@ Downloaded maps live in `<nEVR root>\cache\maps\` (`MapsCacheDir`, `src/core/nev
 - The Quest's pass is the core's on-demand `FetchPass`, so it refreshes held maps and downloads only what its groups ask
   for, as the PC does. It has no request entry: a session's group is recorded for the pass, and a map the session pin
   lacks is not requested. KNOWN-WRONG #TBD (K6: the Quest request entry).
+- A map the pass stored mounts in the same run, on the pass's own thread: `Start` calls `Channel::MountGroups` for the
+  groups that stored a map, then `MountLaterNow` (`src/quest/cdn/map_service.cpp`), which calls `map_sets::MountLater`
+  (`src/quest/sentinel/map_sets.h`) and hands the resource request hook (`PublishMapSets`) the one new shadow of every
+  mounted set. The same registry rules as the PC apply: no map is withdrawn once mounted, and each later mount keeps the
+  shadow it replaced for the process. The Quest records the later mount as `map_set_mount` with `later=true`.
 
 ### Local copies (ADR 0048 decision 8)
 
@@ -187,8 +208,6 @@ Map file contents are never logged. A script's bytes are never logged. A path or
 Every `KNOWN-WRONG #TBD` on this page marks a part the code states is not wired yet:
 
 - `StopFetch` has no caller, so the PC shutdown path does not stop the background fetch.
-- `mount_on_demand` is read only by the core and no production caller sets it, so a fetched map is not mounted mid-run
-  (K3).
 - The Quest has no request entry (K6).
 - `RegistrationEntries` has no caller, so a server does not report its pin at registration.
 - The Quest's `InstallTick` has no caller, so the Quest does not run the pin's tick.

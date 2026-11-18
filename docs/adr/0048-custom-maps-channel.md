@@ -18,7 +18,7 @@ decision 10. The log tag is `[NEVR.MAPS]`.
 ## Context
 
 A custom map today is a level file that the player installs by hand and EchoMapLoader mounts. The channel delivers a lobby group's
-maps instead: nevr fetches them in the background, verifies them once, and mounts them at the next launch, beside every pack and
+maps instead: nevr fetches them in the background, verifies them once, and mounts them, beside every pack and
 plugin set that works today. The constraints: nothing that works now may change (with no `maps.base_url` nevr behaves exactly as
 before), maps only add resources, and no game bytes travel on the CDN.
 
@@ -111,7 +111,10 @@ session they are in is the lobby group id.
 16. **Clients and servers follow their groups; no local config chooses maps.** There is no `maps.subscribed` and no
     `maps.server_allow`: no key chooses which maps a player or a host has, because a client and a server must never disagree
     because of local config. A client asks for its session's group when a lobby session succeeds (`map_fetch_queue.h`); the
-    fetch runs in the background and the maps mount at the next launch (ADR 0045 decision 7). Until #2356, the groups a client
+    fetch runs in the background and the maps mount in the same run (ADR 0045 decision 7 had them mount at the next launch; the
+    later mount changes that for the maps a session fetched: the registry builds one new shadow of every mounted set, the
+    resolver is given it in place of the earlier one, and the player is told to join the session again when the map is ready).
+    A map is never withdrawn once mounted. Until #2356, the groups a client
     fetches are the ones it last played in, kept in the cache index, latest first, as many as the device's storage share holds
     (ADR 0045 decision 8). What would change it: #2356, where the service names each client's manifest.
 17. **A server takes its group from its session and holds joins for it.** A dedicated server learns its group from the session
