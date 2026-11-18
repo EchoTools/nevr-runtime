@@ -21,6 +21,9 @@ if(NEVR_QUEST_OBB_EXTRACT)
   nevr_ht_test(fat16_test GROUP obb PTHREAD ENV ${_obb_env} LIBS nevr_quest_obb SRC src/quest/tests/fat16_test.cpp)
   nevr_ht_test(stock_pins_test GROUP obb PTHREAD ENV ${_obb_env} LIBS nevr_quest_obb SRC src/quest/tests/stock_pins_test.cpp)
   nevr_ht_test(stock_data_flow_test GROUP obb PTHREAD ENV ${_obb_env} LIBS nevr_quest_obb SRC src/quest/tests/stock_data_flow_test.cpp)
+  # The store build's structured log (src/quest/obb/build_log.cpp): the record header, the levels, the merged fields, the UTC timestamp and the
+  # stdout sink.
+  nevr_ht_test(build_log_test GROUP obb PTHREAD ENV ${_obb_env} LIBS nevr_quest_obb SRC src/quest/tests/build_log_test.cpp)
 
   # ── obb-pinned ────────────────────────────────────────────────────────────────────────────────────────────────────────
   # The extractor on the real store OBB. The recipe runs it by name with the OBB, the pin file and a scratch directory, so it is
