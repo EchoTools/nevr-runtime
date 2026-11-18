@@ -10,6 +10,12 @@
 
 namespace nevr_telemetry {
 
+// The game packs a player slot into the low 5 bits of a scorer or assist word; an assist word whose slot bits are all ones names no one.
+inline constexpr std::uint32_t kSlotMask = 0x1F;
+inline constexpr std::uint32_t kNoAssistSlot = 0x1F;
+// The player slots of a match (TelemetrySnapshot::playerInfo).
+inline constexpr std::uint16_t kPlayerSlots = 16;
+
 inline void DetectEvents(const TelemetrySnapshot& curr, const TelemetrySnapshot& prev, telemetry::v2::EchoArenaFrame* frame) {
   // Detect game status change
   int32_t currStatus = static_cast<int32_t>(GameStatusFromSymbol(curr.gameStatusHash));
@@ -45,14 +51,14 @@ inline void DetectEvents(const TelemetrySnapshot& curr, const TelemetrySnapshot&
     gs->set_point_amount(curr.lastScore.pointAmount);
     gs->set_disc_speed(curr.lastScore.discSpeed);
     gs->set_distance_thrown(curr.lastScore.distanceThrown);
-    gs->set_scorer_slot(curr.lastScore.scorerPacked & 0x1F);
-    if ((curr.lastScore.assistPacked & 0x1F) != 0x1F) {
-      gs->set_assist_slot(curr.lastScore.assistPacked & 0x1F);
+    gs->set_scorer_slot(curr.lastScore.scorerPacked & kSlotMask);
+    if ((curr.lastScore.assistPacked & kSlotMask) != kNoAssistSlot) {
+      gs->set_assist_slot(curr.lastScore.assistPacked & kSlotMask);
     }
   }
 
   // Detect player join/leave and stat changes
-  for (uint16_t i = 0; i < 16; i++) {
+  for (uint16_t i = 0; i < kPlayerSlots; i++) {
     bool currPresent = (i < curr.playerCount && curr.playerInfo[i].accountId != 0);
     bool prevPresent = (i < prev.playerCount && prev.playerInfo[i].accountId != 0);
 

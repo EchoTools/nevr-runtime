@@ -18,6 +18,7 @@ using nevr_update::ReadResult;
 constexpr const char* kRunningSha = "2222222222222222222222222222222222222222222222222222222222222222";
 constexpr const char* kOtherSha = "1111111111111111111111111111111111111111111111111111111111111111";
 constexpr std::uint64_t kFirstTry = 1;
+constexpr int kRecordsDecided = 3;  // the three parsed records of ARecordThatParses...
 constexpr std::uint64_t kLastTry = nevr_update::kBootAttemptsToRollBack;
 
 std::string Pending(const char* to_sha, std::uint64_t attempts) {
@@ -76,7 +77,7 @@ TEST(CdnStartTrial, ARecordThatParsesIsTheTrialOnlyOnItsLastTryForThisRuntime) {
   EXPECT_EQ(d.cause, nullptr) << "a decision from the record carries no cause";
   d = DecideLastUpdateTrial(ReadResult::kOk, Pending(kOtherSha, kLastTry), std::ref(h));
   EXPECT_FALSE(d.trial) << "another release's record is not this runtime's trial";
-  EXPECT_EQ(h.asked, 3);
+  EXPECT_EQ(h.asked, kRecordsDecided);
 }
 
 TEST(CdnStartTrial, ARuntimeThatCannotBeHashedIsTheTrialWithItsCause) {

@@ -37,6 +37,8 @@ namespace pm = nevr_peer_message;
 
 namespace {
 
+std::string P(std::uint64_t v) { return std::to_string(v); }
+
 constexpr pm::Targets kT = pm::kPcTargets;
 constexpr std::uint64_t kPollUs = 250000;          // the half's own step (peer_message.cpp kPollUs)
 constexpr std::uint64_t kRetryUs = 5000000;        // a failed listen is tried again after this
@@ -57,6 +59,13 @@ constexpr std::uint32_t kRefusalBound = pm::kRefusalLinesPerWindow;
 constexpr std::uint32_t kListenWarnEvery = 12;  // peer_message.cpp: the first failure and every 12th after it
 constexpr std::uint64_t kSeq = 42;
 constexpr std::size_t kMachineCodeMax = 64;
+constexpr std::size_t kSendsPerGreeting = 2;  // a greeted peer gets capabilities and a ping
+constexpr std::size_t kTwoGreetings = 2 * kSendsPerGreeting;
+constexpr std::uint64_t kHalfStepUs = kPollUs / 2;
+constexpr std::uint64_t kTwoStepsUs = 2 * kPollUs;
+constexpr int kListenWarnings = 2;       // the first failure and the 13th attempt
+constexpr std::uint32_t kPastRefusalBound = 3;
+constexpr std::uint32_t kPastAcceptBound = 2;
 constexpr std::uint64_t kPeerSelf = 0xFFFFFFFFFFFFFFFCULL;  // the game's "this machine is the authority" answer (peer_message.cpp)
 
 struct Send {
@@ -220,23 +229,23 @@ TEST_F(PeerMessage, NothingHappensWithoutANetGameBroadcaster) {
 TEST_F(PeerMessage, ListensOnceOnTheMessageSymbolReliably) {
   pm::Poll(kFirstPollUs);
   pm::Poll(kFirstPollUs + kPollUs);
-  pm::Poll(kFirstPollUs + 2 * kPollUs);
+  pm::Poll(kFirstPollUs + kTwoStepsUs);
   EXPECT_EQ(g_listenCalls, 1) << "one registration per broadcaster";
   EXPECT_EQ(g_listenSymbol, pm::kMessageSymbol);
   EXPECT_TRUE(g_listenReliable);
   EXPECT_EQ(Count("listener registered role=client"), 1);
-  EXPECT_NE(g_lines[0].find("handle=7"), std::string::npos);
+  EXPECT_NE(g_lines[0].find("handle=" + P(kListenOk)), std::string::npos);
 }
 
 TEST_F(PeerMessage, APollWithinTheStepIsIgnored) {
   BecomeServer({kPeerA}, "S1");
   pm::Poll(kFirstPollUs);
-  ASSERT_EQ(g_sends.size(), 2u);  // capabilities and ping to peer A
+  ASSERT_EQ(g_sends.size(), kSendsPerGreeting);  // capabilities and ping to peer A
   match_.peers = {kPeerA, kPeerB};
-  pm::Poll(kFirstPollUs + kPollUs / 2);
-  EXPECT_EQ(g_sends.size(), 2u) << "inside the 250 ms step nothing is read";
+  pm::Poll(kFirstPollUs + kHalfStepUs);
+  EXPECT_EQ(g_sends.size(), kSendsPerGreeting) << "inside the 250 ms step nothing is read";
   pm::Poll(kFirstPollUs + kPollUs);
-  EXPECT_EQ(g_sends.size(), 4u) << "at the step the new peer is greeted";
+  EXPECT_EQ(g_sends.size(), kTwoGreetings) << "at the step the new peer is greeted";
 }
 
 TEST_F(PeerMessage, AFailedListenIsRetriedEveryFiveSecondsAndLoggedOnTheFirstAndEveryTwelfth) {
@@ -255,25 +264,25 @@ TEST_F(PeerMessage, AFailedListenIsRetriedEveryFiveSecondsAndLoggedOnTheFirstAnd
   now += kRetryUs;
   pm::Poll(now);
   EXPECT_EQ(g_listenCalls, 1 + static_cast<int>(kListenWarnEvery));
-  EXPECT_EQ(Count("listener not registered"), 2) << "the first failure and the 13th attempt";
+  EXPECT_EQ(Count("listener not registered"), kListenWarnings) << "the first failure and the 13th attempt";
   EXPECT_EQ(Count("listener registered"), 0);
   g_listenResult = kListenOk;
   now += kRetryUs;
   pm::Poll(now);
   EXPECT_EQ(Count("listener registered role=client"), 1);
   bool sawCount = false;
-  for (const std::string& l : g_lines) sawCount = sawCount || (l.find("listener registered role=client") != std::string::npos && l.find("failures_before=13") != std::string::npos);
+  for (const std::string& l : g_lines) sawCount = sawCount || (l.find("listener registered role=client") != std::string::npos && l.find("failures_before=" + P(1 + kListenWarnEvery)) != std::string::npos);
   EXPECT_TRUE(sawCount) << "the registration says how many attempts failed before it";
 }
 
 TEST_F(PeerMessage, TheServerGreetsEachAcceptedPeerOnceWithItsGearAndAPing) {
   BecomeServer({kPeerA, kPeerB}, "S1");
   pm::Poll(kFirstPollUs);
-  ASSERT_EQ(g_sends.size(), 4u);
+  ASSERT_EQ(g_sends.size(), kTwoGreetings);
   EXPECT_EQ(g_sends[0].peer, kPeerA);
   EXPECT_EQ(g_sends[1].peer, kPeerA);
-  EXPECT_EQ(g_sends[2].peer, kPeerB);
-  EXPECT_EQ(g_sends[3].peer, kPeerB);
+  EXPECT_EQ(g_sends[kSendsPerGreeting].peer, kPeerB);
+  EXPECT_EQ(g_sends[kSendsPerGreeting + 1].peer, kPeerB);
   for (const Send& s : g_sends) {
     EXPECT_EQ(s.symbol, pm::kMessageSymbol);
     EXPECT_EQ(s.dest, ~0ULL) << "reliable";
@@ -282,7 +291,7 @@ TEST_F(PeerMessage, TheServerGreetsEachAcceptedPeerOnceWithItsGearAndAPing) {
   EXPECT_EQ(caps.message.kind, pm::Kind::kCapabilities);
   EXPECT_EQ(caps.message.gear, (std::vector<std::string>{"smoke", "buff", "point"}));
   EXPECT_EQ(Dec(g_sends[1].bytes).message.kind, pm::Kind::kPing);
-  EXPECT_NE(Dec(g_sends[1].bytes).message.seq, Dec(g_sends[3].bytes).message.seq) << "each ping has its own sequence";
+  EXPECT_NE(Dec(g_sends[1].bytes).message.seq, Dec(g_sends[kSendsPerGreeting + 1].bytes).message.seq) << "each ping has its own sequence";
 
   g_sends.clear();
   pm::Poll(kFirstPollUs + kPollUs);
@@ -293,7 +302,7 @@ TEST_F(PeerMessage, AServerWithoutCombatOffersNoGear) {
   nevr_combat::g_testFeatures = {};
   BecomeServer({kPeerA}, "S1");
   pm::Poll(kFirstPollUs);
-  ASSERT_EQ(g_sends.size(), 2u);
+  ASSERT_EQ(g_sends.size(), kSendsPerGreeting);
   const pm::Decoded caps = Dec(g_sends[0].bytes);
   EXPECT_EQ(caps.message.kind, pm::Kind::kCapabilities);
   EXPECT_TRUE(caps.message.gear.empty());
@@ -305,7 +314,7 @@ TEST_F(PeerMessage, ANewSessionGreetsEveryoneAgainAndSaysSo) {
   g_sends.clear();
   match_.session = "S2";
   pm::Poll(kFirstPollUs + kPollUs);
-  EXPECT_EQ(g_sends.size(), 2u);
+  EXPECT_EQ(g_sends.size(), kSendsPerGreeting);
   EXPECT_EQ(Count("session changed from=S1 to=S2 greeted_peers_forgotten=1"), 1);
 }
 
@@ -337,8 +346,8 @@ TEST_F(PeerMessage, ASendThatCannotGoIsLoggedAndNothingIsSent) {
   BecomeServer({kPeerA}, "S1");
   EchoVR::BroadcasterSend = nullptr;
   pm::Poll(kFirstPollUs);
-  EXPECT_EQ(Count("not sent role=server peer=11"), 2);
-  EXPECT_EQ(Count("reason=no_send_function"), 2);
+  EXPECT_EQ(Count("not sent role=server peer=" + P(kPeerA)), static_cast<int>(kSendsPerGreeting));
+  EXPECT_EQ(Count("reason=no_send_function"), static_cast<int>(kSendsPerGreeting));
   EXPECT_TRUE(g_sends.empty());
 }
 
@@ -352,7 +361,7 @@ TEST_F(PeerMessage, TheServerAnswersAPingFromAMatchPeerWithAPongOfTheSameSequenc
   const pm::Decoded pong = Dec(g_sends[0].bytes);
   EXPECT_EQ(pong.message.kind, pm::Kind::kPong);
   EXPECT_EQ(pong.message.seq, kSeq);
-  EXPECT_EQ(Count("ping received role=server peer=11 from=match_peer"), 1);
+  EXPECT_EQ(Count("ping received role=server peer=" + P(kPeerA) + " from=match_peer"), 1);
 }
 
 TEST_F(PeerMessage, TheServerRefusesAPeerOutsideTheMatchAndACapabilitiesMessage) {
@@ -360,7 +369,7 @@ TEST_F(PeerMessage, TheServerRefusesAPeerOutsideTheMatchAndACapabilitiesMessage)
   pm::Poll(kFirstPollUs);
   g_sends.clear();
   Deliver(pm::EncodePing(kSeq), kPeerOutside);
-  EXPECT_EQ(Count("message refused role=server peer=99"), 1);
+  EXPECT_EQ(Count("message refused role=server peer=" + P(kPeerOutside)), 1);
   EXPECT_EQ(Count("reason=wrong_sender"), 1);
   Deliver(pm::EncodeCapabilities({"smoke"}), kPeerA);
   EXPECT_EQ(Count("reason=not_for_server"), 1);
@@ -381,7 +390,7 @@ TEST_F(PeerMessage, AMessageThatDoesNotDecodeIsRefusedWithItsReason) {
 TEST_F(PeerMessage, RefusalLinesAreBoundedPerWindow) {
   BecomeServer({kPeerA}, "S1");
   pm::Poll(kFirstPollUs);
-  for (std::uint32_t i = 0; i < kRefusalBound + 3; ++i) Deliver("not an envelope", kPeerA);
+  for (std::uint32_t i = 0; i < kRefusalBound + kPastRefusalBound; ++i) Deliver("not an envelope", kPeerA);
   EXPECT_EQ(Count("message refused"), static_cast<int>(kRefusalBound));
 }
 
@@ -389,7 +398,7 @@ TEST_F(PeerMessage, APeerPastItsAcceptBoundIsDroppedWithoutAReplyAndCountedOnThe
   BecomeServer({kPeerA}, "S1");
   pm::Poll(kFirstPollUs);
   g_sends.clear();
-  for (std::uint32_t i = 0; i < kAcceptBound + 2; ++i) Deliver(pm::EncodePing(kSeq), kPeerA);
+  for (std::uint32_t i = 0; i < kAcceptBound + kPastAcceptBound; ++i) Deliver(pm::EncodePing(kSeq), kPeerA);
   EXPECT_EQ(g_sends.size(), static_cast<std::size_t>(kAcceptBound)) << "past the bound a ping is not answered";
   EXPECT_EQ(Count("ping received"), static_cast<int>(kAcceptBound));
   // Another peer has its own window.
@@ -421,30 +430,30 @@ TEST_F(PeerMessage, AClientThatIsItsOwnAuthorityTakesNothing) {
 TEST_F(PeerMessage, AClientTakesMessagesFromTheAuthorityPeerOnly) {
   InstallFakeAuthorityPeer(true);
   pm::Poll(kFirstPollUs);
-  EXPECT_EQ(Count("authority peer changed from=-1 to=5"), 1);
+  EXPECT_EQ(Count("authority peer changed from=-1 to=" + P(kAuthority)), 1);
   pm::Poll(kFirstPollUs + kPollUs);
   EXPECT_EQ(Count("authority peer changed"), 1) << "logged on change only";
 
   Deliver(pm::EncodePing(kSeq), kPeerA);
-  EXPECT_EQ(Count("message refused role=client peer=11"), 1);
+  EXPECT_EQ(Count("message refused role=client peer=" + P(kPeerA)), 1);
   EXPECT_TRUE(g_sends.empty());
 
   Deliver(pm::EncodePing(kSeq), kAuthority);
   ASSERT_EQ(g_sends.size(), 1u);
   EXPECT_EQ(g_sends[0].peer, kAuthority);
   EXPECT_EQ(Dec(g_sends[0].bytes).message.kind, pm::Kind::kPong);
-  EXPECT_EQ(Count("ping received role=client peer=5 from=authority"), 1);
+  EXPECT_EQ(Count("ping received role=client peer=" + P(kAuthority) + " from=authority"), 1);
 
   g_fakeAuthority = kPeerA;
-  pm::Poll(kFirstPollUs + 2 * kPollUs);
-  EXPECT_EQ(Count("authority peer changed from=5 to=11"), 1);
+  pm::Poll(kFirstPollUs + kTwoStepsUs);
+  EXPECT_EQ(Count("authority peer changed from=" + P(kAuthority) + " to=" + P(kPeerA)), 1);
 }
 
 TEST_F(PeerMessage, AClientAnswersTheServersCapabilitiesWithAPingAndTimesThePong) {
   InstallFakeAuthorityPeer(true);
   pm::Poll(kFirstPollUs);
   Deliver(pm::EncodeCapabilities({"smoke", "medigun"}), kAuthority);
-  EXPECT_EQ(Count("capabilities received role=client peer=5 from=authority"), 1);
+  EXPECT_EQ(Count("capabilities received role=client peer=" + P(kAuthority) + " from=authority"), 1);
   EXPECT_EQ(Count("gear=smoke,medigun"), 1);
   ASSERT_EQ(g_sends.size(), 1u);
   const pm::Decoded ping = Dec(g_sends[0].bytes);
@@ -453,7 +462,7 @@ TEST_F(PeerMessage, AClientAnswersTheServersCapabilitiesWithAPingAndTimesThePong
 
   g_lines.clear();
   Deliver(pm::EncodePong(ping.message.seq), kAuthority);
-  EXPECT_EQ(Count("pong received role=client peer=5"), 1);
+  EXPECT_EQ(Count("pong received role=client peer=" + P(kAuthority)), 1);
   EXPECT_EQ(Count("no ping of this seq is outstanding"), 0) << "the pong answers the ping that was sent";
   EXPECT_EQ(Count("rtt_ms=-1"), 0);
   Deliver(pm::EncodePong(ping.message.seq), kAuthority);

@@ -1,7 +1,7 @@
 {"component":"src/modules/platform-compat/src","dir":"src/modules/platform-compat/src"}
-{"file":"src/modules/platform-compat/src/game_folder_redirect.cpp","tests":["build","gtest:test_game_folder_redirect","pytest:test_config_yaml_source","pytest:test_content_packs_doc"]}
-{"file":"src/modules/platform-compat/src/game_folder_redirect.h","tests":["build","gtest:test_game_folder_redirect","pytest:test_config_yaml_source"]}
-{"file":"src/modules/platform-compat/src/game_folder_redirect_rules.h","tests":["build","gtest:test_game_folder_redirect","gtest:test_game_folder_redirect_rules","pytest:test_config_yaml_source","pytest:test_content_packs_doc"]}
-{"file":"src/modules/platform-compat/src/nt_path_log.h","tests":["build","gtest:test_nt_path_log","pytest:test_config_yaml_source"]}
-{"file":"src/modules/platform-compat/src/platform_compat.cpp","tests":["build","pytest:test_config_yaml_source","pytest:test_content_packs_doc","pytest:test_runtime_lifecycle_invariants"]}
-{"file":"src/modules/platform-compat/src/platform_compat.h","tests":["build","pytest:test_config_yaml_source"]}
+{"file":"src/modules/platform-compat/src/game_folder_redirect.cpp","tests":["build","gtest:test_game_folder_redirect","pytest:test_config_yaml_source","pytest:test_content_packs_doc","gtest:test_platform_compat_createdir"]}
+{"file":"src/modules/platform-compat/src/game_folder_redirect.h","tests":["build","gtest:test_game_folder_redirect","pytest:test_config_yaml_source","gtest:test_platform_compat_createdir"]}
+{"file":"src/modules/platform-compat/src/game_folder_redirect_rules.h","tests":["build","gtest:test_game_folder_redirect","gtest:test_game_folder_redirect_rules","pytest:test_config_yaml_source","pytest:test_content_packs_doc","gtest:test_platform_compat_createdir"]}
+{"file":"src/modules/platform-compat/src/nt_path_log.h","tests":["build","gtest:test_nt_path_log","pytest:test_config_yaml_source","gtest:test_platform_compat_createdir"]}
+{"file":"src/modules/platform-compat/src/platform_compat.cpp","tests":["build","pytest:test_config_yaml_source","pytest:test_content_packs_doc","pytest:test_runtime_lifecycle_invariants","gtest:test_platform_compat_createdir"]}
+{"file":"src/modules/platform-compat/src/platform_compat.h","tests":["build","pytest:test_config_yaml_source","gtest:test_platform_compat_createdir"]}

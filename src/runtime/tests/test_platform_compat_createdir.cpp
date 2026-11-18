@@ -120,7 +120,7 @@ TEST_F(PlatformCompatCreateDir, TheAnsiHookLeavesAPathWithoutTempAlone) {
   EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_ALREADY_EXISTS));
 }
 
-TEST_F(PlatformCompatCreateDir, AFolderUnderTheGamesTempIsMadeInTheNevrRootAndNotInTheGameFolder) {
+TEST_F(PlatformCompatCreateDir, AFolderUnderTheGamesTempIsMadeWhereTheRedirectSendsIt) {
   const std::wstring game = g_layout.exe_dir + L"\\_temp\\redirect_w\\deep";
   const auto moved = gfr::RedirectW("test", game.c_str());
   ASSERT_TRUE(moved.has_value()) << "the redirect's plan names this program's folder as the game folder";

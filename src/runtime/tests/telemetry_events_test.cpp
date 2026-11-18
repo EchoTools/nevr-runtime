@@ -15,12 +15,25 @@ using telemetry::v2::EchoArenaFrame;
 constexpr std::uint64_t kAccount = 4242;
 constexpr std::uint16_t kSlot = 3;
 constexpr std::uint16_t kOtherSlot = 5;
-constexpr std::uint16_t kSlotMask = 0x1F;  // the game packs a slot into the low 5 bits (telemetry_events.h)
-constexpr std::uint32_t kNoAssist = kSlotMask;
+constexpr std::uint32_t kNoAssist = nevr_telemetry::kNoAssistSlot;
 constexpr std::uint16_t kTeamBlue = 0;
 constexpr std::uint16_t kTeamOrange = 1;
 constexpr std::uint16_t kPointsThree = 3;
-constexpr std::uint32_t kScorerPacked = 0x40 | kSlot;  // high bits set: only the low 5 are the slot
+constexpr std::int32_t kBlue = 2;
+constexpr std::int32_t kOrange = 1;
+constexpr std::uint32_t kStuns = 2;
+constexpr std::uint32_t kBlocks = 3;
+constexpr std::uint32_t kSaves = 4;
+constexpr std::uint32_t kGoalsNotReported = 9;
+constexpr std::uint32_t kStunsBefore = 5;
+constexpr std::uint32_t kStunsAfterReset = 4;
+constexpr int kStatEvents = 7;
+constexpr int kSaveAt = 2;  // the stat events come in the order the counters are compared: stun, block, save, interception, steal, pass, shot
+constexpr int kInterceptionAt = 3;
+constexpr int kStealAt = 4;
+constexpr int kPassAt = 5;
+constexpr int kShotAt = 6;
+constexpr std::uint32_t kScorerPacked = (nevr_telemetry::kSlotMask + 1) | kSlot;  // a bit above the slot bits: only the low ones are the slot
 
 TelemetrySnapshot Empty() {
   TelemetrySnapshot s;
@@ -96,14 +109,14 @@ TEST(TelemetryEvents, NoStatusEventFromAnUnknownPreviousStatusOrWithinTheSameGro
 TEST(TelemetryEvents, AScoreChangeOnEitherSideCarriesBothScores) {
   TelemetrySnapshot prev = Empty();
   TelemetrySnapshot curr = Empty();
-  curr.bluePoints = 2;
-  curr.orangePoints = 1;
+  curr.bluePoints = kBlue;
+  curr.orangePoints = kOrange;
   EchoArenaFrame f = Detect(curr, prev);
   ASSERT_EQ(f.events_size(), 1);
   ASSERT_TRUE(f.events(0).has_scoreboard_updated());
-  EXPECT_EQ(f.events(0).scoreboard_updated().blue_points(), 2);
-  EXPECT_EQ(f.events(0).scoreboard_updated().orange_points(), 1);
-  prev.bluePoints = 2;
+  EXPECT_EQ(f.events(0).scoreboard_updated().blue_points(), kBlue);
+  EXPECT_EQ(f.events(0).scoreboard_updated().orange_points(), kOrange);
+  prev.bluePoints = kBlue;
   f = Detect(curr, prev);
   ASSERT_EQ(f.events_size(), 1) << "orange alone changed";
   prev.orangePoints = 1;
@@ -182,35 +195,35 @@ TEST(TelemetryEvents, EachStatCounterThatRoseIsItsOwnEventAndOneThatDidNotIsNone
   Seat(&prev, kSlot);
   TelemetrySnapshot curr = prev;
   auto& s = curr.stats[kSlot];
-  s.stuns = 2;
-  s.blocks = 3;
-  s.saves = 4;
+  s.stuns = kStuns;
+  s.blocks = kBlocks;
+  s.saves = kSaves;
   s.interceptions = 1;
   s.steals = 1;
   s.passes = 1;
   s.shotsTaken = 1;
-  s.goals = 9;  // not a counter this frame reports
+  s.goals = kGoalsNotReported;  // not a counter this frame reports
   const EchoArenaFrame f = Detect(curr, prev);
-  ASSERT_EQ(f.events_size(), 7);
+  ASSERT_EQ(f.events_size(), kStatEvents);
   EXPECT_TRUE(f.events(0).has_player_stun());
-  EXPECT_EQ(f.events(0).player_stun().total_stuns(), 2u);
+  EXPECT_EQ(f.events(0).player_stun().total_stuns(), kStuns);
   EXPECT_TRUE(f.events(1).has_player_block());
-  EXPECT_EQ(f.events(1).player_block().total_blocks(), 3u);
-  EXPECT_TRUE(f.events(2).has_player_save());
-  EXPECT_EQ(f.events(2).player_save().total_saves(), 4u);
-  EXPECT_TRUE(f.events(3).has_player_interception());
-  EXPECT_TRUE(f.events(4).has_player_steal());
-  EXPECT_TRUE(f.events(5).has_player_pass());
-  EXPECT_TRUE(f.events(6).has_player_shot_taken());
-  EXPECT_EQ(f.events(3).player_interception().player_slot(), kSlot);
+  EXPECT_EQ(f.events(1).player_block().total_blocks(), kBlocks);
+  EXPECT_TRUE(f.events(kSaveAt).has_player_save());
+  EXPECT_EQ(f.events(kSaveAt).player_save().total_saves(), kSaves);
+  EXPECT_TRUE(f.events(kInterceptionAt).has_player_interception());
+  EXPECT_TRUE(f.events(kStealAt).has_player_steal());
+  EXPECT_TRUE(f.events(kPassAt).has_player_pass());
+  EXPECT_TRUE(f.events(kShotAt).has_player_shot_taken());
+  EXPECT_EQ(f.events(kInterceptionAt).player_interception().player_slot(), kSlot);
 }
 
 TEST(TelemetryEvents, ACounterThatFellOrStayedIsNoEvent) {
   TelemetrySnapshot prev = Empty();
   Seat(&prev, kSlot);
-  prev.stats[kSlot].stuns = 5;
+  prev.stats[kSlot].stuns = kStunsBefore;
   TelemetrySnapshot curr = prev;
-  curr.stats[kSlot].stuns = 4;  // a new match resets the counters
+  curr.stats[kSlot].stuns = kStunsAfterReset;  // a new match resets the counters
   EXPECT_EQ(Detect(curr, prev).events_size(), 0);
 }
 
