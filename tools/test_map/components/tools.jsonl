@@ -15,7 +15,7 @@
 {"file":"tools/fetch_real_signed_dll.py","tests":["pytest:test_fetch_real_signed_dll","pytest:test_release_build_fixture"]}
 {"file":"tools/game_folder_invariant.py","tests":["pytest:test_game_folder_invariant","pytest:test_installer_scripts"]}
 {"file":"tools/game_ndk.pin","tests":["pytest:test_combat_libs_cmake","pytest:test_install_game_ndk"]}
-{"file":"tools/gen_hwdump_vk_fields.py","tests":["go:cmd/test-map"]}
+{"file":"tools/gen_hwdump_vk_fields.py","tests":["go:cmd/test-map","pytest:test_python_guard_scripts"]}
 {"file":"tools/gen_plugin_signature_fixtures.py","tests":["pytest:test_fixtures_built_by_cmake"]}
 {"file":"tools/gen_symbol_corpus.py","tests":["pytest:test_abi_symbols","pytest:test_server_frame_wait_wiring","pytest:test_symbol_corpus_template"]}
 {"file":"tools/go.mod","tests":["go:cmd/cargo-extract","go:cmd/cargo-merge","go:cmd/cargo-pack","go:cmd/cargo-publish","go:cmd/commit-evidence","go:cmd/content-pack-build","go:cmd/content-test-pack","go:cmd/guard-proof","go:cmd/issue-prose","go:cmd/land","go:cmd/levelpack","go:cmd/maps-probe","go:cmd/mutant-proof","go:cmd/one-home","go:cmd/quest-apk-label","go:cmd/quest-apk-rename-package","go:cmd/quest-apk-version","go:cmd/quest-default-on","go:cmd/quest-keystore","go:cmd/quest-repack-libs","go:cmd/quest-runtime-pin","go:cmd/release-verify","go:cmd/run-copy","go:cmd/run-root","go:cmd/suite-run","go:cmd/test-changed","go:cmd/test-go-tools","go:cmd/test-map","go:cmd/wwise-events","go:internal/afkdefaulton","go:internal/axmlfix","go:internal/bc7","go:internal/combatwiring","go:internal/evidence","go:internal/gltf","go:internal/logwiring","go:internal/owned","go:internal/patchwiring","go:internal/policy","go:internal/probepkg","go:internal/questapk","go:internal/questapkfix","go:internal/questrepack","go:internal/questrepack/repackfixture","go:internal/questruntimepin","go:internal/questruntimepin/fixture","go:internal/questwiring","go:internal/radpack","go:internal/runlog","go:internal/runroot","go:internal/scriptgate","go:internal/serverwiring","go:internal/testkit","go:internal/testmap","go:internal/updatewiring","go:symcache"]}
@@ -24,7 +24,7 @@
 {"file":"tools/host_stop_cause.py","tests":["pytest:test_host_stop_cause","pytest:test_launch_client"]}
 {"file":"tools/install-git-hooks.sh","tests":["pytest:test_pre_push_hook","pytest:test_worktree_include_hook"]}
 {"file":"tools/install_game_ndk.py","tests":["pytest:test_combat_libs_cmake","pytest:test_install_game_ndk"]}
-{"file":"tools/log_call_census.py","tests":["go:cmd/test-map"]}
+{"file":"tools/log_call_census.py","tests":["go:cmd/test-map","pytest:test_python_guard_scripts"]}
 {"file":"tools/naming_inventory.py","tests":["pytest:test_naming_inventory"]}
 {"file":"tools/next_release_version.py","tests":["pytest:test_next_release_version","pytest:test_quest_build_is_dev","pytest:test_release_check","pytest:test_release_version"]}
 {"file":"tools/owned_remove.py","tests":["go:internal/owned","go:internal/policy","pytest:test_owned_remove","pytest:test_proto_stamp","pytest:test_worktree_setup"]}
@@ -77,13 +77,13 @@
 {"file":"tools/unittest_ceiling.py","tests":["pytest:test_run_tool_tests","pytest:test_test_shelf"]}
 {"file":"tools/vcpkg_root.sh","tests":["pytest:test_vcpkg_root","pytest:test_verify_parallel"]}
 {"file":"tools/verify-parallel.sh","tests":["pytest:test_verify_parallel","pytest:test_workflows_ndk"]}
-{"file":"tools/verify_agents_imports.py","tests":["agents-imports","go:cmd/test-map"]}
+{"file":"tools/verify_agents_imports.py","tests":["agents-imports","go:cmd/test-map","pytest:test_python_guard_scripts"]}
 {"file":"tools/verify_doc_paths.py","tests":["go:cmd/test-map","pytest:test_verify_doc_paths"]}
 {"file":"tools/verify_gtest_floor.py","tests":["pytest:test_verify_gtest_floor"]}
 {"file":"tools/verify_hook_invariants.py","tests":["pytest:test_verify_hook_invariants"]}
 {"file":"tools/verify_host_no_core_state.py","tests":["pytest:test_verify_host_no_core_state"]}
 {"file":"tools/verify_host_seams.py","tests":["go:cmd/test-changed","go:cmd/test-map","go:internal/testmap","pytest:test_crash_send_wiring","pytest:test_host_test_seams","pytest:test_minidmp_sender_exports"]}
-{"file":"tools/verify_log_rules.py","tests":["log-rules","go:cmd/test-map"]}
+{"file":"tools/verify_log_rules.py","tests":["log-rules","go:cmd/test-map","pytest:test_python_guard_scripts"]}
 {"file":"tools/verify_mode_patch_ground_truth.py","tests":["pytest:test_verify_mode_patch_ground_truth"]}
 {"file":"tools/verify_patch_source_inventory.py","tests":["pytest:test_verify_patch_source_inventory"]}
 {"file":"tools/verify_pe_contract.py","tests":["go:cmd/test-map","pytest:test_crash_send_wiring","pytest:test_runtime_dll_name","pytest:test_verify_pe_contract"]}

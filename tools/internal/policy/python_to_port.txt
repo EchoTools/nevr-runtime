@@ -167,6 +167,7 @@ tools/tests/test_process_memcpy_error_argument.py	ported by its unit of #2132
 tools/tests/test_proto_stamp.py	ported by its unit of #2132
 tools/tests/test_provider_name_redirect_wiring.py	ported by its unit of #2132
 tools/tests/test_publish_quest_apk.py	ported by its unit of #2132
+tools/tests/test_python_guard_scripts.py	holds four Python scripts to what they decide; ends when each script is ported to Go by its unit of #2132 and its Go test replaces this file
 tools/tests/test_quest_apk_patch_map.py	ported by its unit of #2132
 tools/tests/test_quest_apk_rename_package.py	fixtures for test_quest_release_base.py (its cases are cmd/quest-apk-rename-package and internal/questapk/rename_test.go); ends when it ports
 tools/tests/test_quest_apk_version.py	ported by its unit of #2132
