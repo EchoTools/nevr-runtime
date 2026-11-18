@@ -436,6 +436,7 @@ set(PATCHES_HEADERS
     "server/constants.h"
     "server/event_ring_buffer.h"
     "server/telemetry_snapshot.h"
+    "server/telemetry_events.h"
 )
 
 add_library(nevr_runtime SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS})
@@ -2320,6 +2321,15 @@ if(BUILD_TESTING)
     target_link_libraries(test_peer_message_rules PRIVATE GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json nevr_api
       nevr::plugin_sdk)
     gtest_discover_tests(test_peer_message_rules DISCOVERY_MODE PRE_TEST)
+
+    # telemetry_events_test.cpp: the events a telemetry frame finds by comparing two snapshots (server/telemetry_events.h) and the game
+    # status symbols' mapping (server/telemetry_game_status.h).
+    add_executable(test_telemetry_events tests/telemetry_events_test.cpp)
+    set_source_files_properties(tests/telemetry_events_test.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_telemetry_events PRIVATE -Werror)
+    target_include_directories(test_telemetry_events PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_telemetry_events PRIVATE GTest::gtest GTest::gtest_main nevr_api)
+    gtest_discover_tests(test_telemetry_events DISCOVERY_MODE PRE_TEST)
 
     # cdn_start_rules_test.cpp (PLAN-v7 G9; header-only lifecycle/cdn_start_rules.h): the self-update trial the PC client's CDN start
     # decides over pending.json, and which sets a server publishes. Compiles the engine's start unit and the names it reads.
