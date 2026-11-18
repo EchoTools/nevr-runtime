@@ -17,6 +17,7 @@
 #include "runtime/content/map_session_pin_notice.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/hook/prologue_head.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"  // g_pGame
 #include "runtime/lifecycle/readable_memory.h"
@@ -48,9 +49,11 @@ OwnerGetSymbolFn g_get = nullptr;
 std::uint64_t g_serverPin = 0;
 std::optional<SkewClient> g_client;
 
-bool EntryStock(const std::uint8_t* base, std::uintptr_t rva, const unsigned char* head, std::size_t n) {
+bool EntryStock(const char* name, const std::uint8_t* base, std::uintptr_t rva, const unsigned char* head, std::size_t n) {
   const std::uint8_t* entry = base + rva;
-  return nevr_crash_recovery::IsReadableMemory(entry, n) && nevr_prologue_head::EntryOk(entry, head, n);
+  if (nevr_crash_recovery::IsReadableMemory(entry, n) && nevr_prologue_head::EntryOk(entry, head, n)) return true;
+  LogNotPinned("probe_skew", name, nevr::ECHOVR_DEFAULT_IMAGE_BASE + rva, entry, head, n, "P-SKEW does nothing");
+  return false;
 }
 
 std::uint64_t Lobby() {
@@ -79,14 +82,12 @@ void ServerTick(std::uint64_t frame) {
 void SkewStart(const ProbeConfig& config, const char* hook_refusal) {
   auto* base = reinterpret_cast<std::uint8_t*>(EchoVR::g_GameBaseAddress);
   g_callable = base != nullptr &&
-               EntryStock(base, addr::CNSLOBBY_OWNER_SYMBOL_SET, addr::CNSLOBBY_OWNER_SYMBOL_SET_PROLOGUE,
-                          sizeof(addr::CNSLOBBY_OWNER_SYMBOL_SET_PROLOGUE)) &&
-               EntryStock(base, addr::CNSLOBBY_OWNER_SYMBOL_GET, addr::CNSLOBBY_OWNER_SYMBOL_GET_PROLOGUE,
-                          sizeof(addr::CNSLOBBY_OWNER_SYMBOL_GET_PROLOGUE));
+               EntryStock("owner symbol set", base, addr::CNSLOBBY_OWNER_SYMBOL_SET,
+                          addr::CNSLOBBY_OWNER_SYMBOL_SET_PROLOGUE, sizeof(addr::CNSLOBBY_OWNER_SYMBOL_SET_PROLOGUE)) &&
+               EntryStock("owner symbol get", base, addr::CNSLOBBY_OWNER_SYMBOL_GET,
+                          addr::CNSLOBBY_OWNER_SYMBOL_GET_PROLOGUE, sizeof(addr::CNSLOBBY_OWNER_SYMBOL_GET_PROLOGUE));
   if (!g_callable) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PROBE] probe_skew off reason=owner_json_not_stock (an owner-JSON function's entry differs from the supported "
-        "build's: P-SKEW does nothing)");
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PROBE] probe_skew off reason=owner_json_not_stock (P-SKEW does nothing; the entry is named above)");
     return;
   }
   g_set = reinterpret_cast<OwnerSetSymbolFn>(base + addr::CNSLOBBY_OWNER_SYMBOL_SET);
@@ -123,8 +124,11 @@ void SkewTick(std::uint64_t frame, const std::vector<LevelEvent>& events) {
   if (action.leave) {
     if (!action.notice.empty()) {
       // The block lives on the net game, not in the image (map_session_pin_notice.h).
-      nevr_lobby_failure_message::WriteErrorBlock(nevr_map_session_pin_notice::NoticeBaseFor(g_pGame), kNoticeTitle,
-                                                  action.notice.c_str(), action.notice.size() + 1);
+      if (!nevr_lobby_failure_message::WriteErrorBlock(nevr_map_session_pin_notice::NoticeBaseFor(g_pGame), kNoticeTitle,
+                                                       action.notice.c_str(), action.notice.size() + 1)) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.PROBE] probe_skew notice not written frame=%llu (the player leaves with no notice)",
+            static_cast<unsigned long long>(frame));
+      }
     }
     const bool scheduled = nevr_return_to_lobby::ScheduleNow(NetGame(), kLeaveCaller);
     g_client->OnLeaveResult(scheduled, frame, &lines);

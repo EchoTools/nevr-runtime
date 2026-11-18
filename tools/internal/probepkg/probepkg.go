@@ -453,6 +453,12 @@ func (o *Options) assertGameStopped() error {
 	return nil
 }
 
+// A line of the sums file is a SHA-256 hex digest (64 digits), a space, an optional `*` (binary mode) and a name.
+const (
+	sumsDigestLen  = 64
+	sumsMinNameLen = 1
+)
+
 func readSums(path string) (map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -461,11 +467,10 @@ func readSums(path string) (map[string]string, error) {
 	wanted := map[string]string{}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimRight(line, "\r")
-		const digestLen = 64
-		if len(line) < digestLen+2 || line[digestLen] != ' ' {
+		if len(line) < sumsDigestLen+sumsMinNameLen+1 || line[sumsDigestLen] != ' ' {
 			continue
 		}
-		digest, name := line[:digestLen], strings.TrimLeft(line[digestLen:], " *")
+		digest, name := line[:sumsDigestLen], strings.TrimLeft(line[sumsDigestLen:], " *")
 		if _, err := hex.DecodeString(digest); err != nil || digest != strings.ToLower(digest) || name == "" {
 			continue
 		}

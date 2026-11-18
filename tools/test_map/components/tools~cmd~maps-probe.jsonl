@@ -1,0 +1,3 @@
+{"component":"tools/cmd/maps-probe","dir":"tools/cmd/maps-probe"}
+{"file":"tools/cmd/maps-probe/main.go","tests":["go:cmd/guard-proof","go:cmd/maps-probe"]}
+{"file":"tools/cmd/maps-probe/main_test.go","tests":["go:cmd/guard-proof","go:cmd/maps-probe"]}

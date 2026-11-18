@@ -7,6 +7,7 @@
 #include <winsock2.h>  // before windows.h (tools/tests/test_header_include_order.py)
 #include <windows.h>
 
+#include <atomic>
 #include <cstring>
 #include <exception>
 #include <mutex>
@@ -42,7 +43,7 @@ LevelResourceFn g_disableOriginal = nullptr;
 // counted in g_dropped.
 std::mutex g_mutex;
 std::vector<LevelEvent> g_pending;
-std::uint32_t g_dropped = 0;
+std::atomic<std::uint32_t> g_dropped{0};
 
 std::uint64_t LevelOf(const void* resource) {
   const auto* at = static_cast<const unsigned char*>(resource) + addr::LEVEL_RESOURCE_LEVEL_OFFSET;
@@ -73,7 +74,7 @@ void Note(bool enable, std::uint64_t level, bool noop, std::int64_t result) noex
     std::lock_guard<std::mutex> lock(g_mutex);
     g_pending.push_back(event);
   } catch (const std::exception&) {
-    ++g_dropped;  // a bad_alloc or a failed lock: the summary's `dropped` says so
+    g_dropped.fetch_add(1, std::memory_order_relaxed);  // a bad_alloc or a failed lock: the summary's `dropped` says so
   }
 }
 
@@ -95,15 +96,18 @@ std::int64_t DisableDetour(void* resource) {
   return result;
 }
 
-void* StockTarget(std::uint64_t va, const std::uint8_t* prologue, std::size_t size) {
+void* StockTarget(const char* name, std::uint64_t va, const std::uint8_t* prologue, std::size_t size) {
   void* target = nevr::ResolveVA_Checked(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress), va);
-  return target != nullptr && nevr::ValidatePrologue(target, prologue, size) ? target : nullptr;
+  if (target != nullptr && nevr::ValidatePrologue(target, prologue, size)) return target;
+  LogNotPinned("probe_sub", name, va, static_cast<const std::uint8_t*>(target), prologue, size,
+               "the Enable/Disable events are not logged: P-SUBLEVEL has only the level tables' source A and P-SKEW has no loaded line");
+  return nullptr;
 }
 
 const char* Install() {
-  void* enable = StockTarget(kEnableVa, kEnablePrologue, sizeof(kEnablePrologue));
+  void* enable = StockTarget("level resource enable", kEnableVa, kEnablePrologue, sizeof(kEnablePrologue));
   if (enable == nullptr) return "enable_not_stock";
-  void* disable = StockTarget(kDisableVa, kDisablePrologue, sizeof(kDisablePrologue));
+  void* disable = StockTarget("level resource disable", kDisableVa, kDisablePrologue, sizeof(kDisablePrologue));
   if (disable == nullptr) return "disable_not_stock";
   g_enableOriginal = reinterpret_cast<LevelResourceFn>(enable);
   if (!PatchDetour(&g_enableOriginal, reinterpret_cast<PVOID>(&EnableDetour), "level resource enable (map probe)")) {
@@ -131,8 +135,7 @@ void DrainLevelEvents(std::vector<LevelEvent>* out) {
 }
 
 std::uint32_t DroppedLevelEvents() {
-  std::lock_guard<std::mutex> lock(g_mutex);
-  return g_dropped;
+  return g_dropped.load(std::memory_order_relaxed);
 }
 
 }  // namespace nevr_map_probe

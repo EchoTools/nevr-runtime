@@ -26,6 +26,8 @@ constexpr std::uint64_t kLobby = 0xAA55;
 constexpr std::uint64_t kLevelA = 0x1111;
 constexpr std::uint64_t kLevelB = 0x2222;
 constexpr std::uint64_t kFrame0 = 100;
+constexpr std::uint64_t kLateLag = 5;  // frames an A comes after its B, past the on-time window
+constexpr std::uint32_t kTwoDigitVersion = 42;
 constexpr std::int32_t kInGame = static_cast<std::int32_t>(EchoVR::NetGameState::InGame);
 constexpr std::int32_t kLobbyState = static_cast<std::int32_t>(EchoVR::NetGameState::Lobby);
 constexpr std::int32_t kLoadingLevel = static_cast<std::int32_t>(EchoVR::NetGameState::LoadingLevel);
@@ -98,7 +100,7 @@ TEST(MapProbeConfig, SkewExpectReadsNoneMissingAndAVersion) {
   const probe::ProbeConfig v1 = probe::ParseProbeConfig("skew_expect: probe@1\n");
   EXPECT_EQ(v1.skew_expect, probe::SkewExpect::kVersion);
   EXPECT_EQ(v1.skew_version, 1u);
-  EXPECT_EQ(probe::ParseProbeConfig("skew_expect: probe@42\n").skew_version, 42u);
+  EXPECT_EQ(probe::ParseProbeConfig("skew_expect: probe@42\n").skew_version, kTwoDigitVersion);
   EXPECT_EQ(probe::ParseProbeConfig("skew_expect: none\n").skew_expect, probe::SkewExpect::kNone);
 }
 
@@ -163,10 +165,10 @@ TEST(MapProbeSublevel, ALateAIsCountedWithItsLag) {
   probe::SublevelMatcher matcher;
   Lines lines;
   matcher.OnB(true, kLevelA, kFrame0);
-  matcher.OnA(true, kLevelA, kFrame0 + 5, &lines);
+  matcher.OnA(true, kLevelA, kFrame0 + kLateLag, &lines);
   EXPECT_EQ(matcher.matched(), 0u);
   EXPECT_EQ(matcher.late(), 1u);
-  EXPECT_TRUE(Has(lines, "probe_sub late kind=enable level=0x0000000000001111 lag=5"));
+  EXPECT_TRUE(Has(lines, "probe_sub late kind=enable level=0x0000000000001111 lag=" + std::to_string(kLateLag)));
 }
 
 TEST(MapProbeSublevel, AnAWithNoBIsExtraAndNamesItsKind) {
@@ -411,6 +413,13 @@ TEST(MapProbeRules, AStoreWithAnotherOpcodeIsRefused) {
   EXPECT_FALSE(probe::StoreEncodes(StoreBytes(kStore.global_rva, 0x3D).data(), kStore));
 }
 
+TEST(MapProbeRules, ExpectedStoreBytesAreWhatStoreEncodesAccepts) {
+  std::uint8_t expected[probe::kStoreSize];
+  probe::ExpectedStoreBytes(kStore, expected);
+  EXPECT_TRUE(probe::StoreEncodes(expected, kStore));
+  EXPECT_EQ(std::vector<std::uint8_t>(expected, expected + probe::kStoreSize), StoreBytes(kStore.global_rva));
+}
+
 TEST(MapProbeRules, ABackwardsDisplacementIsSignExtended) {
   const probe::ZoneStore distant = {0x5000, {0x48, 0x89, 0x35}, 0x40};
   std::vector<std::uint8_t> bytes = {0x48, 0x89, 0x35, 0, 0, 0, 0};
@@ -419,6 +428,22 @@ TEST(MapProbeRules, ABackwardsDisplacementIsSignExtended) {
   ASSERT_LT(rel, 0);
   std::memcpy(bytes.data() + probe::kStoreOpcodeBytes, &rel, sizeof(rel));
   EXPECT_TRUE(probe::StoreEncodes(bytes.data(), distant));
+}
+
+// ---- Rule 6: the fields of a pin refusal ----
+
+constexpr std::uint64_t kPinVa = 0x140551070;
+constexpr std::uint8_t kPinExpected[] = {0x40, 0x55, 0x53, 0x56};
+constexpr std::uint8_t kPinActual[] = {0xC3, 0x90, 0x90, 0x90};
+
+TEST(MapProbePinRefusal, NamesTheVaTheExpectedAndTheActualBytes) {
+  EXPECT_EQ(probe::NotPinnedFields(kPinVa, kPinExpected, kPinActual, sizeof(kPinExpected)),
+            "va=0x140551070 expected=40555356 actual=c3909090");
+}
+
+TEST(MapProbePinRefusal, AnUnreadableTargetSaysSo) {
+  EXPECT_EQ(probe::NotPinnedFields(kPinVa, kPinExpected, nullptr, sizeof(kPinExpected)),
+            "va=0x140551070 expected=40555356 actual=unreadable");
 }
 
 }  // namespace

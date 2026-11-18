@@ -1,0 +1,4 @@
+{"component":"tools/internal/probepkg","dir":"tools/internal/probepkg"}
+{"file":"tools/internal/probepkg/maps_probe.yaml","tests":["go:cmd/maps-probe","go:internal/probepkg","go:internal/questwiring"]}
+{"file":"tools/internal/probepkg/probepkg.go","tests":["go:cmd/maps-probe","go:internal/probepkg","go:internal/questwiring"]}
+{"file":"tools/internal/probepkg/probepkg_test.go","tests":["go:cmd/maps-probe","go:internal/probepkg","go:internal/questwiring"]}

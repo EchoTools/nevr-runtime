@@ -7,6 +7,7 @@
 #include <iterator>
 
 #include "abi/echovr.h"
+#include "core/hex_bytes.h"
 #include "nevr/symbol_hash.h"
 
 namespace nevr_map_probe {
@@ -23,6 +24,7 @@ constexpr std::size_t kMaxVersionDigits = 2;  // kMaxProbeVersion is 99
 constexpr std::uint32_t kDecimalBase = 10;
 constexpr std::size_t kLineBufferBytes = 256;  // the longest line any probe writes is well under this
 constexpr std::size_t kPinNameBytes = 24;
+constexpr std::size_t kPinFieldsBytes = 32;  // "va=0x" + 16 digits + " expected="
 
 std::string_view Trim(std::string_view s) {
   while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r')) s.remove_prefix(1);
@@ -154,6 +156,20 @@ bool StoreEncodes(const std::uint8_t* site, const ZoneStore& store) {
   std::memcpy(&rel, site + sizeof(store.opcode), sizeof(rel));
   const std::int64_t target = static_cast<std::int64_t>(store.site_rva + kStoreSize) + rel;
   return target == static_cast<std::int64_t>(store.global_rva);
+}
+
+void ExpectedStoreBytes(const ZoneStore& store, std::uint8_t (&out)[kStoreSize]) {
+  std::memcpy(out, store.opcode, sizeof(store.opcode));
+  const std::int32_t rel = static_cast<std::int32_t>(static_cast<std::int64_t>(store.global_rva) -
+                                                     static_cast<std::int64_t>(store.site_rva + kStoreSize));
+  std::memcpy(out + sizeof(store.opcode), &rel, sizeof(rel));
+}
+
+std::string NotPinnedFields(std::uint64_t va, const std::uint8_t* expected, const std::uint8_t* actual, std::size_t size) {
+  char head[kPinFieldsBytes];
+  std::snprintf(head, sizeof(head), "va=0x%llx expected=", static_cast<unsigned long long>(va));
+  return std::string(head) + nevr_hex::Bytes(expected, size) + " actual=" +
+         (actual != nullptr ? nevr_hex::Bytes(actual, size) : std::string("unreadable"));
 }
 
 void SublevelMatcher::OnB(bool enable, std::uint64_t level, std::uint64_t frame) {

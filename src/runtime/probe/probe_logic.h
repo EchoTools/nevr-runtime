@@ -48,6 +48,14 @@ struct ZoneStore {
 // True when the kStoreSize bytes at `site` are `store.opcode` and a rel32 that lands on store.global_rva.
 bool StoreEncodes(const std::uint8_t* site, const ZoneStore& store);
 
+// The bytes the store at `store.site_rva` has when it encodes `store.global_rva`: the opcode and the rel32. StoreEncodes is true
+// exactly when the bytes at `site` equal them.
+void ExpectedStoreBytes(const ZoneStore& store, std::uint8_t (&out)[kStoreSize]);
+
+// Rule 6 (docs/standards/logging.md): the fields of a pin refusal, `va=0x<hex> expected=<hex> actual=<hex>`; `actual` is
+// "unreadable" when `actual` is null. `size` bytes of each.
+std::string NotPinnedFields(std::uint64_t va, const std::uint8_t* expected, const std::uint8_t* actual, std::size_t size);
+
 // Pairs each successful Enable/Disable (source B) with the add/del it causes in the enabled-level table (source A).
 // A frame is one probe tick on the game thread; B's frame is the last tick before the call, so A, read on the next
 // tick, is on time at B's frame + 1.

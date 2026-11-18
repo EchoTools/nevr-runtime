@@ -6,6 +6,7 @@
 // nevr_map_pin, the probe client may leave a session). Run them with the channel not configured: the channel's own session pin
 // (runtime/content/map_session_pin_game.cpp) writes the same owner-JSON key once a map manifest is set.
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -32,6 +33,10 @@ void DrainLevelEvents(std::vector<LevelEvent>* out);
 std::uint32_t DroppedLevelEvents();
 
 std::uint64_t ProbeFrame();
+// Rule 6: one Warning `[NEVR.PROBE] <probe> <what> not pinned va= expected= actual= (<consequence>)` for a game function or store
+// whose bytes at `at` (null: not readable) are not the `size` bytes `expected`.
+void LogNotPinned(const char* probe, const char* what, std::uint64_t va, const std::uint8_t* at, const std::uint8_t* expected,
+                  std::size_t size, const char* consequence);
 void LogLines(const std::vector<std::string>& lines);
 void* NetGame();
 std::int32_t NetState();

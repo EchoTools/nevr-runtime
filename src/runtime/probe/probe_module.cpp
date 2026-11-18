@@ -21,6 +21,7 @@
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/lifecycle/game_image_guard.h"
+#include "runtime/lifecycle/readable_memory.h"
 #include "runtime/lifecycle/return_to_lobby_queue.h"
 #include "runtime/probe/probe_game.h"
 
@@ -117,6 +118,13 @@ void OnShutdown() {
 
 void Register() {
   RegisterStaticModule(kModuleName, static_cast<uint32_t>(NEVR_MODULE_API_VERSION), &OnFrame, nullptr, &OnShutdown);
+}
+
+void LogNotPinned(const char* probe, const char* what, std::uint64_t va, const std::uint8_t* at, const std::uint8_t* expected,
+                  std::size_t size, const char* consequence) {
+  const bool readable = at != nullptr && nevr_crash_recovery::IsReadableMemory(at, size);
+  Log(EchoVR::LogLevel::Warning, "[NEVR.PROBE] %s %s not pinned %s (the game build is not the one this probe was written against, so %s)",
+      probe, what, NotPinnedFields(va, expected, readable ? at : nullptr, size).c_str(), consequence);
 }
 
 std::uint64_t ProbeFrame() { return g_frame.load(std::memory_order_acquire); }

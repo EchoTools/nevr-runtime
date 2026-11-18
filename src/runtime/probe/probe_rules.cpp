@@ -10,6 +10,7 @@
 
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
+#include "nevr/pc/nevr_common.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/probe/probe_game.h"
@@ -44,7 +45,12 @@ std::int64_t g_lastValues[kZoneCount] = {};
 
 bool StoreInPlace(const unsigned char* base, const ZoneStore& store) {
   const unsigned char* site = base + store.site_rva;
-  return nevr_crash_recovery::IsReadableMemory(site, kStoreSize) && StoreEncodes(site, store);
+  if (nevr_crash_recovery::IsReadableMemory(site, kStoreSize) && StoreEncodes(site, store)) return true;
+  std::uint8_t expected[kStoreSize];
+  ExpectedStoreBytes(store, expected);
+  LogNotPinned("probe_rules", "zone value store", nevr::ECHOVR_DEFAULT_IMAGE_BASE + store.site_rva, site, expected, kStoreSize,
+               "the zone values are not read");
+  return false;
 }
 
 }  // namespace
@@ -61,8 +67,8 @@ void RulesStart() {
         static_cast<unsigned>(kZoneCount));
   } else {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PROBE] probe_rules off reason=not_pinned (the zone value stores are not the supported build's code; probe_level "
-        "lines still come)");
+        "[NEVR.PROBE] probe_rules off reason=not_pinned (the zone value stores are not the supported build's code, named above; "
+        "probe_level lines still come)");
   }
 }
 
