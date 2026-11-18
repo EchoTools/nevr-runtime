@@ -120,6 +120,9 @@ leave: a session that states no pin (`map_unpinned`), and a client with a local 
 
 - **PC login:** the login carries `nevr_maps` when a pin is set (`LoginEntries`, `src/runtime/compat/ws_bridge.cpp`).
 - **PC tick:** `nevr_map_session_pin::Tick` runs on the game thread every frame (`src/runtime/frame/tick.cpp`).
+- **PC view:** a client's boot publishes the view of its boot report, and each request its worker serves publishes the listing
+  of its group (`src/core/map_request_serve.h`, called from `src/runtime/content/map_channel.cpp`). A dedicated server publishes
+  no view.
 - **PC registration:** `RegistrationEntries` has no caller. KNOWN-WRONG #TBD: a server does not report its pins at
   registration.
 - **Quest login:** the login's `map_report` is set to `LoginEntries` (`src/quest/integration/production_steps.cpp`).

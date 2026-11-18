@@ -25,6 +25,8 @@
 #include "core/map_fetch_queue.h"
 #include "core/map_manifest.h"
 #include "core/map_request.h"
+#include "core/map_request_serve.h"
+#include "core/map_session_pin.h"
 #include "core/nevr_root.h"
 #include "core/resource_set_registry.h"
 #include "runtime/cargo/stock_source.h"
@@ -387,7 +389,11 @@ void BootUnguarded(std::uintptr_t game_base, bool is_server) {
       st->channel->Boot(*st->env, *st->fs, *st->mounter, st->deriver.get(), NowUtc(), Ask(seams.local_map_ids));
   if (boot.start != Start::kRun) return;  // the core wrote why (not_configured, or the refusal)
   ArmSessionGroupRequest();  // a session success now queues its group for the fetch worker (ADR 0048 decision 15)
-  if (!st->server) InstallClientRequests(st);  // and the request entry replaces that seam for a client (ADR 0048 decision 16)
+  if (!st->server) {
+    InstallClientRequests(st);  // and the request entry replaces that seam for a client (ADR 0048 decision 16)
+    // The session pin reads this run's view from the boot: the maps it lists and the ones it could not mount (K1b, as the Quest does).
+    nevr_map_channel::PublishBootView(boot.report, &nevr_map_session_pin::SetChannelView);
+  }
 
   st->deferred = boot.report.deferred;
   GrantMounted(st, boot.report);
@@ -396,14 +402,15 @@ void BootUnguarded(std::uintptr_t game_base, bool is_server) {
   nevr_config_alias::InstallIfStaged();
 }
 
-// The worker's request pass: runs each queued group on demand with the scope its requests asked for. Stops when keep_going turns false.
+// The worker's request pass: each queued group is fetched on demand with the scope its requests asked for, listed, and its listing is
+// published as the session pin's view (core/map_request_serve.h, the same pass the Quest runs). Stops when keep_going turns false.
 void DrainRequests(State* st, const std::function<bool()>& keep_going) {
   const auto fetch = [st, &keep_going](const std::string& group, const nevr_maps::FetchScope& scope) {
     return nevr_maps::FetchGroup(*st->env, *st->fs, st->channel->config(), group, st->deferred, st->deriver.get(), NowUtc(), keep_going,
                                  nullptr, scope);
   };
-  while (keep_going() && st->requests->RunNext(fetch)) {
-  }
+  const auto list = [st](const std::string& group) { return st->channel->ListGroups({group}, NowUtc()); };
+  nevr_map_channel::ServeSessionRequests(*st->requests, fetch, list, &nevr_map_session_pin::SetChannelView, keep_going);
 }
 
 void StartFetchUnguarded() {

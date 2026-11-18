@@ -12,11 +12,11 @@
 #include "core/config_alias.h"
 #include "core/map_channel.h"
 #include "core/map_request.h"
+#include "core/map_request_serve.h"
 #include "core/map_session_pin.h"
 #include "core/resource_set_registry.h"
 #include "cdn/posix_map_fs.h"
 #include "quest/cdn/map_pin_game.h"
-#include "quest/cdn/map_request_drain.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/sentinel/map_sets.h"
 #include "quest/sentinel/resource_request_hook.h"
@@ -135,7 +135,7 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
   // the worker serves below (core/map_request.h, the PC's InstallClientRequests). The pin reads the boot's view until a pass lists more.
   state->requests = std::make_unique<nevr_maps::MapRequests>(*env);
   nevr_maps::InstallRequestSeams(state->requests.get());
-  nevr_map_session_pin::SetChannelView(nevr_map_session_pin::ViewFromMount(boot.report));
+  nevr_map_channel::PublishBootView(boot.report, &nevr_map_session_pin::SetChannelView);
   pin::InstallTick();
   map_sets::SetMountObserver(&OnMount);
   nevr_config_alias::InstallIfStaged();
@@ -153,14 +153,15 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
       MountWhenManifestReady(&resource_request::GameManifestRecords, &resource_request::GameManifestHolds,
                              &resource_request::PublishMapSets, kManifestWaitMs, keep_going);
     }
-    const GroupFetch fetch = [state, deriver, &keep_going](const std::string& group, const nevr_maps::FetchScope& scope) {
+    const nevr_map_channel::GroupFetch fetch = [state, deriver, &keep_going](const std::string& group,
+                                                                             const nevr_maps::FetchScope& scope) {
       return nevr_maps::FetchGroup(*state->env, state->fs, state->channel->config(), group, state->deferred, deriver, NowUtc(),
                                    keep_going, nullptr, scope);
     };
-    const GroupAfter after = [state](const std::string& group) {
-      nevr_map_session_pin::SetChannelView(nevr_map_session_pin::ViewFromMount(state->channel->ListGroups({group}, NowUtc())));
+    const nevr_map_channel::GroupListing list = [state](const std::string& group) {
+      return state->channel->ListGroups({group}, NowUtc());
     };
-    ServeSessionRequests(*state->requests, fetch, after, keep_going);
+    nevr_map_channel::ServeSessionRequests(*state->requests, fetch, list, &nevr_map_session_pin::SetChannelView, keep_going);
     const nevr_map_channel::Seams seams = nevr_map_channel::RecordedGroupSeams(*state->env, state->channel->config().dir);
     state->channel->FetchPass(*state->env, state->fs, deriver, nevr_map_channel::FetchGroups(Ask(seams.recorded_groups)), NowUtc(),
                               keep_going);

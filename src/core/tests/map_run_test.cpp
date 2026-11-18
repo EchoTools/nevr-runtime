@@ -25,6 +25,7 @@
 #include "cdn/cdn_limits.h"
 #include "core/map_channel.h"
 #include "core/map_fetch_queue.h"
+#include "core/map_request_serve.h"
 #include "core/map_channel.h"
 #include "core/map_index.h"
 #include "core/map_request.h"
@@ -1817,6 +1818,105 @@ TEST(WorkerDeferredPass, AnAcceptedRequestCoversARefusedOneAndStartsNoPassOfItsO
   now.store(kDeferGapMs + kQuietGaps * kDeferGapMs);  // the clock moves on with no request: a stale pending flag would run a pass now
   std::this_thread::sleep_for(std::chrono::milliseconds(kQuietGaps * kDeferGapMs));
   EXPECT_EQ(passes.Value(), 3);
+}
+
+// The session pin's view on the worker and at boot (core/map_request_serve.h; K1b): a served request is fetched, then listed, then
+// its listing is published; a boot publishes the view of its report; nothing is published when nothing was served.
+constexpr const char* kServeGroup = "0b6e4c1a-7f3d-4e2a-9c5b-8d1e2f3a4b5c";
+constexpr std::uint64_t kServeLevel = 7;             // a listed map's level: a fixture value, the view only carries it
+constexpr std::size_t kLevelNamesPerMap = 2;         // the session and the low-spec level names of one listed map (ViewFromMount)
+constexpr std::size_t kTwoGroups = 2;                // the groups queued in one pass
+
+TEST(ServeSessionView, AServedGroupIsFetchedThenListedAndItsListingIsPublished) {
+  cdn_test::FakeEnv env;
+  MapRequests requests(env);
+  std::string reason;
+  ASSERT_TRUE(requests.RequestGroup(kServeGroup, &reason)) << reason;
+  std::vector<std::string> trace;
+  std::vector<nevr_map_session_pin::ChannelView> published;
+  nevr_map_channel::ServeSessionRequests(
+      requests,
+      [&trace](const std::string& group, const FetchScope&) {
+        trace.push_back("fetch:" + group);
+        return FetchReport{};
+      },
+      [&trace](const std::string& group) {
+        trace.push_back("list:" + group);
+        MountReport listing;
+        listing.listed.emplace_back(kServeLevel, "arena_c");
+        return listing;
+      },
+      [&published](nevr_map_session_pin::ChannelView view) { published.push_back(std::move(view)); }, [] { return true; });
+  EXPECT_EQ(trace, (std::vector<std::string>{std::string("fetch:") + kServeGroup, std::string("list:") + kServeGroup}));
+  ASSERT_EQ(published.size(), 1u);
+  ASSERT_EQ(published[0].listed.size(), kLevelNamesPerMap);
+  EXPECT_EQ(published[0].listed[0].second, "arena_c");
+}
+
+TEST(ServeSessionView, NothingWaitingPublishesNothing) {
+  cdn_test::FakeEnv env;
+  MapRequests requests(env);
+  int published = 0;
+  nevr_map_channel::ServeSessionRequests(
+      requests, [](const std::string&, const FetchScope&) { return FetchReport{}; },
+      [](const std::string&) { return MountReport{}; }, [&published](nevr_map_session_pin::ChannelView) { ++published; },
+      [] { return true; });
+  EXPECT_EQ(published, 0);
+}
+
+TEST(ServeSessionView, AStoppingPassServesNothingAndPublishesNothing) {
+  cdn_test::FakeEnv env;
+  MapRequests requests(env);
+  std::string reason;
+  ASSERT_TRUE(requests.RequestGroup(kServeGroup, &reason)) << reason;
+  int published = 0;
+  nevr_map_channel::ServeSessionRequests(
+      requests, [](const std::string&, const FetchScope&) { return FetchReport{}; },
+      [](const std::string&) { return MountReport{}; }, [&published](nevr_map_session_pin::ChannelView) { ++published; },
+      [] { return false; });
+  EXPECT_EQ(published, 0);
+  EXPECT_EQ(requests.Waiting(), 1u);  // still waiting for a pass that runs
+}
+
+TEST(ServeSessionView, ABootPublishesTheViewOfItsReport) {
+  MountReport report;
+  report.listed.emplace_back(kServeLevel, "arena_c");
+  report.not_mounted.emplace_back("beta", "bad_hash");
+  std::vector<nevr_map_session_pin::ChannelView> published;
+  nevr_map_channel::PublishBootView(report, [&published](nevr_map_session_pin::ChannelView view) {
+    published.push_back(std::move(view));
+  });
+  ASSERT_EQ(published.size(), 1u);
+  EXPECT_EQ(published[0].listed.size(), kLevelNamesPerMap);
+  EXPECT_EQ(published[0].not_mounted, report.not_mounted);
+}
+
+// Every waiting group is served in the one pass, each fetched and then listed before the next: the loop does not stop after one.
+TEST(ServeSessionView, EveryWaitingGroupIsServedAndListedInThePass) {
+  constexpr const char* kOtherGroup = "5f2a9d10-3b8c-4e7f-a1d2-6c9e0b4f7a31";
+  cdn_test::FakeEnv env;
+  MapRequests requests(env);
+  std::string reason;
+  ASSERT_TRUE(requests.RequestGroup(kServeGroup, &reason)) << reason;
+  ASSERT_TRUE(requests.RequestGroup(kOtherGroup, &reason)) << reason;
+  ASSERT_EQ(requests.Waiting(), kTwoGroups);
+  std::vector<std::string> trace;
+  std::size_t published = 0;
+  nevr_map_channel::ServeSessionRequests(
+      requests,
+      [&trace](const std::string& group, const FetchScope&) {
+        trace.push_back("fetch:" + group);
+        return FetchReport{};
+      },
+      [&trace](const std::string& group) {
+        trace.push_back("list:" + group);
+        return MountReport{};
+      },
+      [&published](nevr_map_session_pin::ChannelView) { ++published; }, [] { return true; });
+  EXPECT_EQ(trace, (std::vector<std::string>{std::string("fetch:") + kServeGroup, std::string("list:") + kServeGroup,
+                                              std::string("fetch:") + kOtherGroup, std::string("list:") + kOtherGroup}));
+  EXPECT_EQ(published, kTwoGroups);
+  EXPECT_EQ(requests.Waiting(), 0u);
 }
 
 }  // namespace

@@ -1,10 +1,10 @@
-// The Quest's session request pass (quest/cdn/map_request_drain.h, K6): a queued group is fetched on demand, then listed for the
+// The session request pass the Quest runs (core/map_request_serve.h, K6, K1b): a queued group is fetched on demand, then listed for the
 // session pin, and a requested map is fetched with the one id asked for. Driven over the shared fake Env: no network, no mount.
 #include <string>
 #include <vector>
 
 #include "core/map_request.h"
-#include "quest/cdn/map_request_drain.h"
+#include "core/map_request_serve.h"
 #include "quest/tests/cdn_fake_env.h"
 #include "quest/tests/test_check.h"
 
@@ -33,15 +33,17 @@ void AGroupRequestIsFetchedOnDemandThenListed() {
   cdn_test::FakeEnv env;
   nevr_maps::MapRequests requests(env);
   Trace trace;
-  nevr_quest::maps::ServeSessionRequests(
+  nevr_map_channel::ServeSessionRequests(
       requests, [&trace](const std::string& group, const nevr_maps::FetchScope& scope) { return Fetched(&trace, group, scope); },
-      [&trace](const std::string& group) { trace.events.push_back("list:" + group); }, kAlways);
+      [&trace](const std::string& group) { trace.events.push_back("list:" + group); return nevr_maps::MountReport{}; },
+      [](nevr_map_session_pin::ChannelView) {}, kAlways);
   QCHECK(trace.events.empty());  // nothing is waiting: no fetch and no listing
   std::string reason;
   QCHECK(requests.RequestGroup(kGroup, &reason));
-  nevr_quest::maps::ServeSessionRequests(
+  nevr_map_channel::ServeSessionRequests(
       requests, [&trace](const std::string& group, const nevr_maps::FetchScope& scope) { return Fetched(&trace, group, scope); },
-      [&trace](const std::string& group) { trace.events.push_back("list:" + group); }, kAlways);
+      [&trace](const std::string& group) { trace.events.push_back("list:" + group); return nevr_maps::MountReport{}; },
+      [](nevr_map_session_pin::ChannelView) {}, kAlways);
   QCHECK((trace.events == std::vector<std::string>{std::string("fetch:") + kGroup, std::string("list:") + kGroup}));
 }
 
@@ -52,14 +54,16 @@ void AMapRequestFetchesOnlyTheMapItAsksFor() {
   Trace trace;
   std::string reason;
   QCHECK(requests.RequestGroup(kGroup, &reason));
-  nevr_quest::maps::ServeSessionRequests(
+  nevr_map_channel::ServeSessionRequests(
       requests, [&trace](const std::string& group, const nevr_maps::FetchScope& scope) { return Fetched(&trace, group, scope); },
-      [&trace](const std::string& group) { trace.events.push_back("list:" + group); }, kAlways);
+      [&trace](const std::string& group) { trace.events.push_back("list:" + group); return nevr_maps::MountReport{}; },
+      [](nevr_map_session_pin::ChannelView) {}, kAlways);
   trace.events.clear();
   QCHECK(requests.RequestMap(kMap, &reason));
-  nevr_quest::maps::ServeSessionRequests(
+  nevr_map_channel::ServeSessionRequests(
       requests, [&trace](const std::string& group, const nevr_maps::FetchScope& scope) { return Fetched(&trace, group, scope); },
-      [&trace](const std::string& group) { trace.events.push_back("list:" + group); }, kAlways);
+      [&trace](const std::string& group) { trace.events.push_back("list:" + group); return nevr_maps::MountReport{}; },
+      [](nevr_map_session_pin::ChannelView) {}, kAlways);
   QCHECK((trace.events == std::vector<std::string>{std::string("fetch:") + kGroup + ":" + kMap, std::string("list:") + kGroup}));
 }
 
@@ -70,9 +74,10 @@ void AStoppingPassServesNoRequest() {
   Trace trace;
   std::string reason;
   QCHECK(requests.RequestGroup(kGroup, &reason));
-  nevr_quest::maps::ServeSessionRequests(
+  nevr_map_channel::ServeSessionRequests(
       requests, [&trace](const std::string& group, const nevr_maps::FetchScope& scope) { return Fetched(&trace, group, scope); },
-      [&trace](const std::string& group) { trace.events.push_back("list:" + group); }, [] { return false; });
+      [&trace](const std::string& group) { trace.events.push_back("list:" + group); return nevr_maps::MountReport{}; },
+      [](nevr_map_session_pin::ChannelView) {}, [] { return false; });
   QCHECK(trace.events.empty());
   QCHECK(requests.Waiting() == 1);  // the request is still waiting for a pass that runs
 }
