@@ -42,6 +42,9 @@ inline constexpr const char* kOwnerCargoPinKey = "nevr_cargo_pin";
 inline constexpr const char* kOwnerLevelKey = "level";
 inline constexpr const char* kNoticeTitle = "Map version mismatch";
 inline constexpr std::size_t kNoticeLineMax = 63;  // the game's error block keeps 63 bytes of a line (WriteErrorBlock)
+// The clause that says an update to a map this run already mounts waits for the next start (ADR 0048 decision 16). The request entry
+// (core/map_request.cpp) and the pin's notice (DecideClient) both say it, so the words are written once, here.
+inline constexpr const char* kAppliesAtNextStartClause = "applies the next time you start the game";
 // A leave the game refuses is retried for this long (the session pin's retry window).
 inline constexpr std::uint64_t kLeaveRetryMs = 10000;
 // The game states of a client in a session: EchoVR::NetGameState ServerLoading (6) to InGame (9), src/abi/echovr.h:364-367.

@@ -610,6 +610,12 @@ ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin) {
       decision.notice_line = FitLine({{"Loading "}, {id, true}, {"; join again when it is ready."}});
       return decision;
     }
+    // A map this run already mounts at another version: the stored one applies at the next start, and the mounted one stays until then.
+    // The internal token is never shown to the player.
+    if (*token == nevr_maps::kMountedOtherVersionToken) {
+      decision.notice_line = FitLine({{"Map "}, {id, true}, {": the update "}, {kAppliesAtNextStartClause}, {"."}});
+      return decision;
+    }
     decision.notice_line = FitLine({{"Map "}, {id, true}, {" did not load: "}, {*token, true}, {". See the nevr log."}});
     decision.request_fetch = *token == "stock_changed";
     return decision;

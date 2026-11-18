@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "core/cargo_session_pin.h"
+#include "core/map_run.h"
 #include "core/map_server_hold.h"
 #include "nevr/symbol_hash.h"
 
@@ -271,6 +272,21 @@ TEST_F(MapSessionPin, EachNotMountedTokenLeavesAndOnlyStockChangedFetches) {
     EXPECT_EQ(decision.request_fetch, std::string(token) == "stock_changed") << token;
     EXPECT_EQ(decision.notice_line, "Map a2 did not load: " + std::string(token) + ". See the nevr log.") << token;
   }
+}
+
+// A map this run already mounts at another version (the mount's kMountedOtherVersionToken): the player reads the timing in plain
+// words, and the internal token never reaches the line. The stored version applies at the next start (ADR 0048 decision 16).
+TEST_F(MapSessionPin, MountedOtherVersionSaysTheUpdateAppliesAtTheNextStart) {
+  sp::ChannelView view;
+  view.listed = {{Level("a2"), "a2"}};
+  view.not_mounted = {{"a2", nevr_maps::kMountedOtherVersionToken}};
+  sp::SetChannelView(view);
+  const sp::ClientDecision decision = sp::DecideClient(Level("a2"), kPinOfNothing);
+  EXPECT_EQ(decision.action, sp::ClientAction::kLeave);
+  EXPECT_EQ(decision.reason, "not_mounted");
+  EXPECT_FALSE(decision.request_fetch);
+  EXPECT_EQ(decision.notice_line, "Map a2: the update applies the next time you start the game.");
+  EXPECT_EQ(decision.notice_line.find("mounted_other_version"), std::string::npos) << decision.notice_line;
 }
 
 TEST_F(MapSessionPin, EveryNoticeFitsTheLineForA55CharacterId) {

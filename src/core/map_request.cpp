@@ -16,11 +16,11 @@ std::string RequestConsequence(const FetchReport& report, bool named_map) {
     const bool mounts_now = !report.mounted_now.empty();
     const bool at_next_start = !report.superseded.empty();
     if (mounts_now && at_next_start) {
-      return "a new map mounts during this run: join the session again when it is ready; an update to a map you already have applies "
-             "the next time you start the game";
+      return "a new map mounts during this run: join the session again when it is ready; an update to a map you already have " +
+             std::string(nevr_map_session_pin::kAppliesAtNextStartClause);
     }
     if (mounts_now) return "the map is stored and mounts during this run: join the session again when it is ready";
-    if (at_next_start) return "the update is stored and applies the next time you start the game";
+    if (at_next_start) return "the update is stored and " + std::string(nevr_map_session_pin::kAppliesAtNextStartClause);
     if (!named_map) return "the maps you hold of this group are the current versions";
     return "your copy is the current version";
   }

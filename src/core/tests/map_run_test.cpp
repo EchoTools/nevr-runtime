@@ -2220,4 +2220,16 @@ TEST(ServeSessionView, EveryWaitingGroupIsServedAndListedInThePass) {
   EXPECT_EQ(requests.Waiting(), 0u);
 }
 
+// One answer that both mounts a map and updates one this run already mounts names both timings, each in its own clause
+// (RequestConsequence, core/map_request.cpp). The wording is pinned here so the shared clause cannot drift inside the sentence.
+TEST(MapRunConsequence, AMountAndAnUpdateInOneAnswerNameBothTimings) {
+  nevr_maps::FetchReport report;
+  report.outcome = nevr_maps::FetchOutcome::kFetched;
+  report.mounted_now = {"fresh"};
+  report.superseded = {"alpha"};
+  EXPECT_EQ(nevr_maps::RequestConsequence(report, true),
+            "a new map mounts during this run: join the session again when it is ready; an update to a map you already have "
+            "applies the next time you start the game");
+}
+
 }  // namespace
