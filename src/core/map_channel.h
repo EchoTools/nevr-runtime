@@ -9,7 +9,7 @@
  *
  * Boot mounts the cached groups from the cache index with no network and no member hashing: a package index is held to its pin by
  * its stamp, and a moved stamp defers the map to the worker (ADR 0048 decision 4, ADR 0045 decision 7). The fetch runs on the worker
- * (FetchPass), never on the boot thread, and its maps mount at the next launch.
+ * (FetchPass), never on the boot thread. A map fetched during the run mounts during the run (MountGroups).
  *
  * Derived from C-Luddy's custom-map channel (origin/cdn-construct-maps, src/runtime/content/map_channel.h and map_channel_local.cpp,
  * the FetchWorker class and the settings rules), reshaped onto the group-based core (core/map_run.h).
@@ -107,6 +107,15 @@ MountDecision DecideMount(const std::vector<std::string>& expected, const nevr_c
                           const std::function<void(const std::string& owner)>& withdraw,
                           const std::function<bool(const std::string& owner, std::uint64_t alias)>& holds_alias);
 
+// A later mount's report folded into the run's (the run's report is what the session pin's view is taken from, ViewFromMount): what
+// the later mount granted, refused or skipped is added, and a map's not-mounted token is the latest mount's. A map the later mount
+// granted or found already mounted at its version is settled: it leaves the run's skipped, refused, deferred and not-mounted rows.
+void MergeMountReport(nevr_maps::MountReport& into, const nevr_maps::MountReport& later);
+
+// The ids a mount may grant (CacheMount::Mount's `only`): under ChannelConfig::mount_on_demand the ids a session asked for, else null,
+// which grants every cached map the groups list. The one place the switch is read, on both platforms.
+const std::vector<std::string>* MountScope(const nevr_maps::ChannelConfig& config, const std::vector<std::string>& asked);
+
 struct BootResult {
   Start start = Start::kOff;
   std::string reason;  // "not_configured", the refusal, or "ok"
@@ -146,9 +155,18 @@ class Channel {
   nevr_maps::MountReport ListGroups(const std::vector<std::string>& groups, const std::string& now_utc);
 
   // Mounts the given groups' cached maps now, in this process, through the boot's own CacheMount (one per process, so a map Boot
-  // mounted at a version is not granted again). A server mounts the group it fetched this way, at once (ADR 0048 decision 13).
-  // Empty when Boot did not run the channel. Worker thread only, after Boot.
-  nevr_maps::MountReport MountGroups(const std::vector<std::string>& groups, const std::string& now_utc);
+  // mounted at a version is not granted again): the hot mount of a map fetched during the run (ADR 0048 decision 16), and a server's
+  // mount of the group it fetched (decision 13). `asked` are the ids a session asked for; they limit the mount under
+  // ChannelConfig::mount_on_demand and are ignored without it (MountScope). The returned report is this call's; the run's report
+  // (RunReport) is folded with it. The grants are registered with the platform's registry, which mounts them (the PC on its game
+  // thread's next frame, the Quest on its mount thread): a mounted map is never replaced or evicted. Empty when Boot did not run the
+  // channel. Worker thread only, after Boot.
+  nevr_maps::MountReport MountGroups(const std::vector<std::string>& groups, const std::string& now_utc,
+                                     const std::vector<std::string>& asked = std::vector<std::string>());
+
+  // Every mount of the run folded into one report (the boot's, then each MountGroups): the session pin's view is taken from it.
+  // Any thread; a copy taken under the channel's lock.
+  nevr_maps::MountReport RunReport() const;
 
   // The maps this run has mounted (CacheMount::MountedIds): the in-use set every fetch of this channel passes as FetchScope::in_use, so
   // a fetch never evicts them. Empty before Boot mounts anything.
@@ -161,7 +179,9 @@ class Channel {
   std::unique_ptr<nevr_maps::CacheMount> mount_;  // made by Boot once the channel runs; its references live as long as the channel
   bool booted_ = false;
   BootResult result_;
-  nevr_maps::MountReport run_;  // the boot's report with every ListGroups listing folded in (FoldListing)
+  mutable std::mutex run_mutex_;  // guards run_: the worker folds a mount in while the game's thread reads it
+  // The boot's report, then each later mount folded in (MergeMountReport), and every ListGroups listing folded in (FoldListing).
+  nevr_maps::MountReport run_;
 };
 
 // Folds one listing (ListGroups) into the run's report: every id the listing names replaces its earlier listed and not_mounted rows,

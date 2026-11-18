@@ -456,11 +456,11 @@ ClientDecision DecideClient(std::uint64_t level, std::uint64_t pin) {
   // The pin is a hash, so the client cannot name the server's version; it names its own when it has one.
   if (const std::string* token = SecondOf(g_view().not_mounted, id)) {
     decision.reason = "not_mounted";
-    // Not held, or held at a version the channel no longer lists: the request downloads the listed version, which plays after the
-    // next launch (ADR 0048 decision 16). A stale copy is never played in its place.
+    // Not held, or held at a version the channel no longer lists: the request downloads the listed version, which mounts during this
+    // run (ADR 0048 decision 16). A stale copy is never played in its place.
     if (*token == "not_cached" || *token == nevr_maps::kStaleToken) {
       decision.request_fetch = true;
-      decision.notice_line = FitLine({{"Downloading "}, {id, true}, {"; it plays after your next launch."}});
+      decision.notice_line = FitLine({{"Downloading "}, {id, true}, {"; join again when it is ready."}});
       return decision;
     }
     decision.notice_line = FitLine({{"Map "}, {id, true}, {" did not load: "}, {*token, true}, {". See the nevr log."}});

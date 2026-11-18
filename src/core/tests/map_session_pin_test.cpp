@@ -851,7 +851,7 @@ TEST_F(MapSessionPin, AListedMapNotCachedLeavesWithADownloadNoticeAndRequestsIt)
   EXPECT_EQ(decision.action, sp::ClientAction::kLeave);
   EXPECT_EQ(decision.reason, "not_mounted");
   EXPECT_TRUE(decision.request_fetch);
-  EXPECT_EQ(decision.notice_line, "Downloading arena_c; it plays after your next launch.");
+  EXPECT_EQ(decision.notice_line, "Downloading arena_c; join again when it is ready.");
 }
 
 TEST_F(MapSessionPin, AStaleCopyLeavesAndRequestsTheListedVersion) {
@@ -862,5 +862,5 @@ TEST_F(MapSessionPin, AStaleCopyLeavesAndRequestsTheListedVersion) {
   const sp::ClientDecision decision = sp::DecideClient(Level("arena_c"), sp::PinValue(Pin("arena_c", "1.1", kSourceA)));
   EXPECT_EQ(decision.action, sp::ClientAction::kLeave);
   EXPECT_TRUE(decision.request_fetch);
-  EXPECT_EQ(decision.notice_line, "Downloading arena_c; it plays after your next launch.");
+  EXPECT_EQ(decision.notice_line, "Downloading arena_c; join again when it is ready.");
 }

@@ -234,6 +234,51 @@ MountDecision DecideMount(const std::vector<std::string>& expected, const nevr_c
   return out;
 }
 
+void MergeMountReport(nevr_maps::MountReport& into, const nevr_maps::MountReport& later) {
+  // A map this mount granted or found mounted at its version is settled: no earlier row about it still holds.
+  std::set<std::string> done(later.mounted.begin(), later.mounted.end());
+  done.insert(later.kept.begin(), later.kept.end());
+  const auto settled = [&done](const std::string& id) { return done.count(id) != 0; };
+  const auto drop_settled = [&settled](std::vector<std::string>& ids) {
+    ids.erase(std::remove_if(ids.begin(), ids.end(), settled), ids.end());
+  };
+  // A map's not-mounted token is the latest mount's: its older row goes whether the later one granted it or gave it a new token.
+  std::set<std::string> retold = done;
+  for (const auto& row : later.not_mounted) retold.insert(row.first);
+  into.not_mounted.erase(std::remove_if(into.not_mounted.begin(), into.not_mounted.end(),
+                                        [&retold](const auto& row) { return retold.count(row.first) != 0; }),
+                         into.not_mounted.end());
+  into.not_mounted.insert(into.not_mounted.end(), later.not_mounted.begin(), later.not_mounted.end());
+  into.refused.erase(std::remove_if(into.refused.begin(), into.refused.end(), [&settled](const auto& row) { return settled(row.first); }),
+                     into.refused.end());
+  drop_settled(into.skipped);
+  drop_settled(into.deferred);
+
+  std::set<std::string> listed;
+  for (const auto& row : into.listed) listed.insert(row.second);
+  for (const auto& row : later.listed) {
+    if (listed.insert(row.second).second) into.listed.push_back(row);
+  }
+  const auto append = [](auto& to, const auto& from) { to.insert(to.end(), from.begin(), from.end()); };
+  append(into.mounted, later.mounted);
+  append(into.staged, later.staged);
+  append(into.refused, later.refused);
+  append(into.groups_refused, later.groups_refused);
+  // These name a map once, however many mounts report it.
+  const auto append_new = [](std::vector<std::string>& to, const std::vector<std::string>& from) {
+    for (const std::string& id : from) {
+      if (std::find(to.begin(), to.end(), id) == to.end()) to.push_back(id);
+    }
+  };
+  append_new(into.kept, later.kept);
+  append_new(into.skipped, later.skipped);
+  append_new(into.deferred, later.deferred);
+}
+
+const std::vector<std::string>* MountScope(const nevr_maps::ChannelConfig& config, const std::vector<std::string>& asked) {
+  return config.mount_on_demand ? &asked : nullptr;
+}
+
 Channel::Channel(nevr_maps::ChannelConfig config, const Settings& settings) : config_(std::move(config)) {
   config_.base_url = settings.base_url;
   config_.channel = settings.channel;
@@ -265,7 +310,10 @@ const BootResult& Channel::Boot(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_m
   // The cache index's groups, latest first: the mount reads them, and hashes nothing it has stamped (decision 4, ADR 0045 decision 7).
   mount_ = std::make_unique<nevr_maps::CacheMount>(env, fs, config_, mounter, deriver);
   result_.report = mount_->Mount(nevr_maps::CachedGroupIds(env, config_.dir), now_utc);
-  run_ = result_.report;
+  {
+    std::lock_guard<std::mutex> lock(run_mutex_);
+    run_ = result_.report;
+  }
   result_.reason = "ok";
   env.Event(nevr_cdn::EventLevel::kInfo, "map_start",
             {{"reason", "ok"},
@@ -276,10 +324,15 @@ const BootResult& Channel::Boot(nevr_cdn::Env& env, nevr_maps::MapFs& fs, nevr_m
 }
 
 nevr_maps::MountReport Channel::ListGroups(const std::vector<std::string>& groups, const std::string& now_utc) {
-  if (start_ != Start::kRun || !booted_ || !mount_) return run_;
+  if (start_ != Start::kRun || !booted_ || !mount_) {
+    std::lock_guard<std::mutex> lock(run_mutex_);
+    return run_;
+  }
   // An empty `only` grants no id: every cached map of the groups is listed and skipped (not_asked), so the listing registers nothing.
   const std::vector<std::string> none;
-  FoldListing(&run_, mount_->Mount(groups, now_utc, &none));
+  nevr_maps::MountReport listing = mount_->Mount(groups, now_utc, &none);
+  std::lock_guard<std::mutex> lock(run_mutex_);  // run_ is also written by the worker's mounts (MergeMountReport)
+  FoldListing(&run_, listing);
   return run_;
 }
 
@@ -321,9 +374,18 @@ std::vector<nevr_maps::FetchReport> Channel::FetchPass(nevr_cdn::Env& env, nevr_
   return reports;
 }
 
-nevr_maps::MountReport Channel::MountGroups(const std::vector<std::string>& groups, const std::string& now_utc) {
+nevr_maps::MountReport Channel::MountGroups(const std::vector<std::string>& groups, const std::string& now_utc,
+                                            const std::vector<std::string>& asked) {
   if (start_ != Start::kRun || !booted_ || !mount_) return nevr_maps::MountReport();
-  return mount_->Mount(groups, now_utc);
+  nevr_maps::MountReport mounted = mount_->Mount(groups, now_utc, MountScope(config_, asked));
+  std::lock_guard<std::mutex> lock(run_mutex_);
+  MergeMountReport(run_, mounted);
+  return mounted;
+}
+
+nevr_maps::MountReport Channel::RunReport() const {
+  std::lock_guard<std::mutex> lock(run_mutex_);
+  return run_;
 }
 
 std::vector<std::string> Channel::MountedIds() const {

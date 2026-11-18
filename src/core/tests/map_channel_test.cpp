@@ -13,6 +13,7 @@
 
 #include "core/map_channel.h"
 #include "core/map_groups.h"
+#include "core/map_request.h"
 #include "core/map_run.h"
 #include "quest/tests/cdn_fake_env.h"
 #include "quest/tests/map_fake_fs.h"
@@ -330,6 +331,94 @@ void MountGroupsIsEmptyUntilBootAndMountsNothingUncached() {
   channel.Boot(env, fs, mounter, nullptr, kNow, {});
   QCHECK(channel.MountGroups({kGroup}, kNow).mounted.empty());  // after Boot: the group is not cached, so nothing mounts
   QCHECK(env.requests.empty());
+  QCHECK(channel.RunReport().mounted.empty());  // and the run's report holds nothing either
+}
+
+// ---- The run's report and the mount scope (K3: a map fetched during the run mounts during the run) -----------------------------
+
+nevr_maps::MountedMap StagedMap(const std::string& id) {
+  nevr_maps::MountedMap m;
+  m.id = id;
+  return m;
+}
+
+// A later mount that granted a map settles it: the run's skipped, deferred, refused and not-mounted rows about it go, and the
+// map is reported once as mounted.
+void ALaterMountSettlesTheMapsItGrantedInTheRunReport() {
+  nevr_maps::MountReport run;
+  run.skipped = {"a", "b"};
+  run.deferred = {"a"};
+  run.refused = {{"a", "bad"}, {"c", "bad"}};
+  run.not_mounted = {{"a", "not_asked"}, {"b", "not_asked"}, {"c", "bad"}};
+  run.listed = {{1, "a"}, {2, "b"}};
+  nevr_maps::MountReport later;
+  later.mounted = {"a"};
+  later.staged = {StagedMap("a")};
+  later.listed = {{1, "a"}, {3, "d"}};
+  mc::MergeMountReport(run, later);
+  QCHECK(run.mounted == std::vector<std::string>({"a"}));
+  QCHECK(run.staged.size() == 1);
+  QCHECK(run.skipped == std::vector<std::string>({"b"}));
+  QCHECK(run.deferred.empty());
+  QCHECK(run.refused.size() == 1 && run.refused[0].first == "c");
+  QCHECK(run.not_mounted.size() == 2);  // b and c remain; a is gone
+  for (const auto& row : run.not_mounted) QCHECK(row.first != "a");
+  QCHECK(run.listed.size() == 3);  // 1 is not listed twice
+}
+
+// A map the later mount found already mounted at its version is settled too, and a map's not-mounted token is the latest mount's.
+void ALaterMountKeepsOneTokenPerMapAndSettlesTheKept() {
+  nevr_maps::MountReport run;
+  run.skipped = {"k", "t"};
+  run.not_mounted = {{"k", "not_asked"}, {"t", "not_asked"}};
+  nevr_maps::MountReport later;
+  later.kept = {"k"};
+  later.skipped = {"t"};
+  later.not_mounted = {{"t", "mounted_other_version"}};
+  mc::MergeMountReport(run, later);
+  QCHECK(run.kept == std::vector<std::string>({"k"}));
+  QCHECK(run.skipped == std::vector<std::string>({"t"}));  // a map is named once
+  QCHECK(run.not_mounted.size() == 1);
+  if (run.not_mounted.size() == 1) {
+    QCHECK(run.not_mounted[0].first == "t");
+    QCHECK(run.not_mounted[0].second == "mounted_other_version");
+  }
+  mc::MergeMountReport(run, later);  // the same report twice names nothing twice
+  QCHECK(run.kept.size() == 1);
+  QCHECK(run.skipped.size() == 1);
+  QCHECK(run.not_mounted.size() == 1);
+}
+
+// Refused groups and refused maps from a later mount are added to the run's.
+void ALaterMountsRefusalsAreAddedToTheRunReport() {
+  nevr_maps::MountReport run;
+  run.groups_refused = {{"g1", "bad_signature"}};
+  nevr_maps::MountReport later;
+  later.groups_refused = {{"g2", "bad_signature"}};
+  later.refused = {{"x", "bad_script"}};
+  mc::MergeMountReport(run, later);
+  QCHECK(run.groups_refused.size() == 2);
+  QCHECK(run.refused.size() == 1 && run.refused[0].first == "x");
+}
+
+// A map a request stored mounts during the run, so the player is told to join again, not to restart.
+void ARequestThatStoredAMapPromisesAMountThisRunNotARestart() {
+  nevr_maps::FetchReport report;
+  report.outcome = nevr_maps::FetchOutcome::kFetched;
+  report.maps_updated = 1;
+  const std::string said = nevr_maps::RequestConsequence(report, /*named_map=*/true);
+  QCHECK(said.find("mounts during this run") != std::string::npos);
+  QCHECK(said.find("launch") == std::string::npos);
+}
+
+// The switch is read in one place: on demand a mount is limited to the ids asked for, else it grants everything cached.
+void TheMountScopeIsTheAskedIdsOnlyUnderMountOnDemand() {
+  const std::vector<std::string> asked{"m"};
+  nevr_maps::ChannelConfig config = PlatformConfig();
+  config.mount_on_demand = false;
+  QCHECK(mc::MountScope(config, asked) == nullptr);
+  config.mount_on_demand = true;
+  QCHECK(mc::MountScope(config, asked) == &asked);
 }
 
 // A listing (ListGroups) names every map it reads and grants none: after Boot over an empty cache it lists nothing, mounts nothing,
@@ -490,6 +579,11 @@ int main() {
   MountGroupsIsEmptyUntilBootAndMountsNothingUncached();
   ListGroupsGrantsNothingAndListsNothingWithoutACache();
   FoldListingReplacesTheListedIdsAndKeepsTheRestOfTheRun();
+  ALaterMountSettlesTheMapsItGrantedInTheRunReport();
+  ALaterMountKeepsOneTokenPerMapAndSettlesTheKept();
+  ALaterMountsRefusalsAreAddedToTheRunReport();
+  TheMountScopeIsTheAskedIdsOnlyUnderMountOnDemand();
+  ARequestThatStoredAMapPromisesAMountThisRunNotARestart();
   AWorkerNeverStartedHasNoThread();
   AWorkerRefusesARequestInsideTheGap();
   TheMountDecisionWithdrawsTheUnmountedAndKeepsTheRest();

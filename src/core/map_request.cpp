@@ -11,7 +11,7 @@ namespace nevr_maps {
 std::string RequestConsequence(const FetchReport& report, bool named_map) {
   const std::string& reason = report.reason;
   if (report.outcome != FetchOutcome::kFailed) {
-    if (report.maps_updated > 0) return "the map is stored and plays after your next launch";
+    if (report.maps_updated > 0) return "the map is stored and mounts during this run: join the session again when it is ready";
     if (!named_map) return "the maps you hold of this group are the current versions";
     return "your copy is the current version";
   }
