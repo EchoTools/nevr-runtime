@@ -162,8 +162,12 @@ The channel's starts are built. The PC boots the channel from `src/runtime/lifec
 then `StartFetch`), with the PC glue in `src/runtime/content/map_channel.cpp`. The Quest starts it from
 `src/quest/integration/production_steps.cpp` (`StartFromConfig`, `src/quest/cdn/map_start.cpp`, which calls `Start` in
 `src/quest/cdn/map_service.cpp`). Both give the background pass the recorded groups (`RecordedGroupSeams`: this run's session
-requests merged with the cache index's groups), and both arm the session request (`ArmSessionGroupRequest` sets
-`SetSessionGroupRequest`), so a session success queues its group. No local level name or local id is supplied on either
+requests merged with the cache index's groups), and a session success queues its group on both platforms. On the PC,
+`ArmSessionGroupRequest` (`src/core/map_channel.cpp`, which sets `SetSessionGroupRequest`) is called in the boot
+(`src/runtime/content/map_channel.cpp`), and a client also installs the request entry with `nevr_maps::InstallRequestSeams`
+(`InstallClientRequests`, the same file). On the Quest, `Start` installs the request entry with `nevr_maps::InstallRequestSeams`
+(`src/core/map_request.cpp`), which sets `SetSessionGroupRequest` and the session pin's map request itself; no Quest code calls
+`ArmSessionGroupRequest`. No local level name or local id is supplied on either
 platform (`local_level_names` is never assigned; `local_map_ids` is unset), so no CDN map is skipped as local (decision 8: the
 core decides it, `src/core/map_local_precedence.cpp`, but nothing gives it names). KNOWN-WRONG #TBD at that site.
 
@@ -172,8 +176,9 @@ the arena override's precedence line in `src/runtime/lifecycle/arena_rules_hook.
 core and both game halves (`map_session_pin.h`, `runtime/content/map_session_pin_game.cpp` on the PC,
 `quest/cdn/map_pin_game.cpp` on the Quest). The PC calls its tick every frame (`src/runtime/frame/tick.cpp`), and its login
 carries the pins (`LoginEntries`, `src/runtime/compat/ws_bridge.cpp`). The Quest's login sets `map_report` to `LoginEntries`
-(`src/quest/integration/production_steps.cpp`). `RegistrationEntries` has no caller, and the Quest's `InstallTick` has no caller
-(KNOWN-WRONG #TBD at each site).
+(`src/quest/integration/production_steps.cpp`). The Quest's `Start` calls `pin::InstallTick` (`src/quest/cdn/map_service.cpp`), which
+registers the pin's frame work (`src/quest/cdn/map_pin_game.cpp`) and logs `map_pin status=on`. `RegistrationEntries` has no
+caller (KNOWN-WRONG #TBD at that site).
 
 The server's group fetch and its join hold are wired. The PC boot runs the channel on a dedicated server, and `StartFetch` starts a
 server worker (`StartServerWorker`, `src/runtime/content/map_channel.cpp`) that fetches only the group the server is allocated
