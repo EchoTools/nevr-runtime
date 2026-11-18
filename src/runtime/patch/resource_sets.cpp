@@ -76,6 +76,9 @@ std::mutex g_keyMutex;
 Registry g_registry;
 std::atomic<Published*> g_published{nullptr};
 std::atomic<bool> g_mountDeferred{false};
+// Set by the map channel's worker when it registered a map's set after the run's first mount (MountLaterSets); cleared by the game
+// thread's frame, which mounts it. The only per-frame cost of a later mount that nothing asked for is this load.
+std::atomic<bool> g_laterPending{false};
 bool g_deferSaid = false;
 // Read without g_mutex by TryMount's check before it takes the lock.
 std::atomic<bool> g_lateSaid{false};
@@ -391,16 +394,22 @@ int32_t RegisterOne(const char* pluginId, const NevrResourcesDesc* desc) {
   return NEVR_RESOURCES_OK;
 }
 
-bool MountedNow() {
+// True once the run's registration ended with nothing served: a map's set registered after that is too late. Before it, and after the
+// first mount, a map's set is still taken (it waits for the next mount).
+bool RegistrationClosed() {
   std::lock_guard<std::mutex> lock(g_mutex);
-  return g_registry.mounted();
+  return g_registry.abandoned();
 }
 
 // The mount observer, once a run, with no lock of this file held. It is the map channel's code, not a plugin's: a throw from it is
 // logged and the mount goes on.
-void NotifyMountObserver(const MountReport& report) {
+void NotifyMountObserver(const MountReport& report, bool later = false) {
   try {
-    g_observer.Notify(report);
+    if (later) {
+      g_observer.NotifyLater(report);
+    } else {
+      g_observer.Notify(report);
+    }
   } catch (const std::exception&) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.MAPS] map mount observer threw (the mount goes on: every set it mounted is served)");
@@ -434,7 +443,7 @@ void PublishLocked(const std::vector<const Set*>& mounted) {
 // `waitedMs`: from the plugin pass to the mount.
 void WriteMountLines(std::uint64_t startedMs, const MountReport& report, const std::vector<const Set*>& mounted,
                      const std::vector<std::int64_t>& abandoned, const std::vector<std::string>& abandonedPlugins,
-                     std::uint64_t waitedMs) {
+                     std::uint64_t waitedMs, bool later = false) {
 #ifdef NEVR_TEST_HOOKS
   if (g_testMountThrow == MountThrowAt::kMountLines) throw std::bad_alloc();
 #endif
@@ -488,12 +497,14 @@ void WriteMountLines(std::uint64_t startedMs, const MountReport& report, const s
         LevelList(*set).c_str(),
         registered, unmatched, skipped);
   }
+  // A later mount of the run says so and how many sets came before it; the run's first mount's line is unchanged.
+  const std::string laterText = later ? " later=true earlier_sets=" + std::to_string(report.earlier_sets) : std::string();
   Log(EchoVR::LogLevel::Info,
       "[NEVR.RESOURCE] resource sets mounted sets=%zu refused=%zu records=%zu levels=%zu chunk_base=0x%08x "
-      "stock_records=%llu waited_ms=%llu duration_ms=%llu",
+      "stock_records=%llu waited_ms=%llu duration_ms=%llu%s",
       report.sets, report.refused, report.records, report.levels, report.chunk_base,
       static_cast<unsigned long long>(report.stock_records), static_cast<unsigned long long>(waitedMs),
-      static_cast<unsigned long long>(NowMs() - startedMs));
+      static_cast<unsigned long long>(NowMs() - startedMs), laterText.c_str());
 }
 
 // A mount that threw (it runs inside the game's frame, or from the plugin loader): it is not tried again, and one
@@ -549,6 +560,85 @@ void TryMount(bool onLoopThread) {
     PublishLocked(mounted);
   }
   WriteMountLines(now, report, mounted, {}, {}, now - armed);
+}
+
+
+// True when the resolver hook is installed (installing it when it is not): idempotent, and it takes locks of its own, so g_mutex is not held.
+bool ResolverHookReady() {
+#ifdef NEVR_TEST_HOOKS
+  if (g_testNoResolverHook) return false;
+  if (g_testStockHas != nullptr) return true;
+#endif
+  return nevr::assets::EnsureResolverHook();
+}
+
+// The later mount of a map set the worker registered after the run's first mount, on the game's own thread (ADR 0048 decision 16).
+// A mounted set is never replaced: the registry builds one new shadow of every mounted set and this publishes it in place of the
+// earlier one, so the resolver still asks one shadow. Nothing here waits: a game whose manifest is not ready leaves the flag set and
+// the next frame tries again.
+void TryMountLater() {
+  if (!g_laterPending.load(std::memory_order_relaxed)) return;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_registry.mounted()) {
+      g_laterPending.store(false);  // the first mount has not run: it takes every set registered by then
+      return;
+    }
+  }
+  const std::uint64_t now = NowMs();
+  if (!ResolverHookReady()) {
+    std::vector<std::int64_t> dropped;
+    std::string owners;
+    {
+      std::lock_guard<std::mutex> lock(g_mutex);
+      g_laterPending.store(false);
+      for (const Set* set : g_registry.HeldSets()) {
+        const std::string owner = set->plugin;
+        const std::vector<std::int64_t> handles = g_registry.DropMap(owner);
+        if (!handles.empty()) owners += (owners.empty() ? "" : ",") + Printable(owner.c_str());
+        dropped.insert(dropped.end(), handles.begin(), handles.end());
+      }
+    }
+    CloseHandles(dropped);
+    NotifyMountObserver(MountReport{}, /*later=*/true);
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MAPS] map resource sets not mounted owners=%s reason=no_resolver_hook (the resolver hook at 0x140fa1fe0 is not "
+        "installed, so no map level or resource is served this run)",
+        owners.c_str());
+    return;
+  }
+  // A run whose first mount held nothing installs the hook only now: the game's manifest holds all its boot sets once it has asked its
+  // first resource (g_requestSeen), so the mount waits for that, with the flag set.
+  if (!g_requestSeen.load(std::memory_order_relaxed)) return;
+  MountReport report;
+  std::vector<const Set*> mounted;
+  bool nothing_pending = false;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    const std::uint64_t count = StockRecordsNow();
+    if (count == 0) return;  // the game's manifest is not ready: the flag stays, the next frame asks again
+    g_laterPending.store(false);
+    nothing_pending = g_registry.pending() == 0;
+    if (!nothing_pending) {
+      report = g_registry.MountLater(StockView{&StockHasThunk, nullptr, count});
+      mounted = g_registry.MountedSets();
+    }
+  }
+  if (nothing_pending) {
+    // Every set the worker registered was dropped or withdrawn before this frame: the observer still hears of the mount, so a join
+    // hold waiting on it is released.
+    NotifyMountObserver(MountReport{}, /*later=*/true);
+    return;
+  }
+  // The observer runs before the new shadow is published, as the first mount's does, so a set it withdraws is never served.
+  NotifyMountObserver(report, /*later=*/true);
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    PublishLocked(mounted);
+  }
+  const std::vector<const Set*> fresh(mounted.begin() + static_cast<std::ptrdiff_t>(std::min(report.earlier_sets, mounted.size())),
+                                      mounted.end());
+  WriteMountLines(now, report, fresh, {}, {}, 0, /*later=*/true);
 }
 
 }  // namespace
@@ -679,7 +769,7 @@ Outcome RegisterFileResourceSet(const MapFileRequest& request, std::int64_t held
   std::uint32_t records = 0, chunks = 0, overrides = 0;
   std::size_t levels = 0;
   std::uint64_t bytes = 0;
-  const Outcome outcome = RegisterMapFile(request, file, &MountedNow, [&](const void* view, std::uint64_t size) {
+  const Outcome outcome = RegisterMapFile(request, file, &RegistrationClosed, [&](const void* view, std::uint64_t size) {
     // The same claim as a plugin's set: a set and a plugin asset never both take one resource.
     nevr_resource_set::View parsed;
     const std::lock_guard<std::mutex> claim(g_keyMutex);
@@ -778,6 +868,8 @@ void MountWhenReady() {
   }
 }
 
+void MountLaterSets() { g_laterPending.store(true); }
+
 void NoteRequest() {
   if (!g_requestSeen.load(std::memory_order_relaxed)) g_requestSeen.store(true, std::memory_order_relaxed);
 }
@@ -827,6 +919,16 @@ void OnFrame(bool onLoopThread) {
   if (g_mountDeferred.load(std::memory_order_relaxed)) {
     try {
       TryMount(onLoopThread);
+    } catch (const std::bad_alloc&) {
+      MountFailed("out_of_memory");
+    } catch (const std::exception&) {
+      MountFailed("exception");
+    }
+  }
+  // A map's set registered after the first mount: only the game's own thread mounts it, and a frame with nothing pending costs this load.
+  if (onLoopThread && g_laterPending.load(std::memory_order_relaxed)) {
+    try {
+      TryMountLater();
     } catch (const std::bad_alloc&) {
       MountFailed("out_of_memory");
     } catch (const std::exception&) {
@@ -909,6 +1011,7 @@ void ResetForTest() {
   g_registry = Registry();
   g_published.store(nullptr);
   g_mountDeferred.store(false);
+  g_laterPending.store(false);
   g_deferSaid = false;
   g_lateSaid = false;
   g_armedAtMs = 0;

@@ -343,14 +343,94 @@ TEST(MapFileSetRegistry, TheOldRefusalsKeepTheirNames) {
   EXPECT_EQ(static_cast<int>(Refusal::kHash), static_cast<int>(Refusal::kFrameSize) + 1) << "appended";
 }
 
-TEST_F(MapFileSetTest, ARegistrationAfterTheMountIsTooLateAndTheCallerKeepsTheFile) {
-  Mount();  // nothing held: registration ends at once
+// A map's file registered after the run's first mount is accepted (ADR 0048 decision 16); it mounts on the game's next frame once the
+// worker has said so (MountLaterSets), and not before.
+TEST_F(MapFileSetTest, AMapFileAfterTheMountIsAcceptedAndMountsOnTheNextFrameAfterTheWorkerSaysSo) {
+  Mount();  // nothing held: the run's one mount is empty
   const std::int64_t file = Held(MapLevel().Build());
   const Outcome outcome = Register(file);
-  EXPECT_EQ(outcome.refusal, Refusal::kTooLate);
-  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "reason=too_late"));
+  ASSERT_TRUE(outcome.ok()) << sets::RefusalName(outcome.refusal) << ": " << outcome.detail;
+  sets::OnFrame(true);
+  EXPECT_FALSE(LevelMounted(kMapLevel)) << "registered, not yet asked to mount";
+  sets::MountLaterSets();
+  sets::OnFrame(false);
+  EXPECT_FALSE(LevelMounted(kMapLevel)) << "a later mount runs on the game's own thread only";
+  sets::OnFrame(true);
+  EXPECT_TRUE(LevelMounted(kMapLevel));
+  EXPECT_NE(sets::ManagerFor(&g_manager, sets::kLevelRootType, kMapLevel), nullptr);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info, "later=true earlier_sets=0"));
+}
+
+TEST_F(MapFileSetTest, ALaterMountKeepsEarlierSetsServedAndTellsTheObserverEachTime) {
+  sets::SetMountObserver(&Observe);
+  RegisterPluginSet();
+  Mount();
+  ASSERT_EQ(g_observed.calls, 1);
+  ASSERT_TRUE(Register(Held(MapLevel().Build())).ok());
+  sets::MountLaterSets();
+  sets::OnFrame(true);
+  EXPECT_EQ(g_observed.calls, 2) << "the later mount is told too";
+  EXPECT_EQ(g_observed.sets, 1u) << "a later report counts the sets it mounted, the map's";
+  EXPECT_TRUE(LevelMounted(kPluginLevel));
+  EXPECT_TRUE(LevelMounted(kMapLevel));
+  sets::OnFrame(true);
+  EXPECT_EQ(g_observed.calls, 2) << "one mount per request";
+}
+
+int g_publishes = 0;
+void CountPublish() { ++g_publishes; }
+
+TEST_F(MapFileSetTest, ALaterMountWithNothingPendingStillTellsTheObserver) {
+  g_publishes = 0;
+  sets::SetAfterPublishForTest(&CountPublish);
+  sets::SetMountObserver(&Observe);
+  RegisterPluginSet();
+  Mount();
+  ASSERT_EQ(g_observed.calls, 1);
+  ASSERT_EQ(g_publishes, 1);
+  sets::MountLaterSets();
+  sets::OnFrame(true);
+  EXPECT_EQ(g_publishes, 1) << "no new shadow is published, so the served counters are not reset";
+  EXPECT_EQ(g_observed.calls, 2) << "a join hold waiting on the mount is released";
+  EXPECT_EQ(g_observed.sets, 0u);
+  EXPECT_TRUE(LevelMounted(kPluginLevel)) << "a later mount with nothing pending leaves the mounted sets served";
+  EXPECT_NE(sets::ManagerFor(&g_manager, sets::kLevelRootType, kPluginLevel), nullptr) << "and the resolver still finds them";
+}
+
+// A run whose first mount held nothing mounts before the game asked for a resource; a later mount waits for that request.
+TEST_F(MapFileSetTest, ALaterMountWaitsForTheGamesFirstRequest) {
+  sets::MountWhenReady();  // nothing held: mounted at once, no request seen
+  ASSERT_TRUE(Register(Held(MapLevel().Build())).ok());
+  sets::MountLaterSets();
+  sets::OnFrame(true);
+  EXPECT_FALSE(LevelMounted(kMapLevel)) << "the game's manifest holds all its boot sets only after its first request";
+  sets::NoteRequest();
+  sets::OnFrame(true);
+  EXPECT_TRUE(LevelMounted(kMapLevel));
+}
+
+TEST_F(MapFileSetTest, ALaterMapThatTakesAStockKeyIsRefusedToTheObserver) {
+  sets::SetMountObserver(&Observe);
+  Mount();
+  g_stock.insert({kMeshType, kMapMesh});
+  ASSERT_TRUE(Register(Held(MapLevel().Build())).ok());
+  sets::MountLaterSets();
+  sets::OnFrame(true);
+  ASSERT_EQ(g_observed.calls, 2);
+  EXPECT_EQ(g_observed.refusals, (std::vector<std::pair<std::string, std::string>>{{"map:arena", "stock_key"}}));
   EXPECT_FALSE(LevelMounted(kMapLevel));
-  ExpectCallerKeeps(file);
+}
+
+TEST_F(MapFileSetTest, ALaterMountBeforeTheFirstIsLeftToTheFirst) {
+  sets::SetMountObserver(&Observe);
+  ASSERT_TRUE(Register(Held(MapLevel().Build())).ok());
+  sets::MountLaterSets();
+  sets::OnFrame(true);
+  EXPECT_FALSE(LevelMounted(kMapLevel)) << "the first mount has not run";
+  EXPECT_EQ(g_observed.calls, 0);
+  Mount();
+  EXPECT_TRUE(LevelMounted(kMapLevel));
+  EXPECT_EQ(g_observed.calls, 1);
 }
 
 TEST_F(MapFileSetTest, AMapSetThatTakesAPluginSetsKeyCollidesAndThePluginSetWins) {

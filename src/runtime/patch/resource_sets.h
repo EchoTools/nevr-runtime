@@ -48,6 +48,13 @@ int32_t HostRegisterResources(const char* pluginId, const NevrResourcesDesc* des
 // With no set held it ends registration and nothing more.
 void MountWhenReady();
 
+// A map's set registered after the run's first mount (RegisterFileResourceSet) mounts on the game's own thread at its next frame: any
+// thread calls this once the sets are registered. The mount publishes one new shadow of every mounted set (the resolver still asks
+// one shadow), tells the mount observer (every time, MountObserver::NotifyLater) and writes one `resource sets mounted ... later=true`
+// line. Nothing waits: a game whose manifest is not ready leaves the request set and the next frame tries again. Before the first mount
+// it does nothing: the first mount takes every set registered by then.
+void MountLaterSets();
+
 // The resolver hook's note of each request: the first one tells the mount the game's boot package sets are all read.
 void NoteRequest();
 
