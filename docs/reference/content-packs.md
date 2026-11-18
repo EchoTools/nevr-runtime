@@ -76,6 +76,10 @@ to `-out` when every file is in it, so a failed write leaves no `-out`, and it r
 resolved: nothing of ours is written into a game folder. The gear-icon step takes its art by flag: `-gear-icons-dir <dir>` is
 he_is_the_cat's `ICONS/hd`, the build refuses without it, each of its 11 files is read by name and must match its pinned sha-256,
 and the summary line's `inputs` and the log's `input_pinned` records list what was read.
+A step that reads any other outside file takes it by `-input name=<file>` (repeatable). The step reads it with
+`Pack.ReadInput(name, sha256)`, which refuses when the flag is absent, when the file is not a regular file or is over 64 MiB,
+and when its sha-256 is not the step's pin; the error names the flag and both digests. A name is a key the step owns, never a
+path, so a step reaches only the file its flag gave (`tools/cmd/content-pack-build/recipe_input.go`).
 
 ## A pack's records as a CDN label
 

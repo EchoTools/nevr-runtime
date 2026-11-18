@@ -12,7 +12,8 @@
 // slice at a time (#600). With no step that changes anything the build refuses: a pack that serves nothing is not made.
 // A refusal exits 1 and names what failed, and -out is not written: the pack is written into a new folder beside -out
 // and renamed to -out only when every file is in it, so a failed write leaves no -out. -out may not be inside -game-dir:
-// nothing of ours is written into a game folder. Each run is a record in the tool's run log.
+// nothing of ours is written into a game folder. An outside file a step reads is given as -input name=<file> (repeatable) and
+// checked against the sha-256 the step pins (recipe_input.go). Each run is a record in the tool's run log.
 package main
 
 import (
@@ -57,12 +58,18 @@ type Pack struct {
 	scripts map[string][]byte                 // 16 hex -> DLL
 	rekeys  []RekeyEntry                      // the copies a step named: listed, never carried (Rekey)
 
-	gearIconsDir string        // -gear-icons-dir: he_is_the_cat's ICONS/hd, the gear icons' art (steps_gear_icons.go)
-	inputs       []PinnedInput // the outside files a step read, each with the sha-256 it matched (ADR 0035 rule 4)
+	gearIconsDir string            // -gear-icons-dir: he_is_the_cat's ICONS/hd, the gear icons' art (steps_gear_icons.go)
+	inputFiles   map[string]string // -input name=path: the recipe inputs a step reads by name (recipe_input.go)
+	step         string            // the step whose Apply is running: the step a pinned input names
+	inputs       []PinnedInput     // the outside files a step read, each with the sha-256 it matched (ADR 0035 rule 4)
 }
 
 // Inputs are the outside inputs a build is given by flag. Each is read by one step, and a step whose input is absent refuses.
-type Inputs struct{ GearIconsDir string }
+// GearIconsDir is -gear-icons-dir; Files is -input name=path, keyed by the name a step reads it under.
+type Inputs struct {
+	GearIconsDir string
+	Files        map[string]string
+}
 
 // PinnedInput is one outside file a step read, with the sha-256 it matched. The build logs one `input_pinned` record for each
 // and lists them in the summary line; content.json is unchanged.
@@ -233,6 +240,8 @@ func runWith(list []Step, args []string, getenv func(string) string, stdout, std
 		id := flags.String("id", "", "the pack's id")
 		ver := flags.String("version", "", "the pack's version, shown in the runtime's log")
 		gearIcons := flags.String("gear-icons-dir", "", "he_is_the_cat's ICONS/hd: the gear icons' art, read by name and checked against the pinned sha-256")
+		inputs := inputFlag{}
+		flags.Var(inputs, recipeInputFlag, "a recipe input, name=path, repeatable: a step reads the file by its name and checks its pinned sha-256")
 		if err := flags.Parse(args); err != nil {
 			return 2
 		}
@@ -240,7 +249,7 @@ func runWith(list []Step, args []string, getenv func(string) string, stdout, std
 			fmt.Fprintln(stderr, "content-pack-build: -game-dir, -out, -id and -version are required")
 			return 2
 		}
-		result, err := Build(list, *gameDir, *out, *id, *ver, Inputs{GearIconsDir: *gearIcons}, log)
+		result, err := Build(list, *gameDir, *out, *id, *ver, Inputs{GearIconsDir: *gearIcons, Files: inputs}, log)
 		if err != nil {
 			log.Warn("refused", "game_dir", *gameDir, "out", *out, "id", *id, "error", err.Error())
 			fmt.Fprintf(stderr, "content-pack-build: %v\n", err)
@@ -311,7 +320,7 @@ func Build(list []Step, gameDir, out, id, ver string, in Inputs, log *slog.Logge
 		return Result{}, fmt.Errorf("%s exists; a pack is made into a new folder", out)
 	}
 	data := filepath.Join(gameDir, filepath.FromSlash(DataDir))
-	p := &Pack{gameDir: gameDir, sets: map[string]*radpack.Set{}, changes: map[string]map[radpack.Key][]byte{}, scripts: map[string][]byte{}, gearIconsDir: in.GearIconsDir}
+	p := &Pack{gameDir: gameDir, sets: map[string]*radpack.Set{}, changes: map[string]map[radpack.Key][]byte{}, scripts: map[string][]byte{}, gearIconsDir: in.GearIconsDir, inputFiles: in.Files}
 	stockRaw := map[string][]byte{}
 	for _, setID := range Sets {
 		s, raw, err := radpack.OpenSet(data, setID)
@@ -321,6 +330,7 @@ func Build(list []Step, gameDir, out, id, ver string, in Inputs, log *slog.Logge
 		p.sets[setID], stockRaw[setID] = s, raw
 	}
 	for _, st := range list {
+		p.step = st.Name
 		if err := st.Apply(p); err != nil {
 			return Result{}, fmt.Errorf("step %s: %w", st.Name, err)
 		}

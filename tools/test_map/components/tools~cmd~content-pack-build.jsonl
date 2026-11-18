@@ -4,6 +4,8 @@
 {"file":"tools/cmd/content-pack-build/main.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/main_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/oracle_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
+{"file":"tools/cmd/content-pack-build/recipe_input.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
+{"file":"tools/cmd/content-pack-build/recipe_input_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_attach_order.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_attach_order_test.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
 {"file":"tools/cmd/content-pack-build/steps_buff.go","tests":["go:cmd/content-pack-build","go:cmd/guard-proof"]}
