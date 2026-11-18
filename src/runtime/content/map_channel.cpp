@@ -424,18 +424,16 @@ void BootUnguarded(std::uintptr_t game_base, bool is_server) {
 // published as the session pin's view (core/map_request_serve.h, the same pass the Quest runs). Stops when keep_going turns false.
 void DrainRequests(State* st, const std::function<bool()>& keep_going) {
   const auto fetch = [st, &keep_going](const std::string& group, const nevr_maps::FetchScope& scope) {
-    const std::string now = NowUtc();
-    const nevr_maps::FetchReport report = nevr_maps::FetchGroup(*st->env, *st->fs, st->channel->config(), group, st->deferred,
-                                                                st->deriver.get(), now, keep_going, nullptr, scope);
-    // A map the request fetched mounts in this run (ADR 0048 decision 16): the mount grants the ids the session asked for under
-    // mount_on_demand and the registry mounts them on the game's thread. A failed fetch mounts nothing.
-    if (report.outcome != nevr_maps::FetchOutcome::kFailed) {
-      InstallGrantedMap(st, st->channel->MountGroups({group}, now, scope.ids));
-    }
-    return report;
+    return nevr_maps::FetchGroup(*st->env, *st->fs, st->channel->config(), group, st->deferred, st->deriver.get(), NowUtc(), keep_going,
+                                 nullptr, scope);
+  };
+  // The mount of a served group is decided by the core (ServeSessionRequests: a fetch that did not fail mounts, ADR 0048 decision 16);
+  // this edge only grants the mount's maps and registers them on the game's thread (InstallGrantedMap).
+  const auto mount = [st](const std::string& group, const std::vector<std::string>& asked) {
+    InstallGrantedMap(st, st->channel->MountGroups({group}, NowUtc(), asked));
   };
   const auto list = [st](const std::string& group) { return st->channel->ListGroups({group}, NowUtc()); };
-  nevr_map_channel::ServeSessionRequests(*st->requests, fetch, list, &nevr_map_session_pin::SetChannelView, keep_going);
+  nevr_map_channel::ServeSessionRequests(*st->requests, fetch, list, &nevr_map_session_pin::SetChannelView, keep_going, mount);
 }
 
 void StartFetchUnguarded() {

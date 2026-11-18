@@ -9,6 +9,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "core/map_request.h"
 #include "core/map_session_pin.h"
@@ -20,6 +21,9 @@ namespace nevr_map_channel {
 using GroupFetch = std::function<nevr_maps::FetchReport(const std::string& group, const nevr_maps::FetchScope& scope)>;
 using GroupListing = std::function<nevr_maps::MountReport(const std::string& group)>;
 using ViewSink = std::function<void(nevr_map_session_pin::ChannelView)>;
+// The mount of a served group, which the edge supplies: MountGroups for the group with the ids its fetch asked for (`asked`), then the
+// platform's grant. Called on the worker thread, after a fetch that did not fail (see ServeSessionRequests).
+using GroupMount = std::function<void(const std::string& group, const std::vector<std::string>& asked)>;
 
 // The boot's view: the report the boot mount returned, published before any request is served.
 inline void PublishBootView(const nevr_maps::MountReport& report, const ViewSink& publish) {
@@ -27,11 +31,14 @@ inline void PublishBootView(const nevr_maps::MountReport& report, const ViewSink
 }
 
 // The worker's request pass: serves the waiting requests until none is left or keep_going turns false. A stopping worker serves
-// nothing further. Each served group is fetched, then listed, then its listing is published as the view.
+// nothing further. Each served group is fetched, then mounted (a fetch that did not fail: a map a session asks for mounts in this run,
+// ADR 0048 decision 16, whether or not the fetch stored anything new, because the worker's post-pass mounts only the groups it stored),
+// then listed, then its listing is published as the view.
 inline void ServeSessionRequests(nevr_maps::MapRequests& requests, const GroupFetch& fetch, const GroupListing& list,
-                                 const ViewSink& publish, const std::function<bool()>& keep_going) {
-  const auto served = [&fetch, &list, &publish](const std::string& group, const nevr_maps::FetchScope& scope) {
+                                 const ViewSink& publish, const std::function<bool()>& keep_going, const GroupMount& mount) {
+  const auto served = [&fetch, &list, &publish, &mount](const std::string& group, const nevr_maps::FetchScope& scope) {
     nevr_maps::FetchReport report = fetch(group, scope);
+    if (report.outcome != nevr_maps::FetchOutcome::kFailed) mount(group, scope.ids);
     publish(nevr_map_session_pin::ViewFromMount(list(group)));
     return report;
   };

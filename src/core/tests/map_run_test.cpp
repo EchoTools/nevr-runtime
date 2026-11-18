@@ -1846,7 +1846,8 @@ TEST(ServeSessionView, AServedGroupIsFetchedThenListedAndItsListingIsPublished) 
         listing.listed.emplace_back(kServeLevel, "arena_c");
         return listing;
       },
-      [&published](nevr_map_session_pin::ChannelView view) { published.push_back(std::move(view)); }, [] { return true; });
+      [&published](nevr_map_session_pin::ChannelView view) { published.push_back(std::move(view)); }, [] { return true; },
+      [](const std::string&, const std::vector<std::string>&) {});
   EXPECT_EQ(trace, (std::vector<std::string>{std::string("fetch:") + kServeGroup, std::string("list:") + kServeGroup}));
   ASSERT_EQ(published.size(), 1u);
   ASSERT_EQ(published[0].listed.size(), kLevelNamesPerMap);
@@ -1860,7 +1861,7 @@ TEST(ServeSessionView, NothingWaitingPublishesNothing) {
   nevr_map_channel::ServeSessionRequests(
       requests, [](const std::string&, const FetchScope&) { return FetchReport{}; },
       [](const std::string&) { return MountReport{}; }, [&published](nevr_map_session_pin::ChannelView) { ++published; },
-      [] { return true; });
+      [] { return true; }, [](const std::string&, const std::vector<std::string>&) {});
   EXPECT_EQ(published, 0);
 }
 
@@ -1873,7 +1874,7 @@ TEST(ServeSessionView, AStoppingPassServesNothingAndPublishesNothing) {
   nevr_map_channel::ServeSessionRequests(
       requests, [](const std::string&, const FetchScope&) { return FetchReport{}; },
       [](const std::string&) { return MountReport{}; }, [&published](nevr_map_session_pin::ChannelView) { ++published; },
-      [] { return false; });
+      [] { return false; }, [](const std::string&, const std::vector<std::string>&) {});
   EXPECT_EQ(published, 0);
   EXPECT_EQ(requests.Waiting(), 1u);  // still waiting for a pass that runs
 }
@@ -1912,7 +1913,7 @@ TEST(ServeSessionView, EveryWaitingGroupIsServedAndListedInThePass) {
         trace.push_back("list:" + group);
         return MountReport{};
       },
-      [&published](nevr_map_session_pin::ChannelView) { ++published; }, [] { return true; });
+      [&published](nevr_map_session_pin::ChannelView) { ++published; }, [] { return true; }, [](const std::string&, const std::vector<std::string>&) {});
   EXPECT_EQ(trace, (std::vector<std::string>{std::string("fetch:") + kServeGroup, std::string("list:") + kServeGroup,
                                               std::string("fetch:") + kOtherGroup, std::string("list:") + kOtherGroup}));
   EXPECT_EQ(published, kTwoGroups);

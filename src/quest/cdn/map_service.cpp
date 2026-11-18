@@ -128,6 +128,19 @@ bool MountLaterNow(std::uint64_t (*records)(), bool (*has)(std::uint64_t type, s
   return map_sets::MountLater(StockOf(&context, count), publish).sets != 0;
 }
 
+// The worker's mount of the groups a pass or a request stored (ADR 0048 decision 16), on this thread: the cache mount grants each map's
+// set, the registry mounts it beside the earlier ones and the resolver is given the one new shadow. `asked` limits the mount under
+// mount_on_demand (ChannelConfig), as on the PC.
+void MountGranted(State* state, const std::vector<std::string>& groups, const std::vector<std::string>& asked) {
+  const nevr_maps::MountReport mounted = state->channel->MountGroups(groups, NowUtc(), asked);
+  g_granted_owners().clear();  // the observer decides the grants of this mount only
+  for (const std::string& id : mounted.mounted) {
+    g_granted_owners().push_back(std::string(nevr_resource_sets::kMapOwnerPrefix) + id);
+  }
+  nevr_config_alias::InstallIfStaged();
+  MountLaterNow(&resource_request::GameManifestRecords, &resource_request::GameManifestHolds, &resource_request::PublishMapSets);
+}
+
 bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_maps::Deriver* deriver) noexcept {
   if (env == nullptr || g_started.exchange(true)) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "maps_start",
@@ -175,10 +188,15 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
       return nevr_maps::FetchGroup(*state->env, state->fs, state->channel->config(), group, state->deferred, deriver, NowUtc(),
                                    keep_going, nullptr, scope);
     };
+    // A map a request fetched mounts in this run (the core decides it, ServeSessionRequests), through the same MountGranted as the
+    // post-pass block below.
+    const nevr_map_channel::GroupMount mount = [state](const std::string& group, const std::vector<std::string>& asked) {
+      MountGranted(state, {group}, asked);
+    };
     const nevr_map_channel::GroupListing list = [state](const std::string& group) {
       return state->channel->ListGroups({group}, NowUtc());
     };
-    nevr_map_channel::ServeSessionRequests(*state->requests, fetch, list, &nevr_map_session_pin::SetChannelView, keep_going);
+    nevr_map_channel::ServeSessionRequests(*state->requests, fetch, list, &nevr_map_session_pin::SetChannelView, keep_going, mount);
     const nevr_map_channel::Seams seams = nevr_map_channel::RecordedGroupSeams(*state->env, state->channel->config().dir);
     const std::vector<std::string> groups = nevr_map_channel::FetchGroups(Ask(seams.recorded_groups));
     const std::vector<nevr_maps::FetchReport> reports = state->channel->FetchPass(*state->env, state->fs, deriver, groups, NowUtc(), keep_going);
@@ -189,13 +207,7 @@ bool Start(nevr_cdn::Env* env, const nevr_map_channel::Settings& settings, nevr_
       if (report.outcome != nevr_maps::FetchOutcome::kFailed && report.maps_updated != 0) stored.push_back(report.group);
     }
     if (stored.empty()) return;
-    const nevr_maps::MountReport mounted = state->channel->MountGroups(stored, NowUtc());
-    g_granted_owners().clear();  // the observer decides the grants of this mount only
-    for (const std::string& id : mounted.mounted) {
-      g_granted_owners().push_back(std::string(nevr_resource_sets::kMapOwnerPrefix) + id);
-    }
-    nevr_config_alias::InstallIfStaged();
-    MountLaterNow(&resource_request::GameManifestRecords, &resource_request::GameManifestHolds, &resource_request::PublishMapSets);
+    MountGranted(state, stored, {});
   };
   state->worker = std::make_unique<nevr_map_channel::FetchWorker>(std::move(pass), [state] { return state->env->NowMs(); });
   // The wake is set before the worker starts: a request queued from here on is taken by the first pass, or its wake reaches a started worker.
