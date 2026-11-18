@@ -104,7 +104,7 @@ No pull requests. The commit message: the issue (`Closes`/`Refs #N`; none for a 
 code, the mutants, and what was not run or not established ("What a landed commit carries"). Start a fresh-context
 review subagent with the diff, the commit message and the issue; FIX goes back to step 4, MERGE goes on to `just land` as
 "Landing" in "Review, verification and landing" says. Commit identity and trailers:
-"Commit identity" and "Commits, versions and requirement words". Branch and worktree: "Branch lifecycle"; scratch:
+"Commit identity" and "Commits, versions and requirement words". Branch and worktree: "Branch lifecycle" (`just new-worktree <seat>/<slug>` makes the worktree and its ledger row); scratch:
 "Ownership and cleanup". A defect you do not fix in the same turn gets an issue ("Fix it or file it, in the same turn"),
 shaped as "What a landed commit carries" says; a security-sensitive one goes to the owner.
 

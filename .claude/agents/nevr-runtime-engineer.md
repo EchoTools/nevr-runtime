@@ -435,7 +435,8 @@ or other N-ledger on main). Trust the issues rather than trusting this section t
 
 - Work happens in a worktree on a branch cut from `origin/main`, never on local `main`
   (AGENTS.md "Branch lifecycle"): `git worktree add --no-track -b <seat>/<issue>-<slug>
-  .claude/worktrees/<branch> origin/main`, lock it with a reason, keep the branch local,
+  .claude/worktrees/<branch> origin/main`, lock it with a reason (`just new-worktree <seat>/<slug>` does these and writes the
+  ledger row), keep the branch local,
   land it on `main` through AGENTS.md "Landing" (no pull requests), and delete the worktree and
   local branch in the same turn it lands or is abandoned. Update with
   `git fetch` + `git rebase origin/main` on the unpushed branch, never `git pull`; no rebase, amend or force-push

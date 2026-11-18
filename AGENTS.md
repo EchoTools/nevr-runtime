@@ -302,6 +302,7 @@ must break one, say so in the commit message and why.
 Every branch an agent creates has a documented deletion point from the moment it exists. A landed branch is scratch: `main` keeps the commits, so never keep one "for reference".
 
 - **One branch per unit of work.** Name it `<seat>/<issue>-<slug>`, or `<seat>/<slug>` for a `docs` change, which has no issue.
+- **One command does the fetch, the create, the lock, the description and the ledger row:** `just new-worktree <seat>/<slug>` (`tools/cmd/new-worktree`; `-purpose <text>` fills the ledger's purpose cell; "Ownership and cleanup" says what the row is). The bullets below say what it does; run them by hand only if it cannot run.
 - **Create:** `git fetch origin main && git worktree add --no-track -b <branch> .claude/worktrees/<branch> origin/main`, fetch first, every time: a worktree made from an unfetched `origin/main` starts from wherever the last fetch left it, hours behind. `--no-track` stops the branch inheriting `origin/main` as its upstream, which sends a bare push to main.
 - **Declare the end:** `git worktree lock --reason "<seat>: delete when it lands on main or is abandoned" .claude/worktrees/<branch>`.
 - **The branch stays local.** Commits in a worktree survive a dead session (rule 5), and a branch on origin could not be rebased at landing. The one push is `main` ("Landing"); a contributor without push access pushes to their fork instead ("For contributors").
@@ -637,7 +638,7 @@ your seat name, for example `claude-main` or `codex`.
 
 ### Ownership and cleanup
 
-- **Keep a ledger.** The file `REAP_LEDGER` names (default `<work root>/LEDGER.md`, which `just` and `tools/reap_merged.py` make with its header row when it is absent) is a markdown table
+- **Keep a ledger.** The file `REAP_LEDGER` names (default `<work root>/LEDGER.md`, which `tools/reap_merged.py` and `just new-worktree` make with its header row when it is absent) is a markdown table
   (artifact, owner, purpose, remove-when) of every worktree, branch, scratch file, stash and issue an agent has made; the owner is your seat name. Add the row in
   the same turn you create the thing. Read the ledger before deleting anything; an item not in it
   is not yours.

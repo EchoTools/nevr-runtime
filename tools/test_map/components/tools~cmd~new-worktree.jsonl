@@ -1,0 +1,3 @@
+{"component":"tools/cmd/new-worktree","dir":"tools/cmd/new-worktree"}
+{"file":"tools/cmd/new-worktree/main.go","tests":["go:cmd/guard-proof","go:cmd/new-worktree"]}
+{"file":"tools/cmd/new-worktree/main_test.go","tests":["go:cmd/guard-proof","go:cmd/new-worktree"]}

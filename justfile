@@ -89,6 +89,11 @@ install-hooks:
 land *args: go-tools
     build/go-tools/land "$@"
 
+# Make an agent's worktree and its ledger row: fetch, `git worktree add --no-track -b <seat>/<slug>` from origin/main, lock with a reason, set the branch description, append the row to the ledger (tools/cmd/new-worktree; AGENTS.md "Branch lifecycle"). Usage: just new-worktree [-purpose <text>] <seat>/<slug>
+[positional-arguments]
+new-worktree *args: go-tools
+    build/go-tools/new-worktree "$@"
+
 # Remove the worktrees under .claude/worktrees whose work has landed. Dry run unless `--apply` (tools/reap_merged.py)
 reap-merged *args:
     python3 -I tools/reap_merged.py {{ args }}
