@@ -339,6 +339,7 @@ set(PATCHES_HEADERS
     "lifecycle/server_bringup.h"
     "lifecycle/crash_dump_format.h"
     "lifecycle/crash_first_filter.h"
+    "lifecycle/crash_first_report.h"
     "lifecycle/crash_first_win.h"
     "lifecycle/readable_memory.h"
     "lifecycle/console_ctrl_policy.h"

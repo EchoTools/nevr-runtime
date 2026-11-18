@@ -4,12 +4,12 @@
 
 #include <atomic>
 #include <cstdint>
-#include <cstdio>
 
 #include "core/crash_report.h"
 #include "core/logging.h"
 #include "runtime/hook/patching.h"
 #include "runtime/lifecycle/crash_first_filter.h"
+#include "runtime/lifecycle/crash_first_report.h"
 #include "runtime/lifecycle/crash_recovery.h"
 
 namespace {
@@ -35,30 +35,14 @@ LPTOP_LEVEL_EXCEPTION_FILTER WINAPI SetUnhandledExceptionFilterHook(LPTOP_LEVEL_
 // or a NEVR module before it reaches here; a second report for the same crash is not written.
 void ReportFirstFatal(EXCEPTION_POINTERS* info) noexcept {
   if (nevr_crash::ReportWritten()) return;
-  nevr_crash::CrashInfo crash{};
-  crash.thread_id = GetCurrentThreadId();
-  if (info != nullptr && info->ExceptionRecord != nullptr) {
-    const EXCEPTION_RECORD* record = info->ExceptionRecord;
-    crash.code = static_cast<std::int64_t>(record->ExceptionCode);
-    crash.pc = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(record->ExceptionAddress));
-    if ((record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION || record->ExceptionCode == EXCEPTION_IN_PAGE_ERROR) &&
-        record->NumberParameters > 1) {
-      crash.fault_address = static_cast<std::uint64_t>(record->ExceptionInformation[1]);
-    }
-  }
-  if (info != nullptr && info->ContextRecord != nullptr) crash.pc = info->ContextRecord->Rip;
-  crash.context = info;
-  nevr_crash::WriteReport(crash);
+  nevr_crash::WriteReport(nevr_crash_first_win::BuildFirstFatalInfo(info, GetCurrentThreadId()));
 }
 
 // One crash-record line after the game's filter returned: whether the game had a filter of its own to run after ours, and how
 // many times it asked to install one (each would have displaced ours). Raw WriteFile only (N70).
 void NoteChain(EXCEPTION_POINTERS* info, bool chained, long requests) noexcept {
-  char line[192];
-  const unsigned long code =
-      info != nullptr && info->ExceptionRecord != nullptr ? static_cast<unsigned long>(info->ExceptionRecord->ExceptionCode) : 0UL;
-  std::snprintf(line, sizeof(line), "[NEVR.CRASH] first_handler code=0x%08lX game_filter_called=%d displaced_requests=%ld", code,
-                chained ? 1 : 0, requests);
+  char line[nevr_crash_first_win::kRecordLineSize];
+  nevr_crash_first_win::FormatFirstHandlerLine(line, sizeof(line), info, chained, requests);
   WriteCrashRecordLine(line);
 }
 

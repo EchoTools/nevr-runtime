@@ -7,13 +7,16 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "core/crash_first.h"
+#include "core/crash_report.h"
 #include "runtime/lifecycle/crash_first_filter.h"
+#include "runtime/lifecycle/crash_first_report.h"
 
 namespace {
 
@@ -160,6 +163,95 @@ TEST_F(CrashFirstFilter, ASecondThreadWaitsForTheReportBeforeRunningTheGamesFilt
   second.join();
   ASSERT_EQ(g_threadEvents.size(), 3u);
   EXPECT_EQ(g_threadEvents.front(), "report_done");  // no "game" before it, though the second thread arrived during the report
+}
+
+
+
+// What the filter hands the report writer and writes to the crash record (crash_first_report.h).
+constexpr std::uint64_t kThreadId = 4242;
+constexpr std::uint64_t kExceptionAddress = 0x140123456;
+constexpr std::uint64_t kContextRip = 0x140654321;
+constexpr std::uint64_t kFaultedOn = 0xDEADBEEF00;
+constexpr std::uint64_t kAccessKindRead = 0;
+constexpr ULONG_PTR kFaultParameters = 2;
+constexpr ULONG_PTR kOneParameter = 1;
+constexpr long kDisplacedRequests = 3;
+
+TEST(CrashFirstReport, AnAccessViolationCarriesItsCodeAddressFaultAddressAndContext) {
+  EXCEPTION_RECORD record = {};
+  CONTEXT context = {};
+  record.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
+  record.ExceptionAddress = reinterpret_cast<PVOID>(static_cast<std::uintptr_t>(kExceptionAddress));
+  record.NumberParameters = kFaultParameters;
+  record.ExceptionInformation[0] = static_cast<ULONG_PTR>(kAccessKindRead);
+  record.ExceptionInformation[1] = static_cast<ULONG_PTR>(kFaultedOn);
+  EXCEPTION_POINTERS pointers = {&record, &context};
+  const nevr_crash::CrashInfo crash = nevr_crash_first_win::BuildFirstFatalInfo(&pointers, kThreadId);
+  EXPECT_EQ(crash.code, static_cast<std::int64_t>(EXCEPTION_ACCESS_VIOLATION));
+  EXPECT_EQ(crash.fault_address, kFaultedOn);
+  EXPECT_EQ(crash.thread_id, kThreadId);
+  EXPECT_EQ(crash.context, &pointers);
+  EXPECT_EQ(crash.pc, 0u);  // the context's Rip is 0 here and wins over the record's address
+}
+
+TEST(CrashFirstReport, TheContextsInstructionPointerIsThePcWhenThereIsOne) {
+  EXCEPTION_RECORD record = {};
+  CONTEXT context = {};
+  record.ExceptionCode = EXCEPTION_ILLEGAL_INSTRUCTION;
+  record.ExceptionAddress = reinterpret_cast<PVOID>(static_cast<std::uintptr_t>(kExceptionAddress));
+  context.Rip = kContextRip;
+  EXCEPTION_POINTERS pointers = {&record, &context};
+  EXPECT_EQ(nevr_crash_first_win::BuildFirstFatalInfo(&pointers, kThreadId).pc, kContextRip);
+  pointers.ContextRecord = nullptr;  // no context: the record's address is all there is
+  EXPECT_EQ(nevr_crash_first_win::BuildFirstFatalInfo(&pointers, kThreadId).pc, kExceptionAddress);
+}
+
+TEST(CrashFirstReport, OnlyAnAccessViolationOrInPageErrorHasAFaultAddress) {
+  EXCEPTION_RECORD record = {};
+  CONTEXT context = {};
+  record.NumberParameters = kFaultParameters;
+  record.ExceptionInformation[1] = static_cast<ULONG_PTR>(kFaultedOn);
+  EXCEPTION_POINTERS pointers = {&record, &context};
+  record.ExceptionCode = EXCEPTION_IN_PAGE_ERROR;
+  EXPECT_EQ(nevr_crash_first_win::BuildFirstFatalInfo(&pointers, kThreadId).fault_address, kFaultedOn);
+  record.ExceptionCode = EXCEPTION_INT_DIVIDE_BY_ZERO;
+  EXPECT_EQ(nevr_crash_first_win::BuildFirstFatalInfo(&pointers, kThreadId).fault_address, 0u);
+  record.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
+  record.NumberParameters = kOneParameter;  // too few parameters: the second one is not there to read
+  EXPECT_EQ(nevr_crash_first_win::BuildFirstFatalInfo(&pointers, kThreadId).fault_address, 0u);
+}
+
+TEST(CrashFirstReport, NothingToReadStillNamesTheThread) {
+  const nevr_crash::CrashInfo none = nevr_crash_first_win::BuildFirstFatalInfo(nullptr, kThreadId);
+  EXPECT_EQ(none.thread_id, kThreadId);
+  EXPECT_EQ(none.code, 0);
+  EXPECT_EQ(none.pc, 0u);
+  EXPECT_EQ(none.context, nullptr);
+  EXCEPTION_POINTERS empty = {nullptr, nullptr};
+  const nevr_crash::CrashInfo hollow = nevr_crash_first_win::BuildFirstFatalInfo(&empty, kThreadId);
+  EXPECT_EQ(hollow.code, 0);
+  EXPECT_EQ(hollow.context, &empty);
+}
+
+TEST(CrashFirstReport, TheRecordLineNamesTheCodeWhetherTheGameFilterRanAndTheDisplacedRequests) {
+  EXCEPTION_RECORD record = {};
+  record.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
+  EXCEPTION_POINTERS pointers = {&record, nullptr};
+  char line[nevr_crash_first_win::kRecordLineSize];
+  nevr_crash_first_win::FormatFirstHandlerLine(line, sizeof(line), &pointers, true, kDisplacedRequests);
+  EXPECT_STREQ(line, "[NEVR.CRASH] first_handler code=0xC0000005 game_filter_called=1 displaced_requests=3");
+  nevr_crash_first_win::FormatFirstHandlerLine(line, sizeof(line), nullptr, false, 0);
+  EXPECT_STREQ(line, "[NEVR.CRASH] first_handler code=0x00000000 game_filter_called=0 displaced_requests=0");
+}
+
+TEST(CrashFirstReport, TheRecordLineNeverWritesPastItsBuffer) {
+  EXCEPTION_POINTERS pointers = {nullptr, nullptr};
+  constexpr size_t kSmall = 16;
+  char line[kSmall + 1] = {};
+  line[kSmall] = 'X';  // a guard byte after the buffer
+  nevr_crash_first_win::FormatFirstHandlerLine(line, kSmall, &pointers, false, 0);
+  EXPECT_EQ(line[kSmall], 'X');
+  EXPECT_EQ(std::string(line).size(), kSmall - 1);
 }
 
 }  // namespace
