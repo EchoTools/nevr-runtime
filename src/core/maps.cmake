@@ -77,6 +77,11 @@ target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/cargo_session_pin.cp
 set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/map_server_hold.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_server_hold.cpp")
 
+# Same-owner replace of a mounted map (core/map_swap.h; ADR 0048 decision 3): the decision and the serving table. Core only, no
+# caller yet. Platform-free: no PCH, no Log(). Its Quest twin is src/quest/cdn/maps.cmake, which compiles the same source.
+set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/map_swap.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+target_sources(nevr_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/map_swap.cpp")
+
 # The custom-map channel's start (core/map_channel.h; ADR 0048 decisions 3, 7, 8, 12): the settings, the start decision, the boot and
 # its idempotence, the mount observer's decision (DecideMount) and the background worker. Platform-free: no PCH. Its tests are the Quest
 # host group's (src/quest/host_tests/groups/maps.cmake), which compile the same source.
@@ -188,4 +193,13 @@ if(BUILD_TESTING AND GTest_FOUND)
   target_include_directories(test_cargo_session_pin PRIVATE "${CMAKE_SOURCE_DIR}/src")
   target_link_libraries(test_cargo_session_pin PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk)
   gtest_discover_tests(test_cargo_session_pin DISCOVERY_MODE PRE_TEST)
+
+  # Same-owner replace (core/map_swap.h; ADR 0048 decision 3) over the shared fake Env (quest/tests/cdn_fake_env.h, the edge the
+  # other core map tests use): the decision, the swap, the deferral, the restart and the version order that refuses a rollback.
+  add_executable(test_map_swap "${CMAKE_CURRENT_LIST_DIR}/tests/map_swap_test.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/tests/map_swap_test.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  target_include_directories(test_map_swap PRIVATE "${CMAKE_SOURCE_DIR}/src")
+  target_link_libraries(test_map_swap PRIVATE GTest::gtest GTest::gtest_main nevr_core nevr::plugin_sdk
+    nlohmann_json::nlohmann_json)
+  gtest_discover_tests(test_map_swap DISCOVERY_MODE PRE_TEST)
 endif()

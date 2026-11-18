@@ -20,6 +20,7 @@ add_library(nevr_quest_maps STATIC
   ../../core/map_session_pin.cpp
   ../../core/map_server_hold.cpp
   ../../core/map_request.cpp
+  ../../core/map_swap.cpp
   ../../core/map_set_tables.cpp
   ../../core/minisign_verify.cpp
   ../../core/resource_set_registry.cpp
