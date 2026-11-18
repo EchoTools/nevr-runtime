@@ -335,7 +335,7 @@ void StartServerWorker(State* st) {
 void InstallClientRequests(State* st) {
   st->requests = std::make_unique<nevr_maps::MapRequests>(*st->env);
   st->requests->SetWake([st] {
-    if (FetchWorker* const worker = st->worker_ptr.load()) worker->Request();  // refused inside the worker's gap: the next pass runs it
+    if (FetchWorker* const worker = st->worker_ptr.load()) worker->Request();  // a refused one still gets a pass when the gap ends
   });
   nevr_maps::InstallRequestSeams(st->requests.get());
 }
@@ -431,8 +431,10 @@ void StartFetchUnguarded() {
         }
       },
       [st] { return st->env->NowMs(); });
-  st->worker->Start();
+  // The wake pointer is set before the thread starts: a request queued from here on is either taken by the first pass's drain, or
+  // its wake reaches a started worker. Set after Start, a request in between would wait for a pass that never comes.
   st->worker_ptr.store(st->worker.get());
+  st->worker->Start();
 }
 
 }  // namespace

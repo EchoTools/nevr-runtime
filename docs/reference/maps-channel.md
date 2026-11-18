@@ -68,10 +68,10 @@ Downloaded maps live in `<nEVR root>\cache\maps\` (`MapsCacheDir`, `src/core/nev
   (`src/core/map_request.h`) on the two core seams and replaces the session-group seam that `ArmSessionGroupRequest`
   (`src/core/map_channel.cpp`) set. Each request is written as a `map_request` record (`docs/standards/logging.md`).
   Without a running channel the session logs `no_channel`.
-- A request wakes the worker through `FetchWorker::Request`, which refuses a request made within `kExtraFetchGapMs`
-  (10 minutes) of the last extra pass. A refused request waits in the queue until a later pass runs it, and no later
-  pass is scheduled by the worker itself. KNOWN-WRONG #TBD: a second request inside that gap is not fetched until
-  the next worker pass, which only a further request starts.
+- A request wakes the worker through `FetchWorker::Request`. A request made within `kExtraFetchGapMs` (10 minutes) of the last
+  extra pass is refused by the gap, and the worker runs one pass when that gap ends (`FetchWorker::WaitForPass`, a timed wait
+  on the worker's own thread): a refused request is never left queued with no pass to run it. Requests inside one gap share
+  that one pass, and a request that arrives during a pass is run by the next one.
 - `StopFetch` (`src/runtime/content/map_channel.cpp`) stops the request entry first, so later requests are refused and
   the waiting ones are answered `cancelled`. It has no caller, so the PC shutdown path does not stop the fetch.
   KNOWN-WRONG #TBD.
@@ -184,7 +184,6 @@ Map file contents are never logged. A script's bytes are never logged. A path or
 Every `KNOWN-WRONG #TBD` on this page marks a part the code states is not wired yet:
 
 - `StopFetch` has no caller, so the PC shutdown path does not stop the background fetch.
-- A second request inside `kExtraFetchGapMs` of the last extra pass waits for a later pass (see the PC client section).
 - `mount_on_demand` is read only by the core and no production caller sets it, so a fetched map is not mounted mid-run
   (K3).
 - The Quest has no request entry (K6).

@@ -7,11 +7,16 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -20,6 +25,7 @@
 #include "cdn/cdn_limits.h"
 #include "core/map_channel.h"
 #include "core/map_fetch_queue.h"
+#include "core/map_channel.h"
 #include "core/map_index.h"
 #include "core/map_request.h"
 #include "core/map_set_tables.h"
@@ -1676,6 +1682,141 @@ TEST_F(OnDemandTest, AQueuedRequestWakesTheWorkerAndAStoppedEntryRefuses) {
   EXPECT_FALSE(requests.RequestGroup(kGroup, &reason));
   EXPECT_EQ(reason, "stopped");
   EXPECT_EQ(wakes, 2);
+}
+
+// ---- The worker's deferred pass (core/map_channel.h): a request the gap refuses is run when the gap ends, never stranded. ------------
+// The worker is built with a short gap in real time, so a test waits for it; the clock is the test's own, set by the test.
+
+constexpr std::uint64_t kDeferGapMs = 100;           // the gap these tests use (real milliseconds)
+constexpr std::uint64_t kInsideGapMs = 50;           // a clock time inside that gap
+constexpr std::uint64_t kQuietGaps = 2;              // how many gaps a test watches for a pass that must not come
+constexpr int kGatedPass = 2;                        // the pass a test holds open while a request arrives
+constexpr std::chrono::milliseconds kWaitMs{5000};   // how long a test waits for a pass that must come (a red run waits this long)
+
+// Counts what the worker did and lets a test wait for a count without polling.
+class Tally {
+ public:
+  void Add() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      ++count_;
+    }
+    cv_.notify_all();
+  }
+  bool WaitFor(int n) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return cv_.wait_for(lock, kWaitMs, [this, n] { return count_ >= n; });
+  }
+  int Value() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return count_;
+  }
+
+ private:
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  int count_ = 0;
+};
+
+// Stops the worker when the test ends, even when an expectation failed: a worker destroyed while its thread runs terminates.
+struct StopOnExit {
+  nevr_map_channel::FetchWorker& worker;
+  ~StopOnExit() { worker.Stop(kWaitMs); }
+};
+
+// A session's request refused inside the worker's gap is run when the gap ends, with no later request. The wake is the PC glue's:
+// it ignores the worker's answer, so a refused wake alone must not strand the queued request.
+TEST_F(OnDemandTest, AQueuedRequestRefusedInsideTheWorkersGapRunsWhenTheGapEnds) {
+  std::atomic<std::uint64_t> now{0};
+  Tally passes;
+  Tally groups_run;
+  MapRequests requests(env);
+  nevr_map_channel::FetchWorker worker(
+      [&requests, &passes, &groups_run](const std::function<bool()>& keep_going) {
+        while (keep_going() && requests.RunNext([&groups_run](const std::string&, const FetchScope&) {
+          groups_run.Add();
+          return FetchReport();
+        })) {
+        }
+        passes.Add();
+      },
+      [&now] { return now.load(); }, kDeferGapMs);
+  StopOnExit stop{worker};
+  requests.SetWake([&worker] { worker.Request(); });
+  worker.Start();
+  std::string reason;
+  EXPECT_TRUE(requests.RequestGroup(kGroup, &reason)) << reason;  // accepted at clock 0: one pass
+  EXPECT_TRUE(passes.WaitFor(2));                                  // the start's pass and that one
+  now.store(kInsideGapMs);
+  EXPECT_TRUE(requests.RequestMap("beta", &reason)) << reason;  // refused inside the gap; the wake's answer is ignored
+  std::this_thread::sleep_for(std::chrono::milliseconds(kQuietGaps * kDeferGapMs));  // the worker is parked on the rest of the gap
+  now.store(kDeferGapMs);                                                             // the gap ends with no further request
+  EXPECT_TRUE(passes.WaitFor(3));  // the deferred pass runs the queued map
+  EXPECT_EQ(groups_run.Value(), 2);
+  now.store(kDeferGapMs + kInsideGapMs);
+  EXPECT_FALSE(worker.Request());  // the deferred pass started the gap: a request inside it is refused, and it too gets a pass
+  now.store(kQuietGaps * kDeferGapMs);  // that gap ends
+  EXPECT_TRUE(passes.WaitFor(4));
+  now.store(kQuietGaps * kDeferGapMs + kQuietGaps * kDeferGapMs);  // the clock moves on with no request of any kind
+  std::this_thread::sleep_for(std::chrono::milliseconds(kQuietGaps * kDeferGapMs));
+  EXPECT_EQ(passes.Value(), 4);  // and the worker starts no pass of its own
+}
+
+// A request made while a pass runs, inside the gap, is run when the gap ends, after that pass.
+TEST(WorkerDeferredPass, ARequestMadeDuringAPassInsideTheGapRunsWhenTheGapEnds) {
+  std::atomic<std::uint64_t> now{0};
+  Tally entered;
+  Tally passes;
+  std::mutex gate_mutex;
+  std::condition_variable gate_cv;
+  bool released = false;  // under gate_mutex
+  int pass_no = 0;        // the worker's thread only
+  nevr_map_channel::FetchWorker worker(
+      [&](const std::function<bool()>&) {
+        ++pass_no;
+        if (pass_no == kGatedPass) {
+          entered.Add();
+          std::unique_lock<std::mutex> lock(gate_mutex);
+          gate_cv.wait(lock, [&released] { return released; });
+        }
+        passes.Add();
+      },
+      [&now] { return now.load(); }, kDeferGapMs);
+  StopOnExit stop{worker};
+  worker.Start();
+  EXPECT_TRUE(passes.WaitFor(1));  // the start's pass
+  EXPECT_TRUE(worker.Request());   // accepted at clock 0: pass 2, which the gate holds
+  EXPECT_TRUE(entered.WaitFor(1));
+  now.store(kInsideGapMs);
+  EXPECT_FALSE(worker.Request());  // during that pass, inside the gap: refused
+  now.store(kDeferGapMs);          // the gap ends while the pass still runs
+  {
+    std::lock_guard<std::mutex> lock(gate_mutex);
+    released = true;
+  }
+  gate_cv.notify_all();
+  EXPECT_TRUE(passes.WaitFor(3));  // pass 2 ends, then the deferred pass runs
+}
+
+// An accepted request covers the refused one queued before it, and the worker then starts no pass of its own.
+TEST(WorkerDeferredPass, AnAcceptedRequestCoversARefusedOneAndStartsNoPassOfItsOwn) {
+  std::atomic<std::uint64_t> now{0};
+  Tally passes;
+  nevr_map_channel::FetchWorker worker([&passes](const std::function<bool()>&) { passes.Add(); },
+                                       [&now] { return now.load(); }, kDeferGapMs);
+  StopOnExit stop{worker};
+  worker.Start();
+  EXPECT_TRUE(passes.WaitFor(1));
+  EXPECT_TRUE(worker.Request());  // accepted at clock 0
+  EXPECT_TRUE(passes.WaitFor(2));
+  now.store(kInsideGapMs);
+  EXPECT_FALSE(worker.Request());  // refused: a pass is owed
+  now.store(kDeferGapMs);
+  EXPECT_TRUE(worker.Request());  // accepted: one pass covers the refused request too
+  EXPECT_TRUE(passes.WaitFor(3));
+  now.store(kDeferGapMs + kQuietGaps * kDeferGapMs);  // the clock moves on with no request: a stale pending flag would run a pass now
+  std::this_thread::sleep_for(std::chrono::milliseconds(kQuietGaps * kDeferGapMs));
+  EXPECT_EQ(passes.Value(), 3);
 }
 
 }  // namespace

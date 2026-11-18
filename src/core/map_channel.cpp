@@ -322,20 +322,46 @@ void FetchWorker::Run() {
     pass_([this] { return keep_going_.load(); });
     passes_.fetch_add(1);
     lock.lock();
-    wake_.wait(lock, [this] { return stop_ || requested_; });
-    requested_ = false;
+    WaitForPass(lock);
   }
   finished_ = true;
   wake_.notify_all();
+}
+
+// Parks until a pass is due: a request was accepted, a refused request's gap has ended, or a stop. A refused request arms a timed
+// wait for the rest of the gap, on this thread, so the pass runs when the gap ends with no further request. The wait never spins:
+// it is armed only while the gap is still open, so its time is at least one millisecond.
+void FetchWorker::WaitForPass(std::unique_lock<std::mutex>& lock) {
+  while (!stop_ && !requested_) {
+    if (!pending_) {
+      wake_.wait(lock);
+      continue;
+    }
+    const std::uint64_t now = now_ms_();
+    const std::uint64_t elapsed = now - last_extra_ms_;
+    if (elapsed >= gap_ms_) {
+      // The deferred pass is the extra pass that starts the next gap, and it runs every request refused before now.
+      pending_ = false;
+      last_extra_ms_ = now;
+      break;
+    }
+    wake_.wait_for(lock, std::chrono::milliseconds(gap_ms_ - elapsed));
+  }
+  requested_ = false;
 }
 
 bool FetchWorker::Request() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!started_ || stop_) return false;
   const std::uint64_t now = now_ms_();
-  if (any_extra_ && now - last_extra_ms_ < kExtraFetchGapMs) return false;
+  if (any_extra_ && now - last_extra_ms_ < gap_ms_) {
+    pending_ = true;  // refused now, not dropped: the wait on the worker's thread runs one pass when the gap ends
+    wake_.notify_all();
+    return false;
+  }
   any_extra_ = true;
   last_extra_ms_ = now;
+  pending_ = false;  // this pass runs every request queued before it
   requested_ = true;
   wake_.notify_all();
   return true;

@@ -157,19 +157,25 @@ class Channel {
   BootResult result_;
 };
 
+// The gap between two extra passes a request may start (the worker's own limit on a request storm).
+inline constexpr std::uint64_t kExtraFetchGapMs = 10ull * 60 * 1000;
+
 // The background pass's thread: one pass, then it parks until a request (one more pass) or a stop. Heap-owned by the platform: on a
 // stop that times out it is left alive with whatever its pass references. The pass must not throw (the build has no exceptions on
-// the Quest). A request within kExtraFetchGapMs of the last extra pass is refused.
+// the Quest). A request within the gap of the last extra pass is refused.
 class FetchWorker {
  public:
   using Pass = std::function<void(const std::function<bool()>& keep_going)>;
   using Clock = std::function<std::uint64_t()>;
-  FetchWorker(Pass pass, Clock now_ms) : pass_(std::move(pass)), now_ms_(std::move(now_ms)) {}
+  // gap_ms: the gap between two extra passes (kExtraFetchGapMs on every platform; a test shortens it).
+  FetchWorker(Pass pass, Clock now_ms, std::uint64_t gap_ms = kExtraFetchGapMs)
+      : pass_(std::move(pass)), now_ms_(std::move(now_ms)), gap_ms_(gap_ms) {}
   FetchWorker(const FetchWorker&) = delete;
   FetchWorker& operator=(const FetchWorker&) = delete;
 
   void Start();
-  // False when the last extra pass started under kExtraFetchGapMs ago, or the worker is stopping or not started.
+  // False when the last extra pass started under the gap ago, or the worker is stopping or not started. A refused request is not
+  // dropped: the worker runs one pass for it when the gap ends, with no further request.
   bool Request();
   // False on a timeout: the thread is detached and this object must stay alive. A repeated or concurrent call only waits up to
   // `wait` for the worker to finish.
@@ -179,20 +185,20 @@ class FetchWorker {
 
  private:
   void Run();
+  void WaitForPass(std::unique_lock<std::mutex>& lock);
 
   Pass pass_;
   Clock now_ms_;
+  std::uint64_t gap_ms_;
   mutable std::mutex mutex_;
   std::condition_variable wake_;
   bool stop_ = false, requested_ = false, finished_ = false, started_ = false;
+  bool pending_ = false;  // a request the gap refused; one pass runs it when the gap ends
   bool any_extra_ = false;
   std::uint64_t last_extra_ms_ = 0;
   std::atomic<bool> keep_going_{true};
   std::atomic<std::size_t> passes_{0};
   std::thread thread_;
 };
-
-// The gap between two extra passes a request may start (the worker's own limit on a request storm).
-inline constexpr std::uint64_t kExtraFetchGapMs = 10ull * 60 * 1000;
 
 }  // namespace nevr_map_channel
