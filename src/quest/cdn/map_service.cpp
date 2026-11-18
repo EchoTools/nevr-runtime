@@ -106,7 +106,7 @@ bool MountWhenManifestReady(std::uint64_t (*records)(), bool (*has)(std::uint64_
                             void (*publish)(const nevr_shadow::Shadow*), std::uint32_t wait_ms,
                             const std::function<bool()>& keep_going) {
   std::uint32_t waited = 0;
-  // KNOWN-WRONG #TBD: a manifest that is not ready within wait_ms abandons the run's map registration for good. Every map now mounts
+  // KNOWN-WRONG #2764: a manifest that is not ready within wait_ms abandons the run's map registration for good. Every map now mounts
   // through it (ADR 0048 decision 16, on demand), so each later request's set is refused too_late, the pin tells the player "did not
   // load" with that token, and nothing retries: the wait runs once per process (State::manifest_waited). Only a restart recovers.
   while (records() == 0) {

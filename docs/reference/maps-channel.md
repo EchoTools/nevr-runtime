@@ -109,7 +109,7 @@ Downloaded maps live in `<nEVR root>\cache\maps\` (`MapsCacheDir`, `src/core/nev
   at boot, fetching nothing (`map_start reason=busy`). A hold on a cached map that ends in a leave says "Loading <id> took too long" or
   "Map <id> could not be loaded", not Downloading.
 - On the Quest a manifest the game has not ready within `kManifestWaitMs` abandons the run's map registration, so every later
-  request is refused `too_late` and nothing retries (KNOWN-WRONG #TBD, `quest/cdn/map_service.cpp`).
+  request is refused `too_late` and nothing retries (KNOWN-WRONG #2764, `quest/cdn/map_service.cpp`).
 - A map fetched during a session mounts in the same run: the fetch worker's request pass calls
   `Channel::MountGroups` with `MountScope`, which grants only the ids the request named (`mount_on_demand` is the scope's
   switch), registers each granted map's set, and calls
