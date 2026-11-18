@@ -126,7 +126,7 @@ func newRig(t *testing.T, stdout string, exit int) *rig {
 
 func newRigExit(t *testing.T, stdout, exit string) *rig {
 	t.Helper()
-	f := testkit.Fake(t, "go", "DISPLAY", "GNUPGHOME", "GH_TOKEN", "GIT_CONFIG_GLOBAL", "HOME", "GOCACHE", "GIT_CONFIG_PARAMETERS", "GOFLAGS")
+	f := testkit.Fake(t, "go", "DISPLAY", "GNUPGHOME", "GH_TOKEN", "GIT_CONFIG_GLOBAL", "HOME", "GOCACHE", "GIT_CONFIG_PARAMETERS", "GOFLAGS", stockDataEnv)
 	py := testkit.Fake(t, "python3")
 	r := &rig{t: t, fake: f, py: py}
 	r.script(f, "stdout", stdout)

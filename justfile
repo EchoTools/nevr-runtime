@@ -8,6 +8,12 @@ set dotenv-load
 default_preset := if os() == "linux" { "mingw-release" } else { "release" }
 preset := env("PRESET", default_preset)
 
+# The stock PC data folder the tests that read the shipped game data use (docs/reference/content-packs.md): a folder holding
+# manifests/ and packages/, which those tests only read. An environment input with no default path, because a path is per
+# machine (AGENTS.md "Nothing that only one machine has"). Empty, those tests skip. The recipes that run them pass it on
+# (test-changed, test-tools, and verify's unittest line); test-go-tools forwards it to go test (#2242).
+stock_data := env("NEVR_STOCK_DATA", "")
+
 # The directory of the Go tools a recipe runs (go-tools builds them there). A test that runs android-repack-apk passes
 # its own directory with `just --set go_tools <dir> --no-deps`, so it builds the tools once and no parallel test
 # writes the checkout's build directory (repackfixture.ToolsSetup).
@@ -884,7 +890,7 @@ test-tools *ARGS: go-tools
     if [[ $whole -eq 1 && "${NEVR_SUITE_RECIPE:-}" != test-tools ]]; then
         exec build/go-tools/suite-run -recipe test-tools -- just test-tools "$@"
     fi
-    exec build/go-tools/test-go-tools -C tools -- python3 tools/run_tool_tests.py "$@"
+    exec env NEVR_STOCK_DATA="{{ stock_data }}" build/go-tools/test-go-tools -C tools -- python3 tools/run_tool_tests.py "$@"
 
 # The tests that cover this branch's change, and nothing else: every path `git diff --name-only --no-renames
 # $(git merge-base origin/main HEAD)` names is looked up in the map, the directory tools/test_map, and the tests of the components that own
@@ -894,7 +900,7 @@ test-tools *ARGS: go-tools
 # prints the plan and runs nothing.
 [positional-arguments]
 test-changed *ARGS: go-tools
-    build/go-tools/test-changed "$@"
+    env NEVR_STOCK_DATA="{{ stock_data }}" build/go-tools/test-changed "$@"
 
 # Writes tools/test_map/, schema 2, the map test-changed reads: a header and one file for each component (tools/cmd/test-map). It reads the build trees
 # (default $NEVR_BUILD_CHECKOUT/build, else <work root>/build-checkout/nevr-runtime/build): ninja's inputs and deps of
@@ -3678,7 +3684,7 @@ verify: go-tools
     # no user git configuration or signing key, a fixed identity, no display.
     # Both halves run, the Go one whatever the Python one did, and the last line names each half that failed.
     just go-tools
-    build/go-tools/test-go-tools -C tools -- timeout -k 10 1500 env -u DISPLAY -u WAYLAND_DISPLAY -u GNUPGHOME -u GIT_CONFIG_PARAMETERS -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=nevr-test GIT_CONFIG_KEY_1=user.email GIT_CONFIG_VALUE_1=test@example.invalid GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=tag.gpgsign GIT_CONFIG_VALUE_3=false GIT_CONFIG_KEY_4=init.defaultBranch GIT_CONFIG_VALUE_4=main python3 tools/unittest_ceiling.py discover -s tools/tests -p 'test_*.py'
+    env NEVR_STOCK_DATA="{{ stock_data }}" build/go-tools/test-go-tools -C tools -- timeout -k 10 1500 env -u DISPLAY -u WAYLAND_DISPLAY -u GNUPGHOME -u GIT_CONFIG_PARAMETERS -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=nevr-test GIT_CONFIG_KEY_1=user.email GIT_CONFIG_VALUE_1=test@example.invalid GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=tag.gpgsign GIT_CONFIG_VALUE_3=false GIT_CONFIG_KEY_4=init.defaultBranch GIT_CONFIG_VALUE_4=main python3 tools/unittest_ceiling.py discover -s tools/tests -p 'test_*.py'
     python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.

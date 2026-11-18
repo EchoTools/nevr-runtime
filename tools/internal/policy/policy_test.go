@@ -620,7 +620,9 @@ func TestJustTestToolsRunsTheGoHalfWhenThePythonHalfFailsAndNamesBoth(t *testing
 	}
 	h := newHalves(t)
 	// The recipe as written, beside a go-tools that does nothing (the binary is already there), run by just itself.
-	jf := strings.Join(attrs, "\n") + "\n" + header + "\n    " + strings.Join(body, "\n    ") + "\ngo-tools:\n    @true\n"
+	// The recipe refers to the justfile's stock_data variable (#2242), declared as the justfile declares it, before the
+	// recipe's attributes (an attribute belongs to the item after it).
+	jf := `stock_data := env("NEVR_STOCK_DATA", "")` + "\n" + strings.Join(attrs, "\n") + "\n" + header + "\n    " + strings.Join(body, "\n    ") + "\ngo-tools:\n    @true\n"
 	if err := os.WriteFile(filepath.Join(h.dir, "justfile"), []byte(jf), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -650,7 +652,8 @@ func TestJustVerifyRunsTheGoHalfWhenThePythonHalfFailsAndNamesBoth(t *testing.T)
 		if l == "just go-tools" {
 			built = true
 		}
-		if strings.HasPrefix(l, "build/go-tools/test-go-tools -C tools -- ") {
+		// The Go half may be started behind the stock-data pass-through (#2242): `env NEVR_STOCK_DATA="{{ stock_data }}" `.
+		if strings.HasPrefix(strings.TrimPrefix(l, `env NEVR_STOCK_DATA="{{ stock_data }}" `), "build/go-tools/test-go-tools -C tools -- ") {
 			if line != "" {
 				t.Fatalf("two test-go-tools lines in verify: %q and %q", line, l)
 			}

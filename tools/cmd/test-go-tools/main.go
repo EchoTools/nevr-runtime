@@ -99,6 +99,10 @@ const (
 	exitSetup = 2
 	// shelfEnv names another shelf file than <module dir>/test_shelf.json (a test gives one of its own).
 	shelfEnv = "NEVR_TEST_SHELF"
+	// stockDataEnv names the stock PC data folder the tests that read the shipped data use (docs/reference/content-packs.md).
+	// The hermetic environment drops every caller variable, so this one is forwarded when the caller set it (#2242): the
+	// tests skip on an empty value, as on an unset one.
+	stockDataEnv = "NEVR_STOCK_DATA"
 	// shelfName is the shelf's file name in the module directory (tools/test_shelf.json).
 	shelfName = "test_shelf.json"
 	// pythonLogPrefix starts the line in which the Python runner names its log (tools/run_tool_tests.py).
@@ -195,7 +199,11 @@ func testTools(opts options, ctx context.Context, args []string, getenv func(str
 			log.Warn("run root not removed", "error", err.Error())
 		}
 	}()
-	env, err := testkit.EnvAt(scratch, getenv, goPath)
+	var forwarded []string
+	if v := getenv(stockDataEnv); v != "" {
+		forwarded = append(forwarded, stockDataEnv+"="+v)
+	}
+	env, err := testkit.EnvAt(scratch, getenv, goPath, forwarded...)
 	if err != nil {
 		stream.Close()
 		fmt.Fprintf(stderr, "test-tools: FAIL cannot make go test's environment: %v\n", err)

@@ -81,6 +81,11 @@ A step that reads any other outside file takes it by `-input name=<file>` (repea
 and when its sha-256 is not the step's pin; the error names the flag and both digests. A name is a key the step owns, never a
 path, so a step reaches only the file its flag gave (`tools/cmd/content-pack-build/recipe_input.go`).
 
+The tests that read the stock files (`tools/cmd/content-pack-build`, `tools/internal/radpack`) take the stock PC data
+folder from `NEVR_STOCK_DATA`: a folder holding `manifests/` and `packages/`, which they only read. The justfile reads the
+variable from the environment with no default path, and `just test-changed`, `just test-tools` and `verify` pass it on; with it
+unset or empty those tests skip with a line that names it (`.env.example` lists it empty).
+
 ## A pack's records as a CDN label
 
 `tools/cmd/cargo-pack -content-pack <pack folder> -label <label> -platform windows-x86_64 -out <dir> -max-window <bytes>`
