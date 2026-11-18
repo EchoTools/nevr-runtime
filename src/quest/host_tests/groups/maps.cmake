@@ -61,3 +61,15 @@ nevr_ht_test(map_request_drain_test GROUP shared NOEXC PTHREAD INCS src third_pa
 nevr_ht_test(map_list_groups_test GROUP shared NOEXC PTHREAD INCS src third_party/monocypher/src OBJS o_map_monocypher
   SRC src/quest/tests/map_list_groups_test.cpp src/core/map_channel.cpp src/core/map_local_precedence.cpp src/core/config_alias.cpp
       src/core/map_request.cpp src/core/map_fetch_queue.cpp src/core/map_session_pin.cpp src/core/map_server_hold.cpp ${_maps_mount_core})
+
+# The Quest's map grants (quest/cdn/map_mount.cpp; ADR 0048 decisions 5, 6 and 7): QuestMounter's script, set and alias grants and its
+# withdraw, and ApplyMount, over the real script table, set registry and alias table with the fake files of the map-set fixture. The core's
+# DecideMount (core/map_channel.cpp) is linked as the Quest links it.
+nevr_ht_test(map_mount_test GROUP shared NOEXC PTHREAD DL ENV ${_shared_env} INCS ${_maps_sent} sdk/include src third_party/monocypher/src
+  OBJS o_map_monocypher
+  SRC src/quest/tests/map_mount_test.cpp src/quest/cdn/map_mount.cpp src/quest/sentinel/map_sets.cpp
+      src/quest/plugin/script_redirect.cpp src/quest/plugin/map_scripts.cpp src/core/resource_set_registry.cpp
+      src/core/resource_shadow.cpp src/core/config_alias.cpp src/core/map_channel.cpp src/core/map_request.cpp
+      src/core/map_fetch_queue.cpp src/core/map_session_pin.cpp src/core/map_server_hold.cpp src/quest/sentinel/hook_log.cpp
+      src/core/script_image_rules_elf.cpp ${_maps_mount_core}
+  LIBS ${NEVR_ZSTD_LIB})
