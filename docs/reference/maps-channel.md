@@ -131,22 +131,25 @@ Downloaded maps live in `<nEVR root>\cache\maps\` (`MapsCacheDir`, `src/core/nev
   `ServeSessionRequests`): a map the mount grants reads "join again when it is ready" and mounts during this run; a map this run
   already mounts at another version (`mounted_other_version`) reads "the update ... applies the next time you start the game", since
   the mounted version stays until the game starts again. A group request that does both says both.
-- The session pin (`SetChannelView`, `SetMountedPins`) has no production caller on the PC, so a client does not yet
-  decide a version skew from the mounted pins. KNOWN-WRONG #TBD (K6).
+- The PC session pin's view is set through `SetChannelView` by the boot's view (`PublishBootView`) and by each request the
+  worker serves (`ServeSessionRequests`, `ServeMountOnly`), all in `src/runtime/content/map_channel.cpp`. `SetMountedPins`
+  and `MountedPins` (`src/core/map_session_pin.cpp`) have no production caller, so a client does not decide a version
+  skew from the mounted pins. KNOWN-WRONG #TBD.
 
 ### Quest client
 
 - `StartFromConfig` (`src/quest/cdn/map_start.cpp`) is called from the sentinel's integration step that runs after the
   `CFile` request-log hook installs (`src/quest/integration/production_steps.cpp`). It calls `Start`
   (`src/quest/cdn/map_service.cpp`).
-- `Start` arms the session request (`ArmSessionGroupRequest`) and its background pass fetches the same
-  `RecordedGroupSeams` groups as the PC.
+- `Start` installs the request entry: `nevr_maps::InstallRequestSeams` (`src/core/map_request.cpp`) routes the session's group
+  request and the session pin's map request into one `MapRequests` queue. The worker serves that queue first
+  (`ServeSessionRequests`, `ServeMountOnly`), then runs its background pass over the groups `RecordedGroupSeams` names, as the
+  PC does.
 - The Quest's mounter is built with `signed_only` false (`src/quest/cdn/map_service.cpp`).
 - The Quest's pass is the core's on-demand `FetchPass`, so it refreshes held maps and downloads only what its groups ask
-  for, as the PC does. It has no request entry: a session's group is recorded for the pass, and a map the session pin
-  lacks is not requested. KNOWN-WRONG #TBD (K6: the Quest request entry).
-- A map the pass stored mounts in the same run, on the pass's own thread: `Start` calls `Channel::MountGroups` for the
-  groups that stored a map, then `MountLaterNow` (`src/quest/cdn/map_service.cpp`), which calls `map_sets::MountLater`
+  for, as the PC does. A map the session pin lacks is requested through the request entry above.
+- A map the pass stored mounts in the same run, on the pass's own thread: the pass calls `MountGranted` for the groups that
+  stored a map, which runs `Channel::MountGroups` and then `MountLaterNow` (`src/quest/cdn/map_service.cpp`), which calls `map_sets::MountLater`
   (`src/quest/sentinel/map_sets.h`) and hands the resource request hook (`PublishMapSets`) the one new shadow of every
   mounted set. The same registry rules as the PC apply: no map is withdrawn once mounted, and each later mount keeps the
   shadow it replaced for the process. The Quest records the later mount as `map_set_mount` with `later=true`.
@@ -175,7 +178,8 @@ because nothing mounts a cached map at boot; any other unpinned session is a sta
 - **PC registration:** `RegistrationEntries` has no caller. KNOWN-WRONG #TBD: a server does not report its pins at
   registration.
 - **Quest login:** the login's `map_report` is set to `LoginEntries` (`src/quest/integration/production_steps.cpp`).
-- **Quest tick:** `InstallTick` (`src/quest/cdn/map_pin_game.cpp`) has no caller. KNOWN-WRONG #TBD.
+- **Quest tick:** `Start` calls `pin::InstallTick` (`src/quest/cdn/map_service.cpp`), which registers the pin's frame work
+  (`src/quest/cdn/map_pin_game.cpp`) and logs `map_pin status=on`. A refusal is logged as a `map_pin` Warning with its reason.
 
 ### Dedicated server
 
@@ -242,7 +246,7 @@ Map file contents are never logged. A script's bytes are never logged. A path or
 Every `KNOWN-WRONG #TBD` on this page marks a part the code states is not wired yet:
 
 - `StopFetch` has no caller, so the PC shutdown path does not stop the background fetch.
-- The Quest has no request entry (K6).
+- `SetMountedPins` and `MountedPins` have no production caller, so a client does not decide a version skew from the mounted pins.
 - `RegistrationEntries` has no caller, so a server does not report its pin at registration.
-- The Quest's `InstallTick` has no caller, so the Quest does not run the pin's tick.
 - No local level name or local map id is supplied on either platform, so local precedence does not skip any CDN map.
+- Nothing restarts a dedicated server whose mounted group has a newer version; the server hosts the new version only after it is restarted.
