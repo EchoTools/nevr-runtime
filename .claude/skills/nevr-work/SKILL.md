@@ -41,7 +41,7 @@ Each gate has a proof to produce. A gate you did not pass is named as not passed
 
 ### 1. Orient
 
-Read `AGENTS.md`, the global `CLAUDE.md` if you are a maintainer seat, `git log --oneline -20`, `git status`, and the
+Read `AGENTS.md` (the only instructions file; no file outside the checkout adds a rule), `git log --oneline -20`, `git status`, and the
 issue the unit tracks, when it has one (a `docs` change has none, and neither has work marked as having none: "Review, verification and landing"). Read the standard for the work you will
 do (`AGENTS.md` "For contributors", "Required reading": verification, logging, naming, planning, n-rules). For C++ or build work
 read the C++ Mingw Addendum at the end of `AGENTS.md`; a Quest change is built with the NDK, not MinGW

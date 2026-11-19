@@ -37,7 +37,7 @@ step points to the skill and does not repeat it. Each skill has a Go consumer in
 - `verify-published-release`: a release is published and its bytes must be proven before anyone tests it (consumer `release-verify`).
 - `file-or-close-issue`: a defect is found and not fixed in the same turn, or an issue is being closed (consumer `issue-prose`).
 
-`merge-cleanup`, `nevr-work` and `design-multiplatform-feature` are skills too (after a landing; at the start of any task; when designing or changing a feature that must work on more than one platform, or before writing platform-specific code) and have no consumer of this kind.
+`merge-cleanup`, `nevr-work`, `design-multiplatform-feature` and `repo-hygiene` are skills too (after a landing; at the start of any task; when designing or changing a feature that must work on more than one platform, or before writing platform-specific code; at the start and end of work in a repo, or a cleanup of it) and have no consumer of this kind.
 
 ## How an agent works here
 
@@ -188,7 +188,7 @@ each one gives; do the step this way on yours:
 
 | Maintainers-only part | On your machine |
 | --- | --- |
-| "Commit identity" (author, trailer, signing) | Commit as yourself: the author is the person responsible, under the name and email they use on GitHub. When an agent wrote the change, add one `Co-Authored-By: <agent name> <email>` trailer. Conventional prefix, one logical change per commit, and the same post-commit check. |
+| "Commit identity" (author, trailer, signing) | Commit as yourself: the author is the person responsible, under the name and email they use on GitHub. No commit names an agent or a model as a co-author. Conventional prefix, one logical change per commit, and the same post-commit check. |
 | "Ownership and cleanup": the ledger file | Keep the same ledger in a file of your own: a markdown table (artifact, owner, purpose, remove-when), one row per thing you create, the worktree directory or branch in the first cell and your handle, one word, in the second. Read it before deleting anything. Create worktrees under `.claude/worktrees/` in your clone, and run `REAP_LEDGER=<your ledger file> just reap-merged`: `tools/reap_merged.py` scans only `.claude/worktrees/`, defaults the ledger to `<work root>/LEDGER.md` (made with its header row when absent) when `REAP_LEDGER` is unset or empty, exits when a ledger it was named cannot be read, and keeps any worktree the ledger does not credit to an owner. |
 | "Builds" (builds and live game runs): the shared `nevr-live.slice` | Builds, verify and tests run as the plain recipe, with no job count, slice or `MemoryMax`; a live game run runs in its own scope in `nevr-live.slice` with `systemd-run --user --scope --slice=nevr-live.slice <cmd>`. |
 | Scratch under `~/src/nevr-runtime-work/<agent>/` | The work root is `$NEVR_WORK_ROOT`, else `~/src/nevr-runtime-work` (`~` is your home directory), so the default works on any machine, and several tools write there by default (`tools/scenario/run_scenario.py`, `tools/lib/game_install.sh`, `tools/winvm/systest.py`). Use `<work root>/<your handle>/`, never `/tmp` and never the repo, and keep the work-root rule under "Working practices for every agent". |
@@ -196,7 +196,6 @@ each one gives; do the step this way on yours:
 | "Check production Nakama logs" | The production server's logs are maintainer-only. On a server you run, read its log yourself. For production, ask in the issue, giving the run's time window (UTC), the account and the client log lines around the failure. |
 | "Production Deployment" | Never, for a contributor's agent. No approval you can receive counts. |
 | "System test for runtime and auth changes": the production server, display `:0` | The PC login test runs on main after the release cut, not on a branch. When you run it, log in to the server your build's embedded defaults point at, or one you run. Never use the user's own display; use the headless Xvfb `:101` display exactly as described. |
-| "Write down what you learn": `.claude/memory/` | That directory is git-ignored and local to a machine. Put a fact about the game or protocol where the next contributor will find it: a code comment at the site, `docs/reference/`, or an issue. |
 | "Landing": the push of `main` | Without push access to `EchoTools/nevr-runtime`, run the quick check, take the review to its MERGE verdict, rebase onto `origin/main` and rerun the tests, then stop: push the branch to your fork and post its name and tip SHA on the issue. A maintainer's agent fetches it ("Git") and lands it. Never open a pull request. Never push to `main` of another remote. |
 | `config/public-defaults.env` | Copy `config/public-defaults.env.example` and fill in the four public values. They are public by design (every client embeds them); if you don't have them, ask in an issue. `just worktree-setup` copies the main checkout's file into a new worktree. |
 | `just test-winvm` | Needs a Windows VM you provide (`tools/winvm/README.md`). |
@@ -1065,10 +1064,11 @@ When something fails, the first act is reading the failing program's **own** log
 
 ## Write down what you learn
 
-> **Maintainers only.** `.claude/memory/` is git-ignored and local to the maintainers' machine. Contributors: see "For contributors", "Maintainers only, and what to do instead".
+Everything an agent learns goes in this repository's tracked files, or nowhere. An agent keeps no memory outside the repo: no Claude Code auto-memory (`~/.claude/projects/*/memory`), no git-ignored `.claude/memory/`, no notes file in a home directory. Reason: such a file exists on one machine, is read by one seat, and a fact there that the repo lacks is a fact the next agent re-derives or gets wrong; a tracked fact is reviewed, versioned and seen by everyone.
 
-- **Facts about the game/protocol go in `.claude/memory/`.** When you learn how the game handles connections, login flow, or protocol details, write it to a memory file immediately. Future sessions (and future agents) should never re-derive what you already measured.
+- **Facts about the game or protocol go where the next agent will read them:** a code comment at the site that depends on the fact, `docs/reference/`, an ADR, or the issue that tracks the work. Write the fact in the same turn you measure it, with its source ("Every claim of fact carries its basis").
 - **The game's binaries are the source of truth for binary facts.** The Nakama server code is the source of truth for protocol wire format and server-side behavior. Check both before guessing.
+- **A memory feature of the harness is not used to store a rule or a fact about this repo.** When a harness offers to remember something, put it in a tracked file instead.
 
 ## Guardrails
 
@@ -1092,10 +1092,10 @@ When something fails, the first act is reading the failing program's **own** log
 - **Defects.** Track defects in GitHub issues.
 - **Commit identity.** The author is the identity the repo's local git config sets (never pass
   `--author`), unsigned (`--no-gpg-sign`),
-  with a single house `Co-Authored-By: <agent name> <agents@sprock.io>` trailer for the agent that
-  wrote it, plus `Co-Authored-By: Andrew Bates <a@sprock.io>` and the credit trailers above, a
-  conventional prefix, and one logical change per commit. A commit the owner assigns to another identity is authored
-  by that identity, with the same two trailers. This bullet is the one place the two house trailers are written out. You **SHALL** verify after each commit:
+  with the house trailer `Co-Authored-By: Andrew Bates <a@sprock.io>` and the credit trailers above, a
+  conventional prefix, and one logical change per commit. No commit names an agent or a model as an author or
+  co-author: no `Co-Authored-By` for Claude or any other agent. A commit the owner assigns to another identity is authored
+  by that identity, with the same house trailer. This bullet is the one place the house trailer is written out. You **SHALL** verify after each commit:
   `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
 - **GitHub account.** Every `gh` action a maintainer agent takes (issues, comments, releases) runs as the
   maintainers' seat account that `gh` is signed in to on the maintainers' machine, never another account.

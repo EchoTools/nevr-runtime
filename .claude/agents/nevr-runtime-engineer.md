@@ -154,7 +154,7 @@ stale snapshot.
   so a `just dist` package does not carry it. `DIST_DLLS` / `DIST_DBG_FILES` no
   longer exist (`git grep -nE 'DIST_DLLS|DIST_DBG_FILES' origin/main -- CMakeLists.txt`
   returns nothing).
-- **Maintainers only.** A private build module can be present under `modules/` (see `CMakeLists.txt`, "Optional drop-in build modules"). Its notes are in the maintainers' private notes. Never put its contents, paths or findings in this repo, and don't report it as linked or unlinked without building with it present.
+- **Maintainers only.** A private build module can be present under `modules/` (see `CMakeLists.txt`, "Optional drop-in build modules"). Never put its contents, paths or findings in this repo, and don't report it as linked or unlinked without building with it present.
 
 ## Compiler warnings — what `-Werror` actually covers
 
@@ -444,7 +444,7 @@ or other N-ledger on main). Trust the issues rather than trusting this section t
   ledger row for every worktree, branch and scratch file you create in the ledger file
   `REAP_LEDGER` names (maintainers only).
 - **Maintainers only.** Push `main` only with `just land`, from the branch's own worktree (AGENTS.md "Landing"). Never `git push --mirror`, never force-push `main`, and never push a raw SHA from a maintainer clone.
-- `.claude/` is gitignored except the files `.gitignore` negates: this primer and ten skills (merge-cleanup, nevr-work, settle-the-instructions, prose-to-guard, landed-commit-evidence, mutant-proof, run-on-a-copy, verify-published-release, file-or-close-issue, design-multiplatform-feature). Track nothing else under it without the owner's word. Maintainer-private material never goes in this repo.
+- `.claude/` is gitignored except the files `.gitignore` negates: this primer and eleven skills (merge-cleanup, nevr-work, settle-the-instructions, prose-to-guard, landed-commit-evidence, mutant-proof, run-on-a-copy, verify-published-release, file-or-close-issue, design-multiplatform-feature, repo-hygiene). Track nothing else under it without the owner's word. Maintainer-private material never goes in this repo.
 - `extern/evr-test-harness` is **EXCISED** (commits 1c7aea0 + 93ce548). The symlink, the `replace`
   directives, the harness `require`, and the harness-importing integration suites
   (e2e, multiplayer, ping_latency, plugin, simple, telemetry in tests/system;
@@ -518,9 +518,7 @@ that one line, wherever it is, and refuses a report with none or more than one.
 # INVESTIGATION DISCIPLINE
 
 For any incident, hang, crash, or "why is it doing that" task, the core,
-non-negotiable rules are below (the `devops-investigation` skill file this section once
-pointed at, in a maintainer-only backup, does not exist; the rules are
-kept here, and AGENTS.md "Analysis: read what the program wrote, before anything else"
+non-negotiable rules are below (and AGENTS.md "Analysis: read what the program wrote, before anything else"
 adds: read the failing program's own logs first):
 
 - **Every action answers a stated question.** Before a command, a file read, or
@@ -591,7 +589,7 @@ adds: read the failing program's own logs first):
 - Put maintainer-private material in this repo.
 - Declare success without quoting the actual verification output. "Should work"
   and "the build succeeded so the fix is in" are not verification
-  [global CLAUDE.md §Critical Rules].
+  [AGENTS.md "Every claim of fact carries its basis"].
 
 ## Common Mistakes
 

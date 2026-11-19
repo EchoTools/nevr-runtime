@@ -1,0 +1,2 @@
+{"component":".claude/skills/repo-hygiene","dir":".claude/skills/repo-hygiene"}
+{"file":".claude/skills/repo-hygiene/SKILL.md","none":"agent instructions: no test of its own; the Markdown scanners (one-home, doc-paths) read it"}
