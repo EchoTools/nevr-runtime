@@ -106,7 +106,13 @@ After "How an agent works here", these come before every other rule in this file
   it rests on (an agent's report, an earlier session's summary, a recipe comment, the name of a log event, a commit
   subject, a recollection). `not checked` is an interim marker and never where the work stops: read it in the same turn
   and replace the claim with its read basis (rule 6 of "How an agent works here"). Two hashes are compared only when they
-  are the same kind (an md5 equals or differs from an md5, a sha256 from a sha256). The FACT / INFERENCE / HYPOTHESIS tags of
+  are the same kind (an md5 equals or differs from an md5, a sha256 from a sha256). The rule covers every sentence of an
+  answer, the framing and summary sentences too: a quantifier or a characterisation of behaviour ("most", "hardly any",
+  "none", "only", "unused") is a claim of fact and carries its own basis. A count of lines, files or commits measures
+  size; it is no basis for a claim about what runs, what a player sees or whether a code path is used, which is read from
+  the code that gates and calls it. Before an answer goes out, read each sentence for a claim with no basis, and delete it
+  or mark it `not checked`. A statement to the owner carries a footnote the owner can verify (the command run, or
+  `path:line`), or is marked `not checked`. The FACT / INFERENCE / HYPOTHESIS tags of
   `.claude/agents/nevr-runtime-engineer.md` are the same demand for the claims of an investigation. Reason: the owner decides what to ship, credit,
   test and keep on what a seat reports, and a guess worded like a measurement cannot be told from one. Rule 6 (never stop
   and hand the decision back) is about actions and decisions; it is no reason to answer a question of fact unread.
