@@ -99,6 +99,17 @@ After "How an agent works here", these come before every other rule in this file
   paging until the last page) and say how much you read. A statement that a text lacks something names what was read and
   how much of it. Reason: a claim made from a cut-off text is a claim about the part that was read, and the owner cannot
   tell which part that was.
+- **Every claim of fact carries its basis, and a claim not yet read is marked, never worded as a measurement.** Before
+  you state to anyone (the owner, a seat you dispatch, a commit message, an issue) as fact what a build, a file, a function, a hook or
+  a run does or contains, read it or run the command, in this session. State the claim with its basis: `ran <command>:
+  <output>`, or `read <path>` (whole, or the lines). A claim you have not read yet is marked `not checked` and names what
+  it rests on (an agent's report, an earlier session's summary, a recipe comment, the name of a log event, a commit
+  subject, a recollection). `not checked` is an interim marker and never where the work stops: read it in the same turn
+  and replace the claim with its read basis (rule 6 of "How an agent works here"). Two hashes are compared only when they
+  are the same kind (an md5 equals or differs from an md5, a sha256 from a sha256). The FACT / INFERENCE / HYPOTHESIS tags of
+  `.claude/agents/nevr-runtime-engineer.md` are the same demand for the claims of an investigation. Reason: the owner decides what to ship, credit,
+  test and keep on what a seat reports, and a guess worded like a measurement cannot be told from one. Rule 6 (never stop
+  and hand the decision back) is about actions and decisions; it is no reason to answer a question of fact unread.
 
 ## Commits, versions and requirement words
 
