@@ -118,10 +118,11 @@ class Prepare(unittest.TestCase):
             qb.prepare(self.ref, out, expected_sha256=self.sha, rename=rename_dropping)
         self.assertFalse(out.exists())
 
-    def test_the_pin_is_the_wave_2_base_and_not_the_10_30_reference(self):
-        """v6.18.0's combat APK is built on the wave-2 base (kotorvr/echoquest-combat release wave2-1104-fdad4965af): the 10-30
-        reference APK (d0b51a01...) with the six wave-2 entries in place. prepare refuses the 10-30 APK from now on."""
-        self.assertEqual(qb.REFERENCE_APK_SHA256, "be30121cd6d45d62b26058d04b94941ebb143d80d5f92df81517b57a4d4287e1")
+    def test_the_pin_is_the_final_1116_base_and_no_earlier_one(self):
+        """The combat APK is built on the final-1116 base (kotorvr/echoquest-combat release final-1116-04a11e82d8): the wave-2
+        base plus the release's APK delta. prepare refuses the wave-2 base (be30121c...) and the 10-30 APK (d0b51a01...)."""
+        self.assertEqual(qb.REFERENCE_APK_SHA256, "6e37968da6c170231a05f19714fe19606715c375d7cce4a28680011187e4516c")
+        self.assertNotEqual(qb.REFERENCE_APK_SHA256, "be30121cd6d45d62b26058d04b94941ebb143d80d5f92df81517b57a4d4287e1")
         self.assertNotEqual(qb.REFERENCE_APK_SHA256, "d0b51a014647643a30469ed318968b17374f39286b7d9ded5723f39299eedb48")
 
 

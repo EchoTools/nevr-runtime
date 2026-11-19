@@ -15,7 +15,7 @@ import (
 // The fixture is a synthetic AArch64 ELF built by the fixture package: an executable segment with twelve sites per entry
 // and a data segment with twelve lists of three entries. A pin of the fixture must equal the fixture built for the new
 // text. One real-file case runs only when NEVR_REFERENCE_LIBVRAPI names the 12-module libvrapi.so of the 10-30 reference APK
-// (d0b51a01..., sha-256 below; not the 13-module runtime of the pinned wave-2 base), which the lane's expected output
+// (d0b51a01..., sha-256 below; not the 13-module wave-2 runtime the pinned base carries), which the lane's expected output
 // (md5 0748d0e3...) is compared with.
 
 const (

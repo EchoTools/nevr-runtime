@@ -10,7 +10,7 @@ makes the base a fixed input and checks the result.
 WHAT.
 
     quest_release_base.py prepare --apk REFERENCE.apk --out BASE.apk
-        Refuses unless REFERENCE.apk is the pinned combat base (REFERENCE_APK_SHA256, the wave-2 base). Writes BASE.apk: the reference
+        Refuses unless REFERENCE.apk is the pinned combat base (REFERENCE_APK_SHA256, the final-1116 base). Writes BASE.apk: the reference
         APK with its package renamed to com.readyatdawn.r15 and the launcher label "Echo VR" (quest_apk_rename_package.py,
         the `just quest-reference-base` step), and refuses unless BASE.apk holds every REFERENCE_ENTRIES name.
 
@@ -59,14 +59,16 @@ def runtime_carries_table(data: bytes) -> bool:
 
 TAG = "NEVR.QUEST.BASE"
 
-# The wave-2 combat base (kotorvr/echoquest-combat release wave2-1104-fdad4965af, commit c5a67e8), unsigned: the 10-30 reference
-# combat build (sha256 d0b51a014647643a30469ed318968b17374f39286b7d9ded5723f39299eedb48, package com.readyatdawn.afk, versionCode
-# 4987566) with its META-INF dropped and six entries replaced by the wave-2 ones: the
-# 13-module runtime libvrapi.so (sha256 1212fcea..., quest_apk_rename_package.py KNOWN_RUNTIMES), four script libraries and
-# assets/afk_default_on.txt. Every entry of the release's APK delta is in it with the release's sha256; its libr15.so is the
-# reference build's own (kLibR15ReferenceSha256[1], src/quest/patch/libr15_patch_table.h). The repack writes
+# The final-1116 combat base (kotorvr/echoquest-combat release final-1116-04a11e82d8), unsigned, 717 entries, 108014758 bytes: the
+# wave-2 combat base (sha256 be30121cd6d45d62b26058d04b94941ebb143d80d5f92df81517b57a4d4287e1: the 10-30 reference combat build,
+# package com.readyatdawn.afk, versionCode 4987566, with META-INF dropped and the wave-2 runtime, script libraries and
+# assets/afk_default_on.txt in place) plus all 188 entries of the release's APK delta (145 replaced, 43 added; 139 of the replaced are byte-identical), each with the md5
+# the release's manifest lists. The release ships no complete APK and its delta leaves out the three runtime libraries of Ducky's build
+# (libvrapi.so, libopenxr_loader.so, libovrplatformloader.so) and the manifest, so the base keeps the wave-2 ones: the
+# 13-module runtime libvrapi.so (sha256 1212fcea..., quest_apk_rename_package.py KNOWN_RUNTIMES). Its libr15.so is the one wave 2
+# shipped (sha256 6e9db28d..., kLibR15ReferenceSha256[1], src/quest/patch/libr15_patch_table.h). The repack writes
 # tools/quest-afk-default-on.txt over the base's switch list, as for any base.
-REFERENCE_APK_SHA256 = "be30121cd6d45d62b26058d04b94941ebb143d80d5f92df81517b57a4d4287e1"
+REFERENCE_APK_SHA256 = "6e37968da6c170231a05f19714fe19606715c375d7cce4a28680011187e4516c"
 
 # Entries the reference build carries and the store APK lacks: a base without them is not the reference build.
 REFERENCE_ENTRIES = ("assets/afk_default_on.txt", "lib/arm64-v8a/libassetpatch.so")

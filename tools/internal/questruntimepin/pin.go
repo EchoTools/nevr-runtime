@@ -20,7 +20,7 @@ const (
 	// pin replaces.
 	StockEntryMD5 = "4911ef7f1248580ee2978590d581dbfd"
 	// Sites is the gated-module count of the 10-30 reference APK's runtime (d0b51a01..., 12): one site and one ASCII copy of
-	// an entry per module. The runtime of the pinned wave-2 base (tools/quest_release_base.py REFERENCE_APK_SHA256) holds 13
+	// an entry per module. The wave-2 runtime the pinned base carries (tools/quest_release_base.py REFERENCE_APK_SHA256) holds 13
 	// (KnownSites); the tests name the 12 case.
 	Sites = 12
 	// Chunks is the number of 8-byte compare chunks in a 32-hex text.

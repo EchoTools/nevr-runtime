@@ -226,7 +226,7 @@ its gate in `package_release.py` and `verify_symbols.py`, the signer's optional 
 
 The APK the manifest lists as `quest-apk` is a repack of the reference combat build, so no workflow builds it. Its recipe is
 `just release-quest-reference-apk`, asked for by that name: the default `just release-quest-apk` builds the arena APK (below,
-docs/adr/0047). Its input is the pinned combat base (the wave-2 base: the reference build with the wave-2 entries in place, `REFERENCE_APK_SHA256`), the recipe's argument, which defaults to `NEVR_QUEST_REFERENCE_APK`: `tools/quest_release_base.py` refuses any other file
+docs/adr/0047). Its input is the pinned combat base (the final-1116 base: the wave-2 base with the release's APK delta in place, `REFERENCE_APK_SHA256`), the recipe's argument, which defaults to `NEVR_QUEST_REFERENCE_APK`: `tools/quest_release_base.py` refuses any other file
 (its sha256 is pinned there) and renames it to this package first. The store APK carries none of the reference build's
 combat entries (script libraries, `libassetpatch.so`, the reference `libvrapi.so`, `assets/afk_default_on.txt`), and an
 APK repacked from it has no combat (#1994). From a clone whose HEAD is the release tag's commit, after the tag is on origin

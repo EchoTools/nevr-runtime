@@ -18,8 +18,9 @@ Every input is read as data (`strings`, `sha256sum`, `readelf`, `aarch64-linux-g
 searches). Nothing is loaded or run.
 
 - **The reference lifts.** `lib/arm64-v8a/lib<hash>.so` of the reference combat APK: kotorvr's echoquest-combat repository, commit c5a67e8
-  ("wave 2"), APK sha256 `be30121cd6d45d62b26058d04b94941ebb143d80d5f92df81517b57a4d4287e1`, 572 `lib<hash16>.so` files. It is the APK
-  `tools/quest_release_base.py` pins (`REFERENCE_APK_SHA256`).
+  ("wave 2"), APK sha256 `be30121cd6d45d62b26058d04b94941ebb143d80d5f92df81517b57a4d4287e1`, 572 `lib<hash16>.so` files. It is the base the pinned
+  final-1116 base is composed from (`REFERENCE_APK_SHA256` in `tools/quest_release_base.py`). KNOWN-WRONG #2780: the pinned base replaces
+  5 of the 18 lifts here (`6fa8cc9c`, `b7d10bcf`, `d4653fc2`, `e0fdfda9`, `e57332952e1cd478`); the other 13 are byte-identical.
 - **Cat's images.** His script DLLs as his 82ad7ba tools write them, one per row, named by the sha256 in the table.
 - **Stock images.** The PC game's own script images of the same hashes (`StreamingScriptWin10` resources), where a stock one exists, to tell
   Cat's bytes from the game's.
