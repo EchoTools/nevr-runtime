@@ -15,6 +15,8 @@
 #include "runtime/hook/patching.h"
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/patch/invite_wizard.h"
+#include "runtime/patch/menu_press.h"
+#include "runtime/patch/plugins_card.h"
 
 // CncaGameSpace::SendComponentEvent (echovr.exe 0x14050fb60): RCX = the game space, RDX = the SComponentEvent,
 // R8D = flags. The game's own code reads the event at once (word 0 on entry, word 2 as the sender), so the observer
@@ -49,6 +51,18 @@ void Observe(std::uint64_t space, std::uint64_t eventAddress) {
     std::memcpy(out, reinterpret_cast<const void*>(address), length);
     return true;
   };
+  // #1857: a click on the PLUGINS card. This runs for every call of SendComponentEvent (about 25 callers, grab events
+  // included; event-driven callers, rate not measured), so the cost is the point: ReadPluginsPress reads the event symbol,
+  // the component of a card click, and walks the sender only for a press on this card. The line is built into a fixed buffer, only for that
+  // press, which is a click by the player and the first line an operator or a tester looks for.
+  nevr_menu_press::Press press;
+  nevr_menu_press::Sender sender = nevr_menu_press::Sender::Unreadable;
+  if (nevr_plugins_card::ReadPluginsPress(reader, static_cast<std::uintptr_t>(space), event, &press, &sender)) {
+    char line[nevr_plugins_card::kPluginsLineBytes];
+    nevr_plugins_card::PluginsPressLine(line, sizeof(line), press, sender, seen);
+    Log(EchoVR::LogLevel::Info, "%s", line);
+  }
+
   nevr_invite_choices::Event e;
   const nevr_invite_choices::Read read =
       nevr_invite_choices::ReadEvent(reader, static_cast<std::uintptr_t>(space), event, &e);
