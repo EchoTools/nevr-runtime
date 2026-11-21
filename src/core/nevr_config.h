@@ -178,6 +178,32 @@ class NevrConfig {
   ConfigSetResult Set(const std::string& path, const std::string& value) noexcept;
   ConfigSetResult Set(const std::string& path, const char* value) = delete;
 
+  /// Turns `plugins[index]`'s `enabled` on or off in the bound file, the same splice-and-rename as Set: every other byte is
+  /// kept. Inserts `enabled:` at the entry's child indentation when the entry has none. The index is where the caller read the
+  /// plugin (#1857: the loader keeps list order and two entries may share a name), and `name` is the name it read there, so a
+  /// config.yaml that changed in between cannot make the write land on another plugin: the entry's `name` is compared as the
+  /// loader reads it (the first `name` scalar, `${VAR}` references resolved) and a mismatch, or an entry with no name, is refused.
+  /// An existing `enabled:` is judged as the loader reads it (true/yes/on/1 and false/no/off/0, any other word enabled), not as YAML
+  /// 1.1 does: `enabled: n` is already on, so asking for on writes nothing and asking for off writes `false`.
+  /// On success the loaded `Plugins()[index].enabled` follows the file when that entry is still the plugin `name`; the same lock
+  /// as Set covers the whole edit. Never throws.
+  ///
+  /// The edited text is read back before it is written: the entry count is unchanged, the entry reads as asked, and every other
+  /// entry's `enabled` reads as it did, else "verify_failed".
+  /// A write that cannot be made exactly is refused and nothing is written. The refusals are those of Set that apply, and:
+  ///  - "plugins_missing" (no file, no `plugins` key or a null one), "plugins_not_a_list", "plugins_flow_style",
+  ///    "plugin_index_out_of_range", "entry_not_a_mapping", "entry_flow_style", "duplicate_key" (two `enabled` in the entry);
+  ///  - "plugin_name_mismatch": the entry at `index` is not the plugin `name`.
+  ///  - "entry_has_block_scalar": the entry has no `enabled:` to replace and holds a block scalar (`|` or `>`) anywhere in it. The
+  ///    insert goes after the entry's last indented line, and a `#` line inside a block scalar is its content, not a comment, so
+  ///    the new line would end the scalar early. An existing `enabled:` is replaced in place and is edited even beside a block scalar;
+  ///  - "entry_shared": another list element is the same YAML node as this entry (an anchor, `&name`, and an alias of it,
+  ///    `*name`, in `plugins`), so the text of one is what the other reads and an edit of either would change both. Refused from
+  ///    either end;
+  ///  - "entry_too_complex": the entry's tree, through aliases, is deeper than kMaxConfigDepth or has more than kMaxConfigNodes nodes,
+  ///    so the scan for a block scalar did not finish.
+  ConfigSetResult SetPluginEnabled(std::size_t index, const std::string& name, bool enabled) noexcept;
+
   const std::vector<PluginSpec>& Plugins() const { return plugins_; }
   bool Empty() const { return empty_; }
   /// Names of unset bare ${VAR} references found at load, each once, sorted. Their text stays in

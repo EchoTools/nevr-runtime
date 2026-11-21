@@ -23,6 +23,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -522,6 +523,9 @@ bool OnlySpaceOrComment(const std::string& text, std::size_t from, std::size_t t
 
 const char* BoolText(bool value) { return value ? "true" : "false"; }
 
+constexpr const char* kPluginsKey = "plugins";
+constexpr const char* kEnabledKey = "enabled";
+
 }  // namespace
 
 // What Set writes: a boolean (written as true/false) or a plain word.
@@ -529,6 +533,8 @@ struct NevrConfig::ScalarEdit {
   std::string text;
   bool isBool = false;
   bool boolValue = false;
+  // The bool is a plugin entry's `enabled`: it reads as the loader reads it (ParseBool, anything else enabled), not as yaml-cpp's table does.
+  bool readsAsLoaderEnabled = false;
 };
 
 namespace {
@@ -559,6 +565,7 @@ bool IsPlainWord(const std::string& word) {
 bool ScalarMatches(const YAML::Node& node, const ScalarEdit& edit) {
   if (!node.IsDefined() || !node.IsScalar()) return false;
   if (!edit.isBool) return node.Scalar() == edit.text;
+  if (edit.readsAsLoaderEnabled) return ParseBool(node.Scalar()).value_or(true) == edit.boolValue;
   bool got = false;
   return YAML::convert<bool>::decode(node, got) && got == edit.boolValue;
 }
@@ -600,6 +607,82 @@ std::size_t BlockEnd(const std::vector<std::size_t>& starts, const std::string& 
 std::string LineEnding(const std::string& text, const std::vector<std::size_t>& starts, std::size_t line) {
   const std::size_t end = line + 1 < starts.size() ? starts[line + 1] : text.size();
   return end >= 2 && text[end - 1] == '\n' && text[end - 2] == '\r' ? "\r\n" : "\n";
+}
+
+// Replaces the value of the scalar `key` whose key node is `valueKey` and whose value node is `valueNode`, in place, by the bytes
+// at the span the parser reports; a quoted value keeps its quotes. Shared by Set (a key of a section) and SetPluginEnabled (the
+// `enabled` key of a plugin entry). `unchanged` is set when the value already reads as `edit`.
+Splice ReplaceValue(const std::string& text, const std::vector<std::size_t>& starts, const YAML::Node& valueKey,
+                    const YAML::Node& valueNode, const std::string& key, const ScalarEdit& edit, std::string* out) {
+  Splice result;
+  if (valueNode.IsMap() || valueNode.IsSequence()) return Refused("value_not_a_scalar");
+  std::size_t kOff = 0;
+  if (!OffsetOf(starts, text, valueKey.Mark(), &kOff) || text.compare(kOff, key.size(), key) != 0) {
+    return Refused("position_mismatch");
+  }
+  const std::size_t kLine = static_cast<std::size_t>(valueKey.Mark().line);
+  std::size_t kb = 0, ke = 0;
+  LineSpan(starts, text, kLine, &kb, &ke);
+  std::size_t colon = kOff + key.size();
+  while (colon < ke && (text[colon] == ' ' || text[colon] == '\t')) ++colon;
+  if (colon >= ke || text[colon] != ':') return Refused("position_mismatch");
+  if (valueNode.IsNull() && OnlySpaceOrComment(text, colon + 1, ke)) {
+    // `hand_flip:` with no value: the value goes right after the colon.
+    std::string base = text;
+    base.insert(colon + 1, " " + edit.text);
+    *out = base;
+    result.ok = true;
+  } else {
+    if (!valueNode.IsScalar()) return Refused("value_not_a_scalar");
+    if (valueNode.Tag() != "?" && valueNode.Tag() != "!") return Refused("value_not_plain");  // a tag, e.g. !!str
+    if (ScalarMatches(valueNode, edit)) {
+      *out = text;
+      result.ok = true;
+      result.unchanged = true;
+      return result;
+    }
+    std::size_t vOff = 0;
+    if (!OffsetOf(starts, text, valueNode.Mark(), &vOff)) return Refused("position_mismatch");
+    if (static_cast<std::size_t>(valueNode.Mark().line) != kLine || vOff <= colon) return Refused("value_not_on_key_line");
+    if (vOff >= ke) return Refused("position_mismatch");
+    std::size_t from = 0, to = 0;
+    const char first = text[vOff];
+    if (first == '"' || first == '\'') {
+      // A quoted value: only what is inside the quotes changes, the quotes stay.
+      std::size_t i = vOff + 1;
+      bool closed = false;
+      for (; i < ke; ++i) {
+        if (first == '"' && text[i] == '\\') {
+          ++i;
+          continue;
+        }
+        if (text[i] == first) {
+          if (first == '\'' && i + 1 < ke && text[i + 1] == '\'') {
+            ++i;
+            continue;
+          }
+          closed = true;
+          break;
+        }
+      }
+      if (!closed) return Refused("multiline_scalar");
+      from = vOff + 1;
+      to = i;
+    } else {
+      if (std::string("&*!|>[{%@`").find(first) != std::string::npos) return Refused("value_not_plain");
+      const std::string& scalar = valueNode.Scalar();
+      if (scalar.empty() || text.compare(vOff, scalar.size(), scalar) != 0) return Refused("position_mismatch");
+      const std::size_t after = vOff + scalar.size();
+      if (after < ke && text[after] != ' ' && text[after] != '\t' && text[after] != '#') return Refused("multiline_scalar");
+      from = vOff;
+      to = after;
+    }
+    std::string edited = text;
+    edited.replace(from, to - from, edit.text);
+    *out = edited;
+    result.ok = true;
+  }
+  return result;
 }
 
 // The edit itself. `existing` is the file's text, or null when the file is missing.
@@ -693,81 +776,198 @@ Splice SpliceScalar(const std::string* existing, const std::string& section, con
           *out = base;
           result.ok = true;
         } else {
-          const YAML::Node valueKey = hits[0].first;
-          const YAML::Node valueNode = hits[0].second;
-          if (valueNode.IsMap() || valueNode.IsSequence()) return Refused("value_not_a_scalar");
-          std::size_t kOff = 0;
-          if (!OffsetOf(starts, text, valueKey.Mark(), &kOff) || text.compare(kOff, key.size(), key) != 0) {
-            return Refused("position_mismatch");
-          }
-          const std::size_t kLine = static_cast<std::size_t>(valueKey.Mark().line);
-          std::size_t kb = 0, ke = 0;
-          LineSpan(starts, text, kLine, &kb, &ke);
-          std::size_t colon = kOff + key.size();
-          while (colon < ke && (text[colon] == ' ' || text[colon] == '\t')) ++colon;
-          if (colon >= ke || text[colon] != ':') return Refused("position_mismatch");
-          if (valueNode.IsNull() && OnlySpaceOrComment(text, colon + 1, ke)) {
-            // `hand_flip:` with no value: the value goes right after the colon.
-            std::string base = text;
-            base.insert(colon + 1, " " + v);
-            *out = base;
-            result.ok = true;
-          } else {
-            if (!valueNode.IsScalar()) return Refused("value_not_a_scalar");
-            if (valueNode.Tag() != "?" && valueNode.Tag() != "!") return Refused("value_not_plain");  // a tag, e.g. !!str
-            if (ScalarMatches(valueNode, edit)) {
-              *out = text;
-              result.ok = true;
-              result.unchanged = true;
-              return result;
-            }
-            std::size_t vOff = 0;
-            if (!OffsetOf(starts, text, valueNode.Mark(), &vOff)) return Refused("position_mismatch");
-            if (static_cast<std::size_t>(valueNode.Mark().line) != kLine || vOff <= colon) return Refused("value_not_on_key_line");
-            if (vOff >= ke) return Refused("position_mismatch");
-            std::size_t from = 0, to = 0;
-            const char first = text[vOff];
-            if (first == '"' || first == '\'') {
-              // A quoted value: only what is inside the quotes changes, the quotes stay.
-              std::size_t i = vOff + 1;
-              bool closed = false;
-              for (; i < ke; ++i) {
-                if (first == '"' && text[i] == '\\') {
-                  ++i;
-                  continue;
-                }
-                if (text[i] == first) {
-                  if (first == '\'' && i + 1 < ke && text[i + 1] == '\'') {
-                    ++i;
-                    continue;
-                  }
-                  closed = true;
-                  break;
-                }
-              }
-              if (!closed) return Refused("multiline_scalar");
-              from = vOff + 1;
-              to = i;
-            } else {
-              if (std::string("&*!|>[{%@`").find(first) != std::string::npos) return Refused("value_not_plain");
-              const std::string& scalar = valueNode.Scalar();
-              if (scalar.empty() || text.compare(vOff, scalar.size(), scalar) != 0) return Refused("position_mismatch");
-              const std::size_t after = vOff + scalar.size();
-              if (after < ke && text[after] != ' ' && text[after] != '\t' && text[after] != '#') return Refused("multiline_scalar");
-              from = vOff;
-              to = after;
-            }
-            std::string edited = text;
-            edited.replace(from, to - from, v);
-            *out = edited;
-            result.ok = true;
-          }
+          Splice replaced = ReplaceValue(text, starts, hits[0].first, hits[0].second, key, edit, out);
+          if (!replaced.ok || replaced.unchanged) return replaced;
+          result = replaced;
         }
       }
     }
   }
   if (!result.ok) return Refused("position_mismatch");
   if (!ReadsBack(*out, section, key, edit)) {
+    out->clear();
+    return Refused("verify_failed");
+  }
+  return result;
+}
+
+// Whether the loader (ParsePlugins) reads this plugin entry as enabled: its `enabled` scalar through ParseBool, enabled when it is
+// absent, not a scalar, or not a boolean word.
+bool LoaderReadsEnabled(const YAML::Node& entry) {
+  const YAML::Node enabledNode = ChildByKey(entry, kEnabledKey);
+  return !enabledNode.IsScalar() || ParseBool(enabledNode.Scalar()).value_or(true);
+}
+
+// Whether `text` still holds as many plugin entries as `before` has, the loader reads `plugins[index]` as enabled or not as the edit
+// says, and every other entry reads as it did (`before` holds each entry's LoaderReadsEnabled from the text before the edit).
+bool EnabledReadsBack(const std::string& text, std::size_t index, const std::vector<bool>& before, const ScalarEdit& edit) {
+  try {
+    const std::vector<YAML::Node> docs = YAML::LoadAll(text);
+    if (docs.size() != 1 || !docs[0].IsMap()) return false;
+    const YAML::Node& rootNode = docs[0];  // const: reading must not create the key
+    const YAML::Node list = rootNode[kPluginsKey];
+    if (!list.IsDefined() || !list.IsSequence() || list.size() != before.size() || index >= list.size()) return false;
+    const YAML::Node entry = list[index];
+    if (!entry.IsMap()) return false;
+    std::size_t at = 0;
+    for (YAML::const_iterator it = list.begin(); it != list.end(); ++it, ++at) {
+      if (at != index && LoaderReadsEnabled(*it) != before[at]) return false;
+    }
+    return LoaderReadsEnabled(entry) == edit.boolValue;
+  } catch (const YAML::Exception&) {
+    return false;
+  }
+}
+
+// Whether `entry`'s `name` reads as `name` to the loader (ParsePlugins): the first `name` key's scalar, `${VAR}` references resolved.
+// An entry with no scalar name, an empty one, or one whose references the loader would refuse reads as no name and matches nothing.
+bool EntryNameIs(const YAML::Node& entry, const std::string& name) {
+  const YAML::Node nameNode = ChildByKey(entry, "name");
+  if (!nameNode.IsScalar() || nameNode.Scalar().empty()) return false;
+  try {
+    return InterpolateString(nameNode.Scalar(), nullptr, nameNode.Mark()) == name;
+  } catch (const NevrConfigError&) {
+    return false;
+  }
+}
+
+enum class BlockScalarScan { kNone, kFound, kTooComplex };
+
+// The offset of the first byte after the properties (`&anchor`, `!tag`, `!<verbatim tag>`, `!!suffix`) that start at `at`, with the
+// white space around them skipped; `at` itself when there are none. The parser's mark for a node with properties is taken before
+// them. It only moves forward and stops at the end of `text`.
+std::size_t SkipNodeProperties(const std::string& text, std::size_t at) {
+  auto isSpace = [&](std::size_t i) { return std::isspace(static_cast<unsigned char>(text[i])) != 0; };
+  while (at < text.size() && (text[at] == '&' || text[at] == '!')) {
+    while (at < text.size() && !isSpace(at)) ++at;  // no property holds white space, a verbatim `!<uri>` tag included
+    while (at < text.size() && isSpace(at)) ++at;
+  }
+  return at;
+}
+
+// Whether `node` or anything under it (keys included) is a block scalar, `|` or `>`. The parser's mark for a scalar is where its
+// text starts, before any anchor or tag (SkipNodeProperties passes them), so a block scalar is the one kind whose first byte
+// after them is its indicator: a plain scalar cannot start with `|` or `>`, and a quoted or flow one starts with its quote or
+// bracket. Bounded like the loader's walk (kMaxConfigDepth, kMaxConfigNodes): an alias can make the tree a cycle or a DAG that expands without end.
+BlockScalarScan ScanForBlockScalar(const std::string& text, const std::vector<std::size_t>& starts, const YAML::Node& node,
+                                   std::size_t depth, std::size_t* visited) {
+  if (depth > kMaxConfigDepth || ++*visited > kMaxConfigNodes) return BlockScalarScan::kTooComplex;
+  if (node.IsScalar()) {
+    std::size_t at = 0;
+    if (!OffsetOf(starts, text, node.Mark(), &at)) return BlockScalarScan::kNone;
+    at = SkipNodeProperties(text, at);
+    return at < text.size() && (text[at] == '|' || text[at] == '>') ? BlockScalarScan::kFound : BlockScalarScan::kNone;
+  }
+  if (!node.IsMap() && !node.IsSequence()) return BlockScalarScan::kNone;
+  BlockScalarScan result = BlockScalarScan::kNone;
+  bool tooComplex = false;
+  auto visit = [&](const YAML::Node& child) {
+    const BlockScalarScan below = ScanForBlockScalar(text, starts, child, depth + 1, visited);
+    if (below == BlockScalarScan::kTooComplex) tooComplex = true;
+    if (below == BlockScalarScan::kFound) result = below;
+  };
+  for (YAML::const_iterator it = node.begin(); it != node.end() && !tooComplex; ++it) {
+    if (node.IsMap()) {
+      visit(it->first);
+      visit(it->second);
+    } else {
+      visit(*it);
+    }
+  }
+  return tooComplex ? BlockScalarScan::kTooComplex : result;
+}
+
+// SetPluginEnabled's edit: `plugins[index].enabled` becomes `enabled`. `existing` is the file's text, or null when the file is missing.
+// A block list of block entries only. The entry's own `enabled:` value is replaced in place (ReplaceValue); an entry without one
+// gets `enabled: <value>` after its last content line, at the column of its first key.
+Splice SpliceEnabled(const std::string* existing, std::size_t index, const std::string& name, bool enabled, std::string* out) {
+  if (existing == nullptr) return Refused("plugins_missing");
+  const std::string& text = *existing;
+  std::vector<YAML::Node> docs;
+  try {
+    docs = YAML::LoadAll(text);
+  } catch (const YAML::Exception&) {
+    return Refused("unparseable");
+  }
+  if (docs.size() > 1) return Refused("multi_document");
+  if (docs.empty() || !docs[0].IsDefined() || docs[0].IsNull()) return Refused("plugins_missing");
+  const YAML::Node root = docs[0];
+  if (!root.IsMap()) return Refused("not_a_mapping");
+  if (root.Style() == YAML::EmitterStyle::Flow) return Refused("root_flow_style");
+  std::vector<YAML::Node> listHits;
+  for (YAML::const_iterator it = root.begin(); it != root.end(); ++it) {
+    if (it->first.IsScalar() && it->first.Scalar() == kPluginsKey) listHits.push_back(it->second);
+  }
+  if (listHits.size() > 1) return Refused("duplicate_section");
+  if (listHits.empty() || listHits[0].IsNull()) return Refused("plugins_missing");
+  const YAML::Node list = listHits[0];
+  if (!list.IsSequence()) return Refused("plugins_not_a_list");
+  if (list.Style() == YAML::EmitterStyle::Flow) return Refused("plugins_flow_style");
+  if (index >= list.size()) return Refused("plugin_index_out_of_range");
+  const YAML::Node entry = list[index];
+  if (!entry.IsMap()) return Refused("entry_not_a_mapping");
+  if (entry.Style() == YAML::EmitterStyle::Flow) return Refused("entry_flow_style");
+  // The index is only meaningful for the list the caller read: when the file changed since, it may name another plugin.
+  if (!EntryNameIs(entry, name)) return Refused("plugin_name_mismatch");
+  // An alias makes two list elements one node (`- &shared ...` and `- *shared`): the text of one entry is what the other reads, so an
+  // edit of either changes both. Node identity, not text, says so.
+  std::vector<bool> readsEnabledBefore;
+  std::size_t position = 0;
+  for (YAML::const_iterator it = list.begin(); it != list.end(); ++it, ++position) {
+    if (position != index && (*it).is(entry)) return Refused("entry_shared");
+    readsEnabledBefore.push_back(LoaderReadsEnabled(*it));
+  }
+
+  ScalarEdit edit;
+  edit.text = BoolText(enabled);
+  edit.isBool = true;
+  edit.boolValue = enabled;
+  edit.readsAsLoaderEnabled = true;
+
+  const std::vector<std::size_t> starts = LineStarts(text);
+  std::vector<std::pair<YAML::Node, YAML::Node>> hits;
+  std::vector<YAML::Node> firstKeys;  // a default Node is defined (null), so presence is the vector's
+  for (YAML::const_iterator it = entry.begin(); it != entry.end(); ++it) {
+    if (firstKeys.empty()) firstKeys.push_back(it->first);
+    if (it->first.IsScalar() && it->first.Scalar() == kEnabledKey) hits.emplace_back(it->first, it->second);
+  }
+  if (hits.size() > 1) return Refused("duplicate_key");
+  Splice result;
+  if (hits.empty()) {
+    std::size_t keyOffset = 0;
+    if (firstKeys.empty()) return Refused("position_mismatch");
+    const YAML::Node firstKey = firstKeys[0];
+    if (!firstKey.IsScalar() || !OffsetOf(starts, text, firstKey.Mark(), &keyOffset) ||
+        text.compare(keyOffset, firstKey.Scalar().size(), firstKey.Scalar()) != 0) {
+      return Refused("position_mismatch");
+    }
+    const std::size_t keyLine = static_cast<std::size_t>(firstKey.Mark().line);
+    const std::size_t childColumn = static_cast<std::size_t>(firstKey.Mark().column);
+    std::size_t lineBegin = 0, lineEnd = 0;
+    LineSpan(starts, text, keyLine, &lineBegin, &lineEnd);
+    // The entry's `-` is on the first key's line: spaces, the dash, then spaces or tabs up to the key.
+    std::size_t dash = lineBegin;
+    while (dash < keyOffset && text[dash] == ' ') ++dash;
+    if (dash >= keyOffset || text[dash] != '-' || !OnlySpaceOrComment(text, dash + 1, keyOffset)) return Refused("position_mismatch");
+    // BlockEnd finds the entry's last line by indentation and takes a `#` line for a comment. Inside a block scalar that line is
+    // content, and the inserted `enabled:` would end the scalar before it. Only an insert moves text around such a scalar.
+    std::size_t visited = 0;
+    const BlockScalarScan scan = ScanForBlockScalar(text, starts, entry, 0, &visited);
+    if (scan == BlockScalarScan::kTooComplex) return Refused("entry_too_complex");
+    if (scan == BlockScalarScan::kFound) return Refused("entry_has_block_scalar");
+    const std::size_t at = BlockEnd(starts, text, keyLine, dash - lineBegin);
+    const std::string eol = LineEnding(text, starts, keyLine);
+    std::string add = std::string(childColumn, ' ') + kEnabledKey + ": " + edit.text + eol;
+    if (at == text.size() && (text.empty() || text.back() != '\n')) add = eol + add;
+    std::string edited = text;
+    edited.insert(at, add);
+    *out = edited;
+    result.ok = true;
+  } else {
+    result = ReplaceValue(text, starts, hits[0].first, hits[0].second, kEnabledKey, edit, out);
+    if (!result.ok) return result;
+  }
+  if (!EnabledReadsBack(*out, index, readsEnabledBefore, edit)) {
     out->clear();
     return Refused("verify_failed");
   }
@@ -830,6 +1030,107 @@ config_testing::AfterMemoryUpdateFn g_afterMemoryUpdate = nullptr;
 
 constexpr std::uintmax_t kMaxEditableBytes = 1024 * 1024;
 
+// The read, splice, write, rename of one config file, under the file's lock (MutexFor). `spliceFn` makes the new text from the old
+// (null `existing`: the file is missing); `updateMemory` runs after the rename, still inside the lock, and only when the splice
+// succeeded. Shared by Set and SetPluginEnabled, so both keep one promise: the file is replaced atomically or left as it was.
+ConfigSetResult EditBoundFile(const std::string& boundFile, const std::function<Splice(const std::string*, std::string*)>& spliceFn,
+                              const std::function<void()>& updateMemory) noexcept {
+  ConfigSetResult r;
+  try {
+    // From here to the return, no other caller in this process edits the same file (see MutexFor). The in-memory update at the end is
+    // inside it too, so two threads calling Set on one NevrConfig object do not race on its tree either.
+    const std::lock_guard<std::mutex> fileLock(MutexFor(boundFile));
+
+    std::error_code ec;
+    const fs::file_status status = fs::status(fs::path(boundFile), ec);
+    std::string text;
+    const std::string* existing = nullptr;
+    if (status.type() == fs::file_type::not_found) {
+      existing = nullptr;
+    } else if (ec) {
+      r.reason = "unreadable";
+      r.err = ec.value();
+      return r;
+    } else if (status.type() != fs::file_type::regular) {
+      r.reason = "not_a_regular_file";
+      return r;
+    } else {
+      const std::uintmax_t size = fs::file_size(fs::path(boundFile), ec);
+      if (ec) {
+        r.reason = "unreadable";
+        r.err = ec.value();
+        return r;
+      }
+      if (size > kMaxEditableBytes) {
+        r.reason = "too_large";
+        return r;
+      }
+      std::ifstream in(boundFile, std::ios::binary);
+      if (!in) {
+        r.reason = "unreadable";
+        r.err = errno != 0 ? errno : EIO;
+        return r;
+      }
+      std::stringstream ss;
+      ss << in.rdbuf();
+      if (in.bad()) {
+        r.reason = "unreadable";
+        r.err = EIO;
+        return r;
+      }
+      text = ss.str();
+      existing = &text;
+    }
+
+    std::string edited;
+    const Splice splice = spliceFn(existing, &edited);
+    if (!splice.ok) {
+      r.reason = splice.reason;
+      return r;
+    }
+    if (!splice.unchanged) {
+      const std::string temporary = boundFile + ".tmp";
+      {
+        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        if (!out) {
+          r.reason = "write_failed";
+          r.err = errno != 0 ? errno : EIO;
+          return r;
+        }
+        out.write(edited.data(), static_cast<std::streamsize>(edited.size()));
+        out.flush();
+        if (!out) {
+          out.close();
+          std::error_code ignore;
+          fs::remove(fs::path(temporary), ignore);
+          r.reason = "write_failed";
+          r.err = errno != 0 ? errno : EIO;
+          return r;
+        }
+      }
+      const int rc = (g_rename != nullptr ? g_rename : &RealRename)(temporary.c_str(), boundFile.c_str());
+      if (rc != 0) {
+        std::error_code ignore;
+        fs::remove(fs::path(temporary), ignore);
+        r.reason = "rename_failed";
+        r.err = rc;
+        return r;
+      }
+      r.wrote = true;
+    }
+    r.ok = true;
+    r.reason = "";
+    updateMemory();
+    if (g_afterMemoryUpdate != nullptr) g_afterMemoryUpdate();  // test seam: still inside the file's lock
+    return r;
+  } catch (const std::exception&) {
+    r.ok = false;
+    r.reason = "write_failed";
+    r.err = EIO;
+    return r;
+  }
+}
+
 }  // namespace
 
 namespace config_testing {
@@ -856,123 +1157,49 @@ ConfigSetResult NevrConfig::Set(const std::string& path, const std::string& valu
   return SetScalar(path, edit);
 }
 
-ConfigSetResult NevrConfig::SetScalar(const std::string& path, const ScalarEdit& edit) noexcept {
-  ConfigSetResult r;
-  try {
-    if (boundFile_.empty()) {
-      r.reason = "no_file";
-      return r;
-    }
-    const std::size_t dot = path.find('.');
-    if (dot == std::string::npos || dot == 0 || dot + 1 >= path.size() || path.find('.', dot + 1) != std::string::npos) {
-      r.reason = "unsupported_path";
-      return r;
-    }
-    const std::string section = path.substr(0, dot);
-    const std::string key = path.substr(dot + 1);
-
-    // From here to the return, no other caller in this process edits the same file (see MutexFor). The in-memory update at the end is
-    // inside it too, so two threads calling Set on one NevrConfig object do not race on its tree either.
-    const std::lock_guard<std::mutex> fileLock(MutexFor(boundFile_));
-
-    std::error_code ec;
-    const fs::file_status status = fs::status(fs::path(boundFile_), ec);
-    std::string text;
-    const std::string* existing = nullptr;
-    if (status.type() == fs::file_type::not_found) {
-      existing = nullptr;
-    } else if (ec) {
-      r.reason = "unreadable";
-      r.err = ec.value();
-      return r;
-    } else if (status.type() != fs::file_type::regular) {
-      r.reason = "not_a_regular_file";
-      return r;
-    } else {
-      const std::uintmax_t size = fs::file_size(fs::path(boundFile_), ec);
-      if (ec) {
-        r.reason = "unreadable";
-        r.err = ec.value();
-        return r;
-      }
-      if (size > kMaxEditableBytes) {
-        r.reason = "too_large";
-        return r;
-      }
-      std::ifstream in(boundFile_, std::ios::binary);
-      if (!in) {
-        r.reason = "unreadable";
-        r.err = errno != 0 ? errno : EIO;
-        return r;
-      }
-      std::stringstream ss;
-      ss << in.rdbuf();
-      if (in.bad()) {
-        r.reason = "unreadable";
-        r.err = EIO;
-        return r;
-      }
-      text = ss.str();
-      existing = &text;
-    }
-
-    std::string edited;
-    const Splice splice = SpliceScalar(existing, section, key, edit, &edited);
-    if (!splice.ok) {
-      r.reason = splice.reason;
-      return r;
-    }
-    if (!splice.unchanged) {
-      const std::string temporary = boundFile_ + ".tmp";
-      {
-        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
-        if (!out) {
-          r.reason = "write_failed";
-          r.err = errno != 0 ? errno : EIO;
-          return r;
-        }
-        out.write(edited.data(), static_cast<std::streamsize>(edited.size()));
-        out.flush();
-        if (!out) {
-          out.close();
-          std::error_code ignore;
-          fs::remove(fs::path(temporary), ignore);
-          r.reason = "write_failed";
-          r.err = errno != 0 ? errno : EIO;
-          return r;
-        }
-      }
-      const int rc = (g_rename != nullptr ? g_rename : &RealRename)(temporary.c_str(), boundFile_.c_str());
-      if (rc != 0) {
-        std::error_code ignore;
-        fs::remove(fs::path(temporary), ignore);
-        r.reason = "rename_failed";
-        r.err = rc;
-        return r;
-      }
-      r.wrote = true;
-    }
-    r.ok = true;
-    r.reason = "";
-    if (impl_) {
-      try {
-        if (edit.isBool) {
-          impl_->root[section][key] = edit.boolValue;
-        } else {
-          impl_->root[section][key] = edit.text;
-        }
-      } catch (const YAML::Exception&) {
-        // The file holds the value; the in-memory tree keeps what it had.
-      }
-    }
-    if (g_afterMemoryUpdate != nullptr) g_afterMemoryUpdate();  // test seam: still inside the file's lock
-    return r;
-  } catch (const std::exception&) {
-    r.ok = false;
-    r.reason = "write_failed";
-    r.err = EIO;
+ConfigSetResult NevrConfig::SetPluginEnabled(std::size_t index, const std::string& name, bool enabled) noexcept {
+  if (boundFile_.empty()) {
+    ConfigSetResult r;
+    r.reason = "no_file";
     return r;
   }
+  return EditBoundFile(
+      boundFile_, [index, &name, enabled](const std::string* existing, std::string* out) { return SpliceEnabled(existing, index, name, enabled, out); },
+      [this, index, &name, enabled]() {
+        // The file holds the new value; the loaded list follows it. An entry the loaded list lacks, or holds under another name (the
+        // file changed since the load), is left.
+        if (index < plugins_.size() && plugins_[index].name == name) plugins_[index].enabled = enabled;
+      });
+}
+
+ConfigSetResult NevrConfig::SetScalar(const std::string& path, const ScalarEdit& edit) noexcept {
+  if (boundFile_.empty()) {
+    ConfigSetResult r;
+    r.reason = "no_file";
+    return r;
+  }
+  const std::size_t dot = path.find('.');
+  if (dot == std::string::npos || dot == 0 || dot + 1 >= path.size() || path.find('.', dot + 1) != std::string::npos) {
+    ConfigSetResult r;
+    r.reason = "unsupported_path";
+    return r;
+  }
+  const std::string section = path.substr(0, dot);
+  const std::string key = path.substr(dot + 1);
+  return EditBoundFile(
+      boundFile_, [&](const std::string* existing, std::string* out) { return SpliceScalar(existing, section, key, edit, out); },
+      [&]() {
+        if (!impl_) return;
+        try {
+          if (edit.isBool) {
+            impl_->root[section][key] = edit.boolValue;
+          } else {
+            impl_->root[section][key] = edit.text;
+          }
+        } catch (const YAML::Exception&) {
+          // The file holds the value; the in-memory tree keeps what it had.
+        }
+      });
 }
 
 std::optional<std::string> NevrConfig::GetString(const std::string& path, bool* hadUnsetBare) const {
