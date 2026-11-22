@@ -32,6 +32,7 @@ Retired findings that were not filed, and why:
 | `2026-11-12-instruction-settlement.md` | the contradictions and duplicate procedures settled on 2026-11-12, each with its deciding source, and the three questions left for the owner |
 | `2026-11-05-q15t-origin-citations.md` | the origin citations of the old q15t plugin repository (file, line and source commit of each), its module rules, its commit log and the provenance of the variant libraries (#2167) |
 | `2026-11-18-unmerged-branches-postmortem.md` | why so many branches and worktrees were never merged on 2026-11-18, the mitigations landed or filed with their issues, and what the cleanup itself cost |
+| `2026-11-21-quest-perf-profile.md` | the Quest hook-profile and simpleperf measurements of 2026-11-21: our hooks' cost, the blocking sentinel log, the game's per-call `dlsym`, the two 24.9 s loads on the reference base, the `-mp` launch extra and the reference base's own `libvrapi.so` |
 
 ## Reading an old citation
 
