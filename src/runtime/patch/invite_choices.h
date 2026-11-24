@@ -129,8 +129,43 @@ inline const char* ReadName(Read r) {
   return "unknown";
 }
 
-/// Reads `length` bytes at `address` into `out`; false when the memory is not committed and readable. The hook passes a
-/// VirtualQuery-checked copy, a test a fake.
+/// How far the sender of an event was followed: to the name of its actor (`Resolved`), or why it was not. Shared by the
+/// wizard observer (ReadEvent) and the menu press log (patch/menu_press.h, #1857), so both walk the actor table once.
+enum class Sender { Unreadable, NoSender, NoTable, OutOfRange, Resolved };
+
+/// Reads the component and the sender of `event` into `out->component` and `out->owner` (the owner stays 0 until the
+/// name resolves). The symbol is the caller's to read: the wizard's observer filters on it first.
+///
+/// `read` reads `length` bytes at `address` into `out`; false when the memory is not committed and readable. The hook
+/// passes a VirtualQuery-checked copy, a test a fake.
+template <typename Reader>
+inline Sender ReadSender(Reader&& read, uintptr_t space, uintptr_t event, Event* out) {
+  uint64_t sender = 0, component = 0;
+  if (!read(event + kEventSenderOffset, &sender, sizeof(sender)) ||
+      !read(event + kEventComponentOffset, &component, sizeof(component))) {
+    return Sender::Unreadable;
+  }
+  out->component = component;
+  const uint16_t index = static_cast<uint16_t>(sender & 0xffff);
+  if (index == kNoSender) return Sender::NoSender;
+
+  uint64_t table = 0, names = 0, capacity = 0;
+  if (space == 0 || !read(space + kSpaceActorTableOffset, &table, sizeof(table))) return Sender::Unreadable;
+  if (table == 0) return Sender::NoTable;
+  if (!read(table + kTableNamesOffset, &names, sizeof(names)) ||
+      !read(table + kTableCapacityOffset, &capacity, sizeof(capacity))) {
+    return Sender::Unreadable;
+  }
+  if (names == 0) return Sender::NoTable;
+  if (index >= capacity) return Sender::OutOfRange;
+  uint64_t owner = 0;
+  if (!read(static_cast<uintptr_t>(names) + static_cast<uintptr_t>(index) * sizeof(uint64_t), &owner, sizeof(owner))) {
+    return Sender::Unreadable;
+  }
+  out->owner = owner;
+  return Sender::Resolved;
+}
+
 template <typename Reader>
 inline Read ReadEvent(Reader&& read, uintptr_t space, uintptr_t event, Event* out) {
   *out = Event{};
@@ -140,30 +175,14 @@ inline Read ReadEvent(Reader&& read, uintptr_t space, uintptr_t event, Event* ou
   if (!IsWizardEventSymbol(symbol)) return Read::NotWizardSymbol;
   out->symbol = symbol;
 
-  uint64_t sender = 0, component = 0;
-  if (!read(event + kEventSenderOffset, &sender, sizeof(sender)) ||
-      !read(event + kEventComponentOffset, &component, sizeof(component))) {
-    return Read::Unreadable;
+  switch (ReadSender(read, space, event, out)) {
+    case Sender::Unreadable: return Read::Unreadable;
+    case Sender::NoSender: return Read::NoSender;
+    case Sender::NoTable: return Read::NoTable;
+    case Sender::OutOfRange: return Read::OutOfRange;
+    case Sender::Resolved: break;
   }
-  out->component = component;
-  const uint16_t index = static_cast<uint16_t>(sender & 0xffff);
-  if (index == kNoSender) return Read::NoSender;
-
-  uint64_t table = 0, names = 0, capacity = 0;
-  if (space == 0 || !read(space + kSpaceActorTableOffset, &table, sizeof(table))) return Read::Unreadable;
-  if (table == 0) return Read::NoTable;
-  if (!read(table + kTableNamesOffset, &names, sizeof(names)) ||
-      !read(table + kTableCapacityOffset, &capacity, sizeof(capacity))) {
-    return Read::Unreadable;
-  }
-  if (names == 0) return Read::NoTable;
-  if (index >= capacity) return Read::OutOfRange;
-  uint64_t owner = 0;
-  if (!read(static_cast<uintptr_t>(names) + static_cast<uintptr_t>(index) * sizeof(uint64_t), &owner, sizeof(owner))) {
-    return Read::Unreadable;
-  }
-  out->owner = owner;
-  return IsWizardPage(owner) ? Read::Wizard : Read::NotWizardPage;
+  return IsWizardPage(out->owner) ? Read::Wizard : Read::NotWizardPage;
 }
 
 // ---- the choices ----
